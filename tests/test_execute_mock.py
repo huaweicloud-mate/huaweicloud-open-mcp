@@ -7,10 +7,10 @@ mock 端点行为（实测确认）：
 - status_code 为其它值时返回空 body。
 """
 
+from huaweicloud_mcp.auth.credentials import Credentials
 from huaweicloud_mcp.safety import policy
 from huaweicloud_mcp.signer.client import HttpClient
 from huaweicloud_mcp.tools import execute
-from huaweicloud_mcp.auth.credentials import Credentials
 
 CRED = Credentials(ak="AK", sk="SK", project_id="pid")
 RULES_ALLOW_ECS = policy.parse_policy(["ECS:*=allow", "*=deny"])

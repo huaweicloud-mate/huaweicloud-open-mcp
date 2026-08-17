@@ -78,7 +78,8 @@ def merge_doc(apis):
                 if json.dumps(params[pn], sort_keys=True) != json.dumps(pv, sort_keys=True):
                     newname = pn
                     i = 1
-                    while newname in params and json.dumps(params.get(newname), sort_keys=True) != json.dumps(pv, sort_keys=True):
+                    while (newname in params
+                           and json.dumps(params.get(newname), sort_keys=True) != json.dumps(pv, sort_keys=True)):
                         newname = f"{pn}_{i}"
                         i += 1
                     params[newname] = pv
@@ -97,7 +98,8 @@ def merge_doc(apis):
                 if json.dumps(responses[rn], sort_keys=True) != json.dumps(rv, sort_keys=True):
                     newname = rn
                     i = 1
-                    while newname in responses and json.dumps(responses.get(newname), sort_keys=True) != json.dumps(rv, sort_keys=True):
+                    while (newname in responses
+                           and json.dumps(responses.get(newname), sort_keys=True) != json.dumps(rv, sort_keys=True)):
                         newname = f"{rn}_{i}"
                         i += 1
                     responses[newname] = rv
@@ -121,6 +123,7 @@ def merge_doc(apis):
 def main():
     import os
     import shutil
+
     from . import region_paths
 
     src = region_paths.openapi2_dir()

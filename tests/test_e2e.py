@@ -7,7 +7,6 @@
 凭证环境变量遵循华为云 SDK 惯例。
 """
 
-import os
 
 import pytest
 

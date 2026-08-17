@@ -1,7 +1,7 @@
 """server 装配冒烟测试（不启动 stdio 进程）。"""
 
-from huaweicloud_mcp.server import ServerConfig, build_app
 from huaweicloud_mcp.safety import policy
+from huaweicloud_mcp.server import ServerConfig, build_app
 
 
 def _tool_names(app):

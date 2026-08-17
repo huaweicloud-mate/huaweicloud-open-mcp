@@ -9,7 +9,6 @@
 
 import fnmatch
 import json
-import os
 
 
 def parse_policy(lines):

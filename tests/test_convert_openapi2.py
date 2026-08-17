@@ -2,7 +2,6 @@
 
 from huaweicloud_mcp.apie import convert_openapi2 as conv
 
-
 # ---------- fix_schema_type ----------
 
 def test_fix_schema_type_maps_nonstandard():

@@ -6,7 +6,6 @@
 
 import hashlib
 import hmac
-import json
 from datetime import datetime, timezone
 
 ALGORITHM = "SDK-HMAC-SHA256"

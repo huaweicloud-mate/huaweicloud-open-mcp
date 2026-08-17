@@ -34,8 +34,10 @@ def test_merge_multi_dedup_operations():
 
 def test_merge_multi_same_operation_dedup():
     docs = {
-        "f1": {"swagger": "2.0", "paths": {"/x": {"get": {"operationId": "GetX"}}}, "definitions": {}, "parameters": {}, "responses": {}},
-        "f2": {"swagger": "2.0", "paths": {"/x": {"get": {"operationId": "GetX"}}}, "definitions": {}, "parameters": {}, "responses": {}},
+        "f1": {"swagger": "2.0", "paths": {"/x": {"get": {"operationId": "GetX"}}},
+               "definitions": {}, "parameters": {}, "responses": {}},
+        "f2": {"swagger": "2.0", "paths": {"/x": {"get": {"operationId": "GetX"}}},
+               "definitions": {}, "parameters": {}, "responses": {}},
     }
     base, dup = organize.merge_multi(docs)
     assert dup == 1

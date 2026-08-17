@@ -130,7 +130,7 @@ def http_get(url):
                 return json.loads(e.read().decode("utf-8"))
             except Exception:
                 return {"error_msg": str(e)}
-        except Exception as e:
+        except Exception:
             if attempt == 3:
                 raise
             time.sleep(2 * (attempt + 1))

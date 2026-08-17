@@ -35,7 +35,9 @@ def _request(url):
 
 
 def fetch_detail(product_short, name):
-    data, err = _request(f"{BASE}?{urllib.parse.urlencode({'product_short': product_short, 'name': name, 'region_id': REGION})}")
+    params = urllib.parse.urlencode(
+        {"product_short": product_short, "name": name, "region_id": REGION})
+    data, err = _request(f"{BASE}?{params}")
     if err is None:
         return data
     if data.get("error_code") == "APIEXPLORER.1055":

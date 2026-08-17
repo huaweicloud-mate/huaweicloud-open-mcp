@@ -1,9 +1,8 @@
 """execute 工具纯函数单元测试（stub client）。"""
 
-import json
 
-from huaweicloud_mcp.tools import execute
 from huaweicloud_mcp.auth.credentials import Credentials
+from huaweicloud_mcp.tools import execute
 
 
 class StubClient:

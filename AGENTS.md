@@ -66,6 +66,8 @@ uv sync                                  # 安装依赖（含 dev）
 uv run pytest                            # 跑全部测试（默认跳过 e2e）
 uv run pytest -m e2e                     # 真实数据/凭证 E2E（需 AK/SK）
 uv run pytest --cov=src/huaweicloud_mcp  # 覆盖率
+uv run ruff check src tests              # lint（ruff，规则 E/F/W/I，line-length 120）
+uv run ruff check src tests --fix        # 自动修复可修问题
 ```
 
 CLI 入口（`pyproject.toml` 注册 console scripts）：

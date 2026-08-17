@@ -2,8 +2,8 @@
 
 import urllib.error
 
-from huaweicloud_mcp.signer.client import HttpClient
 from huaweicloud_mcp.auth.credentials import Credentials
+from huaweicloud_mcp.signer.client import HttpClient
 
 CRED = Credentials(ak="AK", sk="SK", project_id="pid")
 
@@ -86,7 +86,7 @@ def test_request_429_retry_then_ok(monkeypatch):
 
 
 def test_request_429_exhausted(monkeypatch):
-    calls = _install(monkeypatch, [FakeHTTPError(429, b"x") for _ in range(5)])
+    _install(monkeypatch, [FakeHTTPError(429, b"x") for _ in range(5)])
     client = HttpClient(credentials=CRED, max_retries=4, retry_backoff=0.001)
     resp = client.request("GET", "h.example.com", "/p")
     assert resp["status"] == 429
