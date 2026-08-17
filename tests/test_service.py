@@ -71,12 +71,6 @@ def test_list_apis(workdir):
     assert out["total"] == 2
 
 
-def test_suggest_apis(workdir):
-    out = _service(workdir).suggest_apis("查询云服务器列表")
-    assert out["ok"] is True
-    assert out["apis"][0]["name"] == "ListServers"
-
-
 def test_get_api(workdir):
     _install_openapi_doc(workdir)
     out = _service(workdir).get_api("ECS", "ListServersDetails")

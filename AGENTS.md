@@ -2,14 +2,14 @@
 
 ## 项目上下文
 
-本项目实现华为云 MCP server：本地 stdio 形态的通用网关（Core 模式），用 7 个核心工具编排触达华为云全量 OpenAPI，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用华为云服务。同类产品参考阿里云 OpenAPI MCP Server（Core 模式）与 AWS Labs MCP。
+本项目实现华为云 MCP server：本地 stdio 形态的通用网关（Core 模式），用 6 个核心工具编排触达华为云全量 OpenAPI，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用华为云服务。同类产品参考阿里云 OpenAPI MCP Server（Core 模式）与 AWS Labs MCP。
 
 三层架构：
 
 ```text
 ┌─ MCP 网关层  src/huaweicloud_mcp/tools/ + server.py
 │     list_products / get_product / list_apis / get_api /
-│     get_api_examples / suggest_apis / execute_api
+│     get_api_examples / execute_api
 │        ↓ execute 前强制过 safety policy
 ├─ APIE 元数据层（参考 ../apis 项目重新实现，管道设计保持一致）
 │     console.huaweicloud.com/apiexplorer 抓取 → OpenAPI 2.0 文档目录
@@ -23,6 +23,7 @@
 
 核心原则：
 
+- **渐进式工作流**：LLM 决策驱动收窄——`list_products` 定产品 → `list_apis`（含 `tag_groups` 全量 tag 概览）定目录 → `get_api` 读文档 → `execute_api` 执行；完整指引写在 server instructions（initialize 响应）与各工具 description。
 - **TDD**：red→green 垂直切片，一次一个接缝、一个测试、一个最小实现。测试只写在预先确认的接缝（S1–S5）上；只 mock 系统边界（外部 HTTP），不 mock 自有模块；期望值必须来自独立真值（官方签名向量、已知 mock 响应），禁止同义反复断言。写测试前如接缝清单有变，先与用户确认。
 - **APIE 管道参考 `../apis` 项目重新实现**：阶段划分、断点续传、tag 映射、Swagger 2.0 校验规则与其保持一致；本仓库为独立实现，不 import apis 代码。
 - **安全**：`execute_api` 必须先过 safety policy（阿里云式 allowlist/denylist 模式匹配）；未配置 policy 时拒绝所有执行；凭证必须是最小权限 IAM 用户的 AK/SK。
@@ -35,15 +36,15 @@
 | --- | --- | --- | --- |
 | `raw/apis_count.json` | 产品接口计数 | `api-refresh count`（curl） | 是 |
 | `raw/huawei_products.json` | 产品信息 | `api-refresh products`（curl） | 是 |
-| `raw/apis_docs.json` | 接口索引（id/name/method/summary/tags/product_short/info_version），支撑 `list_apis`/`suggest_apis` | `api-refresh docs` | 是 |
+| `raw/apis_docs.json` | 接口索引（id/name/method/summary/tags/product_short/info_version），支撑 `list_apis` | `api-refresh docs` | 是 |
 | `raw/apis_detail.json` | 全量接口详情（断点文件 `raw/apis_detail_partial.json`）；非默认 region 在 `raw/{region}/` | `api-refresh details` + `retry` | 是 |
 | `data/openapi/` | **元数据产物**：`{Product}/{Tag}.json` OpenAPI 2.0 文档（默认 region `cn-north-4` 平铺，非默认 region 在 `data/openapi/{region}/`） | `api-refresh`（split→convert→merge→organize） | 是 |
 | `src/huaweicloud_mcp/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端） | — | — |
 | `src/huaweicloud_mcp/signer/` | SDK-HMAC-SHA256 签名 + 真实模式 HTTP 客户端（超时/429 退避/错误解析） | — | — |
 | `src/huaweicloud_mcp/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
 | `src/huaweicloud_mcp/safety/` | safety policy 解析与匹配（PolicyRule dataclass） | — | — |
-| `src/huaweicloud_mcp/tools/` | 7 工具：metadata/execute 纯函数 + service 编排层（加载/配置/客户端工厂注入） | — | — |
-| `src/huaweicloud_mcp/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 七工具结果信封（*Result TypedDict，含 ProductItem/ApiItem/ApiSuggestion/ApiExample 实体） | — | — |
+| `src/huaweicloud_mcp/tools/` | 6 工具：metadata/execute 纯函数 + service 编排层（加载/配置/客户端工厂注入） | — | — |
+| `src/huaweicloud_mcp/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封（*Result TypedDict，含 ProductItem/ApiItem/TagGroup/ApiExample 实体） | — | — |
 | `src/huaweicloud_mcp/paths.py` | 项目根路径解析（统一 project_root） | — | — |
 | `src/huaweicloud_mcp/server.py` | stdio MCP server 装配（mcp SDK，业务全部委托 ToolService） | — | — |
 | `configs/` | safety policy 示例、tag 中文→英文翻译映射 | — | — |
@@ -55,7 +56,7 @@
 
 - **产品名**：以 `raw/apis_detail.json` 的驼峰 `product_short` 为准（如 `ECS`）；与 apis 项目的大小写去重映射保持一致。
 - **tag 文件名**：英文 PascalCase，中文→英文映射维护在 `configs/tag_translations.json`；`sanitize_tag` 用 `_` 替换空格与 `/`。
-- **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`suggest_apis`/`execute_api`）。
+- **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api`）。
 - **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`）。
 - **region**：默认 `cn-north-4` 平铺，非默认 region 带 `{region}` 目录/后缀（沿用 apis 的 region 目录规则）。
 
@@ -104,7 +105,7 @@ uv run huaweicloud-mcp --policy configs/safety-policy.example.json  # 指定 saf
 | --- | --- | --- | --- |
 | S1 | `signer.sign(request) → Authorization 头` | 纯函数单测 | 华为云官方签名文档示例向量（先收集，不自行推导） |
 | S2 | `safety.evaluate(policy, product, api) → allow/deny` | 纯函数单测 | 手写策略文件 + 预期字面量 |
-| S3 | 7 个工具业务函数 `tools.*` | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/） |
+| S3 | 6 个工具业务函数 `tools.*` | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/） |
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + 单元层 urllib 打桩注入错误（429/4xx/5xx） | mock 端点返回（HTTP 恒 200；`status_code` 非 200 返回空 body） |
 | S5 | APIE 管道各阶段转换 | 纯函数单测 + 迷你样本集成 + `@pytest.mark.e2e` 全量 | Swagger 2.0 schema 校验 |
 

@@ -1,4 +1,4 @@
-"""六元数据工具纯函数（不碰磁盘、不耦合 MCP 协议）。
+"""五元数据工具纯函数（不碰磁盘、不耦合 MCP 协议）。
 
 返回结构为具名信封（types.py 的 *Result TypedDict），纯函数直接产出含
 ok=True 的完整结果；失败态（ToolError）由编排层（service）构造。
@@ -6,6 +6,7 @@ ok=True 的完整结果；失败态（ToolError）由编排层（service）构�
 
 import json
 import re
+from collections import Counter
 from typing import Any
 
 from ..types import (
@@ -13,15 +14,11 @@ from ..types import (
     ApiExample,
     ApiItem,
     ApiListResult,
-    ApiSuggestion,
     ProductItem,
     ProductListResult,
     ProductResult,
-    SuggestResult,
+    TagGroup,
 )
-
-_CJK = re.compile(r"[\u4e00-\u9fff]+")
-
 
 # ---------- 产品 ----------
 
@@ -80,6 +77,15 @@ def list_apis(apis: list[dict[str, Any]], product: str, *,
               limit: int = 20, offset: int = 0) -> ApiListResult:
     p = (product or "").lower()
     matched = [a for a in apis if (a.get("product_short") or "").lower() == p]
+
+    # tag 概览基于产品全量目录（不受 tag/search/分页过滤影响），供 LLM 收窄目录参考；
+    # 按接口数降序，同数按 tag 名
+    tag_counts = Counter((a.get("tags") or "").strip() or "_untagged" for a in matched)
+    tag_groups: list[TagGroup] = [
+        {"tag": t, "api_count": c}
+        for t, c in sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+
     if tag:
         matched = [a for a in matched if (a.get("tags") or "").strip() == tag]
     if search:
@@ -102,6 +108,7 @@ def list_apis(apis: list[dict[str, Any]], product: str, *,
         "offset": offset,
         "limit": limit,
         "apis": items,
+        "tag_groups": tag_groups,
     }
 
 
@@ -211,56 +218,3 @@ def extract_examples(op: dict[str, Any] | None) -> list[ApiExample]:
         if ex is not None:
             examples.append({"description": desc, "example": ex})
     return examples
-
-
-# ---------- 任务 → API 推荐 ----------
-
-def _task_keywords(task: str) -> list[str]:
-    keywords: list[str] = []
-    for token in re.split(r"[^a-zA-Z0-9]+", task or ""):
-        t = token.strip().lower()
-        if len(t) >= 2:
-            keywords.append(t)
-    for cjk_run in _CJK.findall(task or ""):
-        for i in range(len(cjk_run) - 1):
-            keywords.append(cjk_run[i:i + 2])
-    return list(dict.fromkeys(keywords))
-
-
-def suggest_apis(apis: list[dict[str, Any]], task: str, *,
-                 product: str | None = None, limit: int = 10) -> SuggestResult:
-    """任务描述 → 推荐 API 列表。关键词（英文词/CJK 二元组）加权匹配。"""
-    keywords = _task_keywords(task)
-    if not keywords:
-        return {"ok": True, "task": task, "total": 0, "apis": []}
-    scored: list[ApiSuggestion] = []
-    for a in apis:
-        if product and (a.get("product_short") or "").lower() != product.lower():
-            continue
-        name = (a.get("name") or "").lower()
-        summary = (a.get("summary") or "").lower()
-        tags = (a.get("tags") or "").lower()
-        score = 0
-        matched: list[str] = []
-        for kw in keywords:
-            if kw in name:
-                score += 3
-                matched.append(kw)
-            elif kw in tags:
-                score += 2
-                matched.append(kw)
-            elif kw in summary:
-                score += 1
-                matched.append(kw)
-        if score > 0:
-            scored.append({
-                "product": a.get("product_short") or "",
-                "name": a.get("name") or "",
-                "method": a.get("method") or "",
-                "summary": a.get("summary") or "",
-                "tags": a.get("tags") or "",
-                "score": score,
-                "matched_keywords": list(dict.fromkeys(matched)),
-            })
-    scored.sort(key=lambda x: -x["score"])
-    return {"ok": True, "task": task, "total": len(scored[:limit]), "apis": scored[:limit]}

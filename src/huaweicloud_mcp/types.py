@@ -51,14 +51,9 @@ class ApiItem(TypedDict):
     info_version: str
 
 
-class ApiSuggestion(TypedDict):
-    product: str
-    name: str
-    method: str
-    summary: str
-    tags: str
-    score: int
-    matched_keywords: list[str]
+class TagGroup(TypedDict):
+    tag: str
+    api_count: int
 
 
 class ApiExample(TypedDict):
@@ -91,6 +86,7 @@ class ApiListResult(TypedDict):
     offset: int
     limit: int
     apis: list[ApiItem]
+    tag_groups: list[TagGroup]
 
 
 # 函数式语法：允许非标识符键（x-constraint）
@@ -118,10 +114,3 @@ class ExamplesResult(TypedDict):
     product: str
     api: str
     examples: list[ApiExample]
-
-
-class SuggestResult(TypedDict):
-    ok: Literal[True]
-    task: str
-    total: int
-    apis: list[ApiSuggestion]

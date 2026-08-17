@@ -22,7 +22,6 @@ from ..types import (
     ExecuteResult,
     ProductListResult,
     ProductResult,
-    SuggestResult,
     ToolError,
 )
 from . import execute, metadata
@@ -171,12 +170,6 @@ class ToolService:
         return {"ok": True, "product": product, "api": api,
                 "examples": metadata.extract_examples(op)}
 
-    def suggest_apis(self, task: str, product: str | None = None,
-                     limit: int = 10) -> SuggestResult | ToolError:
-        docs = self._docs()
-        if docs is None:
-            return {"ok": False, "reason": "本地接口索引缺失，请先运行 api-refresh docs"}
-        return metadata.suggest_apis(docs, task, product=product, limit=limit)
 
     # ---------- 执行工具 ----------
 

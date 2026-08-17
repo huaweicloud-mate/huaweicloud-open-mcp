@@ -49,6 +49,21 @@ def test_list_apis(mini_docs):
     out = metadata.list_apis(mini_docs["apis"], "ECS")
     assert out["total"] == 4
     assert {a["name"] for a in out["apis"]} == {"ListServers", "CreateServers", "ListTags", "UntaggedOp"}
+    assert out["tag_groups"] == [
+        {"tag": "生命周期管理", "api_count": 2},
+        {"tag": "_untagged", "api_count": 1},
+        {"tag": "标签管理", "api_count": 1},
+    ]
+
+
+def test_list_apis_tag_groups_full_scope_regardless_of_filters(mini_docs):
+    out = metadata.list_apis(mini_docs["apis"], "ECS", tag="生命周期管理")
+    assert out["total"] == 2
+    assert out["tag_groups"] == [
+        {"tag": "生命周期管理", "api_count": 2},
+        {"tag": "_untagged", "api_count": 1},
+        {"tag": "标签管理", "api_count": 1},
+    ]
 
 
 def test_list_apis_tag_filter(mini_docs):
@@ -144,26 +159,3 @@ def test_extract_examples_text_fallback():
 def test_extract_examples_none():
     assert metadata.extract_examples({}) == []
     assert metadata.extract_examples(None) == []
-
-
-def test_suggest_apis_chinese_task(mini_docs):
-    out = metadata.suggest_apis(mini_docs["apis"], "查询云服务器列表")
-    assert out["apis"]
-    assert out["apis"][0]["name"] == "ListServers"
-
-
-def test_suggest_apis_english_keyword(mini_docs):
-    out = metadata.suggest_apis(mini_docs["apis"], "rabbitmq tags")
-    assert out["apis"]
-    assert "RabbitMq" in out["apis"][0]["name"]
-
-
-def test_suggest_apis_product_filter(mini_docs):
-    out = metadata.suggest_apis(mini_docs["apis"], "查询标签", product="ECS")
-    assert out["apis"]
-    assert all(a["product"] == "ECS" for a in out["apis"])
-
-
-def test_suggest_apis_no_match(mini_docs):
-    out = metadata.suggest_apis(mini_docs["apis"], "qqqqqqqq")
-    assert out["apis"] == []
