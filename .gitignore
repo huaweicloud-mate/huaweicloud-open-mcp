@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+
+# 数据产物（可从 API 重建，不入库）
+raw/
+data/
+
+# 中间产物
+apis_detail_by_tag/
+apis_detail_by_tag_openapi2/
+apis_detail_by_tag_merged/
+apis_detail_by_tag_*/
+apis_detail_by_tag_openapi2_*/
+apis_detail_by_tag_merged_*/
+validation_issues.json
+validation_progress.txt

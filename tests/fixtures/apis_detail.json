@@ -1,0 +1,237 @@
+{
+  "region_id": "cn-north-4",
+  "total_apis": 6,
+  "failed": [],
+  "apis": {
+    "ECS::ListServers": {
+      "id": "e1",
+      "name": "ListServers",
+      "summary": "查询云服务器列表",
+      "tags": "生命周期管理",
+      "product_short": "ECS",
+      "info_version": "v1",
+      "version": "2.0",
+      "host": "ecs.cn-north-4.myhuaweicloud.com",
+      "base_path": "/",
+      "consumes": "[\"application/json\"]",
+      "schemes": ["HTTPS"],
+      "definitions": {
+        "TaskResultVo": {
+          "type": "object",
+          "properties": {
+            "result_code": {"type": "int", "description": "code"},
+            "create_time_timestamp": {"type": "long", "description": "ts"},
+            "finish_flg": {"type": "int", "description": "flg"},
+            "name": {"type": "string", "required": true, "description": "nm"}
+          }
+        },
+        "EnumDup": {
+          "type": "object",
+          "properties": {
+            "status": {"type": "integer", "enum": [0, 1, 2, 1, 0], "description": "st"}
+          }
+        }
+      },
+      "paths": {
+        "/v1/{project_id}/cloudservers": {
+          "get": {
+            "tags": ["生命周期管理"],
+            "summary": "查询云服务器列表",
+            "operationId": "ListServers",
+            "parameters": [
+              {"name": "project_id", "in": "path", "type": "string", "description": "项目ID"},
+              {"name": "limit", "in": "query", "type": "object", "description": "limit"}
+            ],
+            "responses": {
+              "200": {"description": "OK"},
+              "400": {}
+            }
+          }
+        }
+      }
+    },
+    "ECS::CreateServers": {
+      "id": "e2",
+      "name": "CreateServers",
+      "summary": "创建云服务器",
+      "tags": "生命周期管理",
+      "product_short": "ECS",
+      "info_version": "v1",
+      "version": "2.0",
+      "host": "ecs.cn-north-4.myhuaweicloud.com",
+      "base_path": "/",
+      "consumes": "[\"application/json\"]",
+      "schemes": ["HTTPS"],
+      "definitions": {
+        "ServerReq": {
+          "type": "object",
+          "properties": {
+            "count": {"type": "integer", "description": "c"}
+          }
+        }
+      },
+      "paths": {
+        "/v1/{project_id}/cloudservers": {
+          "post": {
+            "tags": ["生命周期管理"],
+            "summary": "创建云服务器",
+            "operationId": "CreateServers",
+            "parameters": [
+              {"name": "project_id", "in": "path", "type": "string", "description": "项目ID"}
+            ],
+            "responses": {
+              "202": {"description": "Accepted"}
+            }
+          }
+        }
+      }
+    },
+    "ECS::ListTags": {
+      "id": "e3",
+      "name": "ListTags",
+      "summary": "查询标签",
+      "tags": "标签管理",
+      "product_short": "ECS",
+      "info_version": "v1",
+      "version": "2.0",
+      "host": "ecs.cn-north-4.myhuaweicloud.com",
+      "base_path": "/",
+      "consumes": ["application/json"],
+      "schemes": ["https"],
+      "definitions": {},
+      "paths": {
+        "/v1/{project_id}/cloudservers/tags": {
+          "get": {
+            "tags": ["标签管理"],
+            "summary": "查询标签",
+            "operationId": "ListTags",
+            "parameters": [
+              {"name": "project_id", "in": "path", "type": "string", "description": "项目ID"}
+            ],
+            "responses": {
+              "200": {"description": "OK", "schema": {"type": "object", "properties": {"tags": {"type": "array", "items": {"type": "string"}}}}}
+            }
+          }
+        }
+      }
+    },
+    "ECS::UntaggedOp": {
+      "id": "e4",
+      "name": "UntaggedOp",
+      "summary": "未打标签的接口",
+      "tags": "",
+      "product_short": "ECS",
+      "info_version": "v1",
+      "version": "2.0",
+      "host": "ecs.cn-north-4.myhuaweicloud.com",
+      "base_path": "/",
+      "consumes": ["application/json"],
+      "schemes": ["https"],
+      "definitions": {},
+      "paths": {
+        "/v1/{project_id}/cloudservers/untagged": {
+          "get": {
+            "summary": "未打标签的接口",
+            "operationId": "UntaggedOp",
+            "parameters": [
+              {"name": "project_id", "in": "path", "type": "string", "description": "项目ID"}
+            ],
+            "responses": {
+              "200": {"description": "OK"}
+            }
+          }
+        }
+      }
+    },
+    "RabbitMQ::BatchCreateOrDeleteRabbitMqTag": {
+      "id": "r1",
+      "name": "BatchCreateOrDeleteRabbitMqTag",
+      "summary": "批量创建或删除RabbitMQ标签",
+      "tags": "标签管理",
+      "product_short": "RabbitMQ",
+      "info_version": "v1",
+      "openapi": "3.0.0",
+      "host": "rabbitmq.cn-north-4.myhuaweicloud.com",
+      "base_path": "/",
+      "components": {
+        "schemas": {
+          "BatchCreateOrDeleteTagReq": {
+            "type": "object",
+            "required": ["action"],
+            "properties": {
+              "action": {"type": "string", "enum": ["create", "delete"], "description": "操作标识"},
+              "tags": {"type": "array", "items": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}}}
+            }
+          }
+        }
+      },
+      "paths": {
+        "/v2/{project_id}/rabbitmq/{instance_id}/tags/action": {
+          "post": {
+            "tags": ["标签管理"],
+            "summary": "批量创建或删除RabbitMQ标签",
+            "operationId": "BatchCreateOrDeleteRabbitMqTag",
+            "parameters": [
+              {"name": "instance_id", "in": "path", "required": true, "schema": {"type": "string"}, "description": "实例ID"}
+            ],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {"$ref": "#/components/schemas/BatchCreateOrDeleteTagReq"}
+                }
+              }
+            },
+            "responses": {
+              "204": {"description": "No Content"},
+              "400": {
+                "description": "Bad Request",
+                "content": {
+                  "application/json": {
+                    "schema": {"type": "object", "properties": {"error_code": {"type": "string"}, "error_msg": {"type": "string"}}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "RabbitMQ::ShowRabbitMqTags": {
+      "id": "r2",
+      "name": "ShowRabbitMqTags",
+      "summary": "查询RabbitMQ标签",
+      "tags": "标签管理",
+      "product_short": "RabbitMQ",
+      "info_version": "v1",
+      "openapi": "3.0.0",
+      "host": "rabbitmq.cn-north-4.myhuaweicloud.com",
+      "base_path": "/",
+      "components": {},
+      "paths": {
+        "/v2/{project_id}/rabbitmq/{instance_id}/tags": {
+          "get": {
+            "tags": ["标签管理"],
+            "summary": "查询RabbitMQ标签",
+            "operationId": "ShowRabbitMqTags",
+            "parameters": [
+              {"name": "instance_id", "in": "path", "required": true, "schema": {"type": "string"}, "description": "实例ID"}
+            ],
+            "responses": {
+              "200": {
+                "description": "OK",
+                "content": {
+                  "application/json": {
+                    "schema": {"type": "object", "properties": {"tags": {"type": "array", "items": {"type": "object"}}}},
+                    "example": {"tags": [{"key": "env", "value": "prod"}]}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "source": "fixture"
+}

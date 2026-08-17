@@ -1,0 +1,9 @@
+{
+  "total_api_count": 6,
+  "total_products": 2,
+  "groups": [
+    {"product_short": "ECS", "api_count": 4},
+    {"product_short": "RabbitMQ", "api_count": 2}
+  ],
+  "source": "fixture"
+}

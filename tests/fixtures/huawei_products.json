@@ -1,0 +1,19 @@
+{
+  "total_groups": 2,
+  "total_products": 2,
+  "groups": [
+    {
+      "name": "计算",
+      "products": [
+        {"productshort": "ECS", "name": "弹性云服务器", "has_data": true, "is_global": false, "link": "https://www.huaweicloud.com/product/ecs.html"}
+      ]
+    },
+    {
+      "name": "应用中间件",
+      "products": [
+        {"productshort": "RabbitMQ", "name": "分布式消息服务RabbitMQ版", "has_data": true, "is_global": false, "link": ""}
+      ]
+    }
+  ],
+  "source": "fixture"
+}

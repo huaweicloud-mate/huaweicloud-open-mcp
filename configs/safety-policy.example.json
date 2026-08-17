@@ -1,0 +1,9 @@
+[
+  "# 只读白名单示例：仅允许查询类接口，其余一律拒绝",
+  "# 生产环境建议按 Skill 收敛的调用集合逐条列出",
+  "ECS:*Show*=allow",
+  "ECS:*List*=allow",
+  "ECS:*Query*=allow",
+  "IAM:KeystoneList*=allow",
+  "*=deny"
+]
