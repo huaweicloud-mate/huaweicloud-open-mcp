@@ -2,7 +2,7 @@
 
 ## 项目上下文
 
-本项目实现华为云 MCP server：本地 stdio 形态的通用网关（Core 模式），用 6 个核心工具编排触达华为云全量 OpenAPI，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用华为云服务。同类产品参考阿里云 OpenAPI MCP Server（Core 模式）与 AWS Labs MCP。
+本项目实现华为云 Open MCP server：本地 stdio 形态的通用网关（Core 模式），用 6 个核心工具编排触达华为云全量 OpenAPI，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用华为云服务。同类产品参考阿里云 OpenAPI MCP Server（Core 模式）与 AWS Labs MCP。
 
 三层架构：
 

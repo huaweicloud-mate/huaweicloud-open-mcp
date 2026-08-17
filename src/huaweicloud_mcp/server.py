@@ -1,4 +1,4 @@
-"""华为云 MCP server：stdio 装配（mcp SDK）。
+"""华为云 Open MCP server：stdio 装配（mcp SDK）。
 
 只做 MCP 协议装配，全部业务逻辑委托 ToolService。
 """
@@ -22,7 +22,7 @@ from .types import (
     ToolError,
 )
 
-INSTRUCTIONS = """# 华为云 MCP 使用指引
+INSTRUCTIONS = """# 华为云 Open MCP 使用指引
 
 ## 推荐工作流（渐进收窄，LLM 决策）
 
@@ -114,7 +114,7 @@ def build_app(service: ToolService | None = None) -> MCPServer:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="huaweicloud-open-mcp", description="华为云 MCP server（stdio）")
+    parser = argparse.ArgumentParser(prog="huaweicloud-open-mcp", description="华为云 Open MCP server（stdio）")
     parser.add_argument("--mock", action="store_true", default=None,
                         help="mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）")
     parser.add_argument("--policy", default=None, help="safety policy 文件路径")

@@ -1,6 +1,6 @@
-# 华为云 MCP 设计文档
+# 华为云 Open MCP 设计文档
 
-> 本地 stdio 形态的华为云 MCP server（通用网关 Core 模式）：6 个核心工具编排触达华为云全量 OpenAPI。
+> 本地 stdio 形态的华为云 Open MCP server（通用网关 Core 模式）：6 个核心工具编排触达华为云全量 OpenAPI。
 > 同类产品参考：[阿里云 OpenAPI MCP Server](https://github.com/aliyun/alibabacloud-api-mcp-server)（Core 模式）、[AWS Labs MCP](https://github.com/awslabs/mcp)。
 
 ## 1. 定位与设计目标
@@ -278,7 +278,7 @@ flowchart LR
 - [x] safety policy（阿里云式白名单，无 policy 全拒）
 - [x] mock 模式全链路（`--mock`）
 - [x] 类型系统：TypedDict 结果信封 + mypy 0 错误
-- [x] 120 单测+集成 / 3 e2e（真实凭证，`.env` 加载）
+- [x] 122 单测+集成 / 6 e2e（真实凭证 3 + 渐进式工作流 3，`.env` 加载）
 
 ## 9. 二期路线
 
