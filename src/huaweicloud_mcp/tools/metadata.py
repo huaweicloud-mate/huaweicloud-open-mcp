@@ -166,10 +166,25 @@ def format_api_detail(doc: dict[str, Any], product: str, path: str,
     collected: set[str] = set()
 
     parameters: list[dict[str, Any]] = []
+    shared_params = doc.get("parameters") or {}
     for p in op.get("parameters") or []:
-        out_p = dict(p)
-        if p.get("in") == "body":
-            out_p["schema"] = _resolve_schema(p.get("schema") or {}, doc, 0, collected)
+        if not isinstance(p, dict):
+            continue
+        ref = p.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/parameters/"):
+            target = shared_params.get(ref.split("/")[-1])
+            if target is None:
+                continue  # 引用缺失：跳过而非输出无 name/in 的脏参数
+            out_p = dict(target)
+            for extra in ("description", "required"):
+                if extra in p:
+                    out_p[extra] = p[extra]
+        else:
+            out_p = dict(p)
+        if not out_p.get("name") or not out_p.get("in"):
+            continue
+        if out_p.get("in") == "body":
+            out_p["schema"] = _resolve_schema(out_p.get("schema") or {}, doc, 0, collected)
         parameters.append(out_p)
 
     responses: dict[str, dict[str, Any]] = {}

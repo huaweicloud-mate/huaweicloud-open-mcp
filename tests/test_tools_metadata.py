@@ -150,6 +150,53 @@ def test_extract_examples():
     assert metadata.extract_examples(op) == [{"description": "示例说明", "example": {"action": "create"}}]
 
 
+def test_format_api_detail_resolves_ref_parameter():
+    doc = {
+        "swagger": "2.0",
+        "paths": {
+            "/v1/{project_id}/cloudservers": {
+                "get": {
+                    "operationId": "ListServers",
+                    "parameters": [
+                        {"$ref": "#/parameters/project_id"},
+                        {"name": "limit", "in": "query", "type": "integer"},
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                }
+            }
+        },
+        "parameters": {
+            "project_id": {"name": "project_id", "in": "path", "type": "string",
+                           "required": True, "description": "项目ID"},
+        },
+        "definitions": {},
+    }
+    out = metadata.format_api_detail(doc, "ECS", "/v1/{project_id}/cloudservers", "get",
+                                     doc["paths"]["/v1/{project_id}/cloudservers"]["get"])
+    params = {p["name"]: p for p in out["parameters"]}
+    assert params["project_id"]["in"] == "path"
+    assert params["project_id"]["required"] is True
+    assert params["project_id"]["description"] == "项目ID"
+    assert "$ref" not in params["project_id"]
+    assert "limit" in params
+
+
+def test_format_api_detail_drops_unresolved_ref_parameter():
+    doc = {
+        "swagger": "2.0",
+        "paths": {
+            "/p": {"get": {"operationId": "Op",
+                           "parameters": [{"$ref": "#/parameters/missing"}],
+                           "responses": {"200": {"description": "OK"}}}}
+        },
+        "parameters": {},
+        "definitions": {},
+    }
+    out = metadata.format_api_detail(doc, "ECS", "/p", "get",
+                                     doc["paths"]["/p"]["get"])
+    assert out["parameters"] == []
+
+
 def test_extract_examples_text_fallback():
     op = {"x-request-examples-text-1": '{"action": "list"}'}
     examples = metadata.extract_examples(op)
