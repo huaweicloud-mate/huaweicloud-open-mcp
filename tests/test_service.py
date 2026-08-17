@@ -90,6 +90,33 @@ def test_load_api_doc_missing(workdir):
     assert _service(workdir).load_api_doc("ECS", "X") is None
 
 
+def test_metadata_tools_are_logged(workdir, caplog):
+    import logging
+    _install_openapi_doc(workdir)
+    service = _service(workdir)
+    with caplog.at_level(logging.INFO, logger="openmcp.tools.service"):
+        service.list_products(keyword="云")
+        service.get_product("ECS")
+        service.list_apis("ECS", tag="生命周期管理", limit=5, offset=1)
+        service.get_api("ECS", "ListServersDetails")
+        service.get_api_examples("ECS", "ListServersDetails")
+    assert "list_products category=- keyword=云" in caplog.text
+    assert "get_product product=ECS" in caplog.text
+    assert "list_apis product=ECS tag=生命周期管理 search=- limit=5 offset=1" in caplog.text
+    assert "get_api ECS:ListServersDetails region=cn-north-4" in caplog.text
+    assert "get_api_examples ECS:ListServersDetails region=cn-north-4" in caplog.text
+
+
+def test_metadata_not_found_is_logged(workdir, caplog):
+    import logging
+    service = _service(workdir)
+    with caplog.at_level(logging.WARNING, logger="openmcp.tools.service"):
+        service.get_product("NOPE")
+        service.get_api("ECS", "Nope")
+    assert "get_product product=NOPE result=not_found" in caplog.text
+    assert "get_api ECS:Nope region=cn-north-4 result=not_found" in caplog.text
+
+
 # ---------- execute：mock 路由 ----------
 
 class StubMockClient:

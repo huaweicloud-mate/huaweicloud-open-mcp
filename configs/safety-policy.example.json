@@ -4,6 +4,9 @@
   "ECS:*Show*=allow",
   "ECS:*List*=allow",
   "ECS:*Query*=allow",
+  "VPC:*Show*=allow",
+  "VPC:*List*=allow",
+  "VPC:*Query*=allow",
   "IAM:KeystoneList*=allow",
   "*=deny"
 ]

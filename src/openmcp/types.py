@@ -12,17 +12,21 @@ class ClientResponse(TypedDict):
 
 
 class ExecuteResult(TypedDict, total=False):
-    """execute_api 的规范化输出。ok=False 时携带 reason；错误响应携带 error_code/error_msg。"""
+    """execute_api 的规范化输出。ok=False 时携带 reason；错误响应携带 error_code/error_msg。
+
+    可选字段声明为可空：并非每条路径都会填充（如拒绝时无 status/body），
+    MCP SDK 序列化缺失字段为 null，outputSchema 必须允许 null。
+    """
 
     ok: bool
-    reason: str
-    status: int
+    reason: str | None
+    status: int | None
     body: Any
-    truncated: bool
+    truncated: bool | None
     error_code: str | None
     error_msg: str | None
-    product: str
-    api: str
+    product: str | None
+    api: str | None
 
 
 class ToolError(TypedDict):

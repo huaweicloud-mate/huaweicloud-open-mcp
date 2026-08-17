@@ -135,39 +135,54 @@ class ToolService:
 
     def list_products(self, category: str | None = None,
                       keyword: str | None = None) -> ProductListResult | ToolError:
+        logger.info("list_products category=%s keyword=%s", category or "-", keyword or "-")
         groups = self._groups()
         if groups is None:
+            logger.warning("list_products metadata=missing")
             return {"ok": False, "reason": "本地元数据缺失，请先运行 api-refresh products"}
         return metadata.list_products(groups, counts=self._counts(),
                                       category=category, keyword=keyword)
 
     def get_product(self, product: str) -> ProductResult | ToolError:
+        logger.info("get_product product=%s", product)
         groups = self._groups()
         if groups is None:
+            logger.warning("get_product product=%s metadata=missing", product)
             return {"ok": False, "reason": "本地元数据缺失，请先运行 api-refresh products"}
         out = metadata.get_product(groups, product, counts=self._counts())
         if out is None:
+            logger.warning("get_product product=%s result=not_found", product)
             return {"ok": False, "reason": f"产品 {product} 未找到"}
         return out
 
     def list_apis(self, product: str, tag: str | None = None, search: str | None = None,
                   limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
+        logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d",
+                    product, tag or "-", search or "-", limit, offset)
         docs = self._docs()
         if docs is None:
+            logger.warning("list_apis product=%s metadata=missing", product)
             return {"ok": False, "reason": "本地接口索引缺失，请先运行 api-refresh docs"}
         return metadata.list_apis(docs, product, tag=tag, search=search, limit=limit, offset=offset)
 
     def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
+        region = region or self.config.region
+        logger.info("get_api %s:%s region=%s", product, api, region)
         hit = self.load_api_doc(product, api, region)
         if hit is None:
+            logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
         return metadata.format_api_detail(doc, product, path, method, op)
 
     def get_api_examples(self, product: str, api: str,
                          region: str | None = None) -> ExamplesResult | ToolError:
+        region = region or self.config.region
+        logger.info("get_api_examples %s:%s region=%s", product, api, region)
         hit = self.load_api_doc(product, api, region)
         if hit is None:
+            logger.warning("get_api_examples %s:%s region=%s result=not_found",
+                           product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         _, _, _, op = hit
         return {"ok": True, "product": product, "api": api,

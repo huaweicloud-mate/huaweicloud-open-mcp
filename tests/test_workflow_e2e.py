@@ -13,6 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -33,6 +34,7 @@ class McpSession:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             cwd=str(PROOT),
         )
+        self.schemas: dict[str, dict] = {}
 
     def call(self, method, params, msg_id):
         self.proc.stdin.write(
@@ -48,6 +50,11 @@ class McpSession:
 
     def tool(self, name, arguments):
         r = self.call("tools/call", {"name": name, "arguments": arguments}, hash((name, str(arguments))))
+        # 模拟客户端严格校验：structuredContent 必须符合工具 outputSchema
+        #（回归：ExecuteResult 可选字段序列化为 null 时曾触发 -32602）
+        schema = self.schemas.get(name)
+        if schema is not None:
+            jsonschema.validate(instance=r["result"].get("structuredContent") or {}, schema=schema)
         text = r["result"]["content"][0]["text"]
         return json.loads(text)
 
@@ -62,6 +69,8 @@ def session():
     s.call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                           "clientInfo": {"name": "workflow-e2e", "version": "0"}}, 1)
     s.call("notifications/initialized", {}, 0)
+    r = s.call("tools/list", {}, 2)
+    s.schemas = {t["name"]: t.get("outputSchema") or {} for t in r["result"]["tools"]}
     yield s
     s.close()
 
