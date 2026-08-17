@@ -9,11 +9,20 @@
 
 import fnmatch
 import json
+from dataclasses import dataclass
+from typing import Sequence
 
 
-def parse_policy(lines):
-    """把规则行列表解析为 [(product, pattern, allow), ...]，保持行序。"""
-    rules = []
+@dataclass(frozen=True)
+class PolicyRule:
+    product: str
+    api_pattern: str
+    allow: bool
+
+
+def parse_policy(lines: Sequence[str]) -> list[PolicyRule]:
+    """把规则行列表解析为 PolicyRule 列表，保持行序。"""
+    rules: list[PolicyRule] = []
     for line in lines:
         text = line.strip()
         if not text or text.startswith("#"):
@@ -33,21 +42,21 @@ def parse_policy(lines):
             product, _, pattern = target.partition(":")
         product = product.strip() or "*"
         pattern = pattern.strip() or "*"
-        rules.append((product, pattern, action == "allow"))
+        rules.append(PolicyRule(product=product, api_pattern=pattern, allow=action == "allow"))
     return rules
 
 
-def evaluate(rules, product, api):
+def evaluate(rules: Sequence[PolicyRule], product: str, api: str) -> bool:
     """按行序首个命中生效；无匹配默认 deny。product/api 大小写不敏感。"""
-    for r_product, r_pattern, allow in rules:
-        if r_product != "*" and r_product.lower() != product.lower():
+    for rule in rules:
+        if rule.product != "*" and rule.product.lower() != product.lower():
             continue
-        if fnmatch.fnmatch(api.lower(), r_pattern.lower()):
-            return allow
+        if fnmatch.fnmatch(api.lower(), rule.api_pattern.lower()):
+            return rule.allow
     return False
 
 
-def load_policy_file(path):
+def load_policy_file(path: str) -> list[PolicyRule]:
     with open(path, encoding="utf-8") as f:
         content = f.read()
     try:

@@ -5,29 +5,31 @@ import json
 import os
 import re
 import shutil
+from typing import Any, cast
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-TRANSLATIONS_FILE = os.path.join(ROOT_DIR, "configs", "tag_translations.json")
+from ..paths import project_root
 
-PRODUCT_CANONICAL = {
+TRANSLATIONS_FILE = str(project_root() / "configs" / "tag_translations.json")
+
+PRODUCT_CANONICAL: dict[str, str] = {
     "cloudtest": "CloudTest",
 }
 
 
-def sanitize_tag(name):
+def sanitize_tag(name: str) -> str:
     s = name.replace("/", "_").replace("\\", "_").strip()
     s = re.sub(r'[<>:"|?*]', "_", s)
     return s
 
 
-def load_translations():
+def load_translations() -> dict[str, str]:
     if os.path.exists(TRANSLATIONS_FILE):
         with open(TRANSLATIONS_FILE, encoding="utf-8") as f:
-            return json.load(f)
+            return cast(dict[str, str], json.load(f))
     return {}
 
 
-def merge_multi(docs):
+def merge_multi(docs: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], int]:
     base = next(iter(docs.values()))
     base = json.loads(json.dumps(base))
     seen_ops = set()
@@ -60,14 +62,14 @@ def merge_multi(docs):
     return base, dup
 
 
-def organize(src_dir, out_dir, translations=None):
+def organize(src_dir: str, out_dir: str, translations: dict[str, str] | None = None) -> tuple[int, int]:
     """merged 目录 → 最终产物目录。返回 (total_files, total_ops)。"""
     if translations is None:
         translations = load_translations()
     shutil.rmtree(out_dir, ignore_errors=True)
     os.makedirs(out_dir, exist_ok=True)
 
-    product_dirs = collections.defaultdict(dict)
+    product_dirs: collections.defaultdict[tuple[str, str], dict[str, Any]] = collections.defaultdict(dict)
     for ps in sorted(os.listdir(src_dir)):
         pdir = os.path.join(src_dir, ps)
         if not os.path.isdir(pdir):
@@ -124,8 +126,8 @@ def organize(src_dir, out_dir, translations=None):
     return total_files, total_ops
 
 
-def build_index(out_dir):
-    index = {"products": {}, "files": []}
+def build_index(out_dir: str) -> dict[str, Any]:
+    index: dict[str, Any] = {"products": {}, "files": []}
     for ps in sorted(os.listdir(out_dir)):
         pdir = os.path.join(out_dir, ps)
         if not os.path.isdir(pdir):
@@ -142,7 +144,7 @@ def build_index(out_dir):
     return index
 
 
-def main():
+def main() -> None:
     from . import region_paths
     total_files, total_ops = organize(region_paths.merged_dir(), region_paths.openapi_out_dir())
     print(f"files: {total_files}, operations: {total_ops}")

@@ -1,23 +1,18 @@
 """execute 工具纯函数单元测试（stub client）。"""
 
-
 from huaweicloud_mcp.auth.credentials import Credentials
 from huaweicloud_mcp.tools import execute
+from huaweicloud_mcp.types import ClientResponse
 
 
 class StubClient:
-    def __init__(self, responses=None, mode="real"):
+    def __init__(self, responses: list[ClientResponse] | None = None):
         self.responses = responses or []
-        self.calls = []
-        self.mode = mode
+        self.calls: list[tuple] = []
 
-    def request(self, method, host, path, query=None, body=None, headers=None):
+    def request(self, method, host, path, query=None, body=None, headers=None) -> ClientResponse:
         self.calls.append((method, host, path, query, body, headers))
         return self.responses.pop(0) if self.responses else {"status": 200, "body": {}}
-
-    def mock_request(self, product, api_name, region, status_code=200, number=1):
-        self.calls.append(("mock", product, api_name, region, status_code, number))
-        return {"status": status_code, "body": {"mock": True, "count": number}}
 
 
 def _get_op(mini_detail, key="ECS::ListServers"):
@@ -68,27 +63,28 @@ def test_build_request_body(mini_detail):
 # ---------- normalize_response ----------
 
 def test_normalize_response_ok_json():
-    out = execute.normalize_response({"status": 200, "body": {"servers": []}})
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": {"servers": []}})
     assert out["status"] == 200
     assert out["body"] == {"servers": []}
 
 
 def test_normalize_response_error_json():
-    out = execute.normalize_response({"status": 400, "body": {"error_code": "E.400", "error_msg": "bad"}})
+    out = execute.normalize_response({"status": 400, "headers": {},
+                                      "body": {"error_code": "E.400", "error_msg": "bad"}})
     assert out["status"] == 400
     assert out["error_code"] == "E.400"
     assert out["error_msg"] == "bad"
 
 
 def test_normalize_response_error_non_json():
-    out = execute.normalize_response({"status": 502, "body": "<html>bad gateway</html>"})
+    out = execute.normalize_response({"status": 502, "headers": {}, "body": "<html>bad gateway</html>"})
     assert out["status"] == 502
     assert out["error_msg"]
 
 
 def test_normalize_response_truncates_oversized():
     big = {"data": "x" * 200_000}
-    out = execute.normalize_response({"status": 200, "body": big})
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": big})
     assert out["truncated"] is True
 
 
@@ -115,23 +111,10 @@ def test_execute_deny_by_policy(mini_detail):
 
 def test_execute_allow_calls_client(mini_detail):
     doc, path, method, op = _get_op(mini_detail)
-    client = StubClient([{"status": 200, "body": {"count": 0}}])
+    client = StubClient([{"status": 200, "headers": {}, "body": {"count": 0}}])
     rules = _policy("ECS:*=allow")
     out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
                               {"limit": 1}, policy_rules=rules, client=client, credentials=CRED)
     assert out["ok"] is True
     assert out["status"] == 200
     assert client.calls[0][0] == "GET"
-
-
-def test_execute_mock_mode_routes(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    client = StubClient(mode="mock")
-    rules = _policy("ECS:*=allow")
-    out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                              {"limit": 1}, policy_rules=rules, client=client, credentials=CRED, mock=True)
-    assert out["ok"] is True
-    call = client.calls[0]
-    assert call[0] == "mock"
-    assert call[1] == "ECS"
-    assert call[2] == "ListServers"

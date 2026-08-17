@@ -6,14 +6,14 @@ import os
 import shutil
 
 
-def split_by_tag(src, out_dir):
+def split_by_tag(src: str, out_dir: str) -> tuple[int, dict[str, dict[str, int]]]:
     shutil.rmtree(out_dir, ignore_errors=True)
     os.makedirs(out_dir, exist_ok=True)
 
     with open(src, "r", encoding="utf-8") as f:
         detail = json.load(f)
 
-    buckets_by_product = collections.defaultdict(dict)
+    buckets_by_product: collections.defaultdict[str, dict] = collections.defaultdict(dict)
     for key, val in detail["apis"].items():
         ps, _, name = key.partition("::")
         tag = (val.get("tags") or "").strip()
@@ -27,7 +27,7 @@ def split_by_tag(src, out_dir):
     for ps, items in sorted(buckets_by_product.items()):
         pdir = os.path.join(out_dir, ps)
         os.makedirs(pdir, exist_ok=True)
-        tag_buckets = collections.defaultdict(dict)
+        tag_buckets: collections.defaultdict[str, dict] = collections.defaultdict(dict)
         for (tag, name), val in items.items():
             tag_buckets[tag][f"{ps}::{name}"] = val
         count = 0
@@ -52,7 +52,7 @@ def split_by_tag(src, out_dir):
     return total_api, product_summary
 
 
-def main():
+def main() -> None:
     from . import region_paths
     total, summary = split_by_tag(region_paths.raw_detail_path(), region_paths.by_tag_dir())
     print("total apis:", total)

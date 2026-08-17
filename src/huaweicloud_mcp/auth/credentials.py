@@ -2,23 +2,23 @@
 
 import configparser
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class Credentials:
     ak: str = ""
     sk: str = ""
-    security_token: str = field(default=None)
-    project_id: str = field(default=None)
-    domain_id: str = field(default=None)
+    security_token: str | None = None
+    project_id: str | None = None
+    domain_id: str | None = None
 
     @property
-    def ready(self):
+    def ready(self) -> bool:
         return bool(self.ak and self.sk)
 
 
-def load_from_env(environ=None):
+def load_from_env(environ: dict[str, str] | None = None) -> Credentials | None:
     env = environ if environ is not None else os.environ
     ak = env.get("HUAWEICLOUD_SDK_AK")
     sk = env.get("HUAWEICLOUD_SDK_SK")
@@ -33,7 +33,7 @@ def load_from_env(environ=None):
     )
 
 
-def load_profile(path=None):
+def load_profile(path: str | None = None) -> Credentials | None:
     path = path or os.path.expanduser("~/.huaweicloud/credentials")
     if not os.path.exists(path):
         return None
@@ -54,6 +54,6 @@ def load_profile(path=None):
     )
 
 
-def get_credentials():
+def get_credentials() -> Credentials | None:
     """provider chain：env → profile。"""
     return load_from_env() or load_profile()

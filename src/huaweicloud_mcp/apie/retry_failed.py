@@ -1,50 +1,25 @@
-"""重试 raw/apis_detail.json 中 failed 项（429 加大退避）。"""
+"""重试 raw/apis_detail.json 中 failed 项（429 大退避）。"""
 
 import json
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
+from typing import Any
 
-from . import region_paths
+from . import http, region_paths
 
 BASE = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
 REGION = region_paths.current_region()
 DETAIL_PATH = region_paths.raw_detail_path()
 
 
-def _request(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
-    for attempt in range(10):
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode("utf-8")), None
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="replace")
-            try:
-                jb = json.loads(body)
-            except Exception:
-                jb = {}
-            if e.code == 429:
-                print(f"    429, sleep 20s (attempt {attempt + 1})", flush=True)
-                time.sleep(20)
-                continue
-            return jb, e
-        except Exception:
-            if attempt == 9:
-                raise
-            time.sleep(5)
-    return {}, Exception("exhausted retries")
-
-
-def fetch_detail(product_short, name):
-    params = urllib.parse.urlencode(
-        {"product_short": product_short, "name": name, "region_id": REGION})
-    data, err = _request(f"{BASE}?{params}")
+def fetch_detail(product_short: str, name: str) -> tuple[dict[str, Any], Any]:
+    """拉取单个接口详情（429 自动大退避重试）。返回 (body, error)。"""
+    params = {"product_short": product_short, "name": name, "region_id": REGION}
+    data, err = http.fetch_json_429(http.query_url(BASE, params))
     if err is None:
         return data, None
     if data.get("error_code") == "APIEXPLORER.1055":
-        data2, err2 = _request(f"{BASE}?{urllib.parse.urlencode({'product_short': product_short, 'name': name})}")
+        fallback = {"product_short": product_short, "name": name}
+        data2, err2 = http.fetch_json_429(http.query_url(BASE, fallback))
         if err2 is None:
             return data2, None
         if data2.get("error_code") == "APIEXPLORER.1055":
@@ -53,13 +28,13 @@ def fetch_detail(product_short, name):
     return data, err
 
 
-def main():
+def main() -> None:
     with open(DETAIL_PATH, "r", encoding="utf-8") as f:
-        result = json.load(f)
+        result: dict[str, Any] = json.load(f)
 
     failed = result["failed"]
-    done = result["apis"]
-    still_failed = []
+    done: dict[str, dict[str, Any]] = result["apis"]
+    still_failed: list[dict[str, str]] = []
 
     print(f"retrying {len(failed)} failed items", flush=True)
     for f in failed:

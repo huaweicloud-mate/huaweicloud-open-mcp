@@ -2,10 +2,11 @@
 
 import collections
 import json
+from typing import Any
 
 
-def merge_doc(apis):
-    doc = {
+def merge_doc(apis: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], list[tuple]]:
+    doc: dict[str, Any] = {
         "swagger": "2.0",
         "info": {"title": "", "version": "1.0"},
         "host": None,
@@ -19,25 +20,25 @@ def merge_doc(apis):
         "responses": {},
         "tags": [],
     }
-    defs = {}
-    params = {}
-    responses = {}
-    op_name_seen = set()
-    path_dup = []
+    defs: dict[str, Any] = {}
+    params: dict[str, Any] = {}
+    responses: dict[str, Any] = {}
+    op_name_seen: set[str] = set()
+    path_dup: list[tuple] = []
 
     api_items = list(apis.items())
-    host_counts = collections.Counter()
+    host_counts: collections.Counter[str] = collections.Counter()
     for k, a in api_items:
         if a.get("host"):
             host_counts[a["host"]] += 1
-    doc["host"] = max(host_counts, key=host_counts.get) if host_counts else None
+    doc["host"] = max(host_counts, key=lambda h: host_counts[h]) if host_counts else None
 
     for k, a in api_items:
         for path, path_item in (a.get("paths") or {}).items():
             for method, op in path_item.items():
                 if not isinstance(op, dict):
                     continue
-                op_id = op.get("operationId")
+                op_id = op.get("operationId") or ""
                 if op_id in op_name_seen:
                     path_dup.append((path, method, op_id))
                     continue
@@ -120,7 +121,7 @@ def merge_doc(apis):
     return doc, path_dup
 
 
-def main():
+def main() -> None:
     import os
     import shutil
 
@@ -133,7 +134,7 @@ def main():
 
     total_docs = 0
     total_ops = 0
-    stats = collections.Counter()
+    stats: collections.Counter[str] = collections.Counter()
     index = {}
 
     for ps in sorted(os.listdir(src)):

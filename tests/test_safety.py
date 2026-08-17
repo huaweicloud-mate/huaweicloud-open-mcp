@@ -8,8 +8,8 @@ from huaweicloud_mcp.safety import policy
 def test_parse_basic_rules():
     rules = policy.parse_policy(["ECS:*Show*=allow", "*=deny"])
     assert len(rules) == 2
-    assert rules[0] == ("ECS", "*Show*", True)
-    assert rules[1] == ("*", "*", False)
+    assert (rules[0].product, rules[0].api_pattern, rules[0].allow) == ("ECS", "*Show*", True)
+    assert (rules[1].product, rules[1].api_pattern, rules[1].allow) == ("*", "*", False)
 
 
 def test_parse_skips_comments_and_blanks():

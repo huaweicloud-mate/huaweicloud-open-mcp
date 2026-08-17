@@ -2,32 +2,20 @@
 
 import json
 import time
-import urllib.parse
-import urllib.request
+from typing import Any
+
+from . import http
 
 BASE = "https://console.huaweicloud.com/apiexplorer/new/v3/apis"
 PAGE_SIZE = 100
 
 
-def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
-    for attempt in range(5):
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception as e:
-            if attempt == 4:
-                raise
-            print(f"  retry {attempt + 1} after error: {e}", flush=True)
-            time.sleep(2 * (attempt + 1))
-
-
-def fetch_product(product_short, api_count):
-    apis = []
+def fetch_product(product_short: str, api_count: int) -> list[dict[str, Any]]:
+    apis: list[dict[str, Any]] = []
     offset = 0
     while offset < api_count:
-        params = urllib.parse.urlencode({"offset": offset, "limit": PAGE_SIZE, "product_short": product_short})
-        data = fetch(f"{BASE}?{params}")
+        params = {"offset": offset, "limit": PAGE_SIZE, "product_short": product_short}
+        data = http.fetch_json(http.query_url(BASE, params))
         if "api_basic_infos" not in data:
             raise RuntimeError(f"{product_short} offset={offset}: unexpected response: {data}")
         batch = data["api_basic_infos"]
@@ -39,13 +27,13 @@ def fetch_product(product_short, api_count):
     return apis
 
 
-def main():
+def main() -> None:
     with open("raw/apis_count.json", "r", encoding="utf-8") as f:
-        count_data = json.load(f)
+        count_data: dict[str, Any] = json.load(f)
 
     products = count_data["groups"]
-    all_apis = []
-    failed = []
+    all_apis: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
 
     for i, p in enumerate(products, 1):
         short, n = p["product_short"], p["api_count"]

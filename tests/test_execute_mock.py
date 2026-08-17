@@ -7,64 +7,72 @@ mock 端点行为（实测确认）：
 - status_code 为其它值时返回空 body。
 """
 
-from huaweicloud_mcp.auth.credentials import Credentials
-from huaweicloud_mcp.safety import policy
-from huaweicloud_mcp.signer.client import HttpClient
-from huaweicloud_mcp.tools import execute
+import json
 
-CRED = Credentials(ak="AK", sk="SK", project_id="pid")
+from huaweicloud_mcp.apie.mock import MockApiClient
+from huaweicloud_mcp.safety import policy
+from huaweicloud_mcp.tools.service import ServiceConfig, ToolService
+
 RULES_ALLOW_ECS = policy.parse_policy(["ECS:*=allow", "*=deny"])
 
+MINI_OPENAPI_DOC = {
+    "swagger": "2.0",
+    "info": {"title": "ECS", "version": "1.0"},
+    "host": "ecs.cn-north-4.myhuaweicloud.com",
+    "basePath": "/",
+    "paths": {
+        "/v1/{project_id}/cloudservers/detail": {
+            "get": {"operationId": "ListServersDetails", "parameters": [],
+                    "responses": {"200": {"description": "OK"}}},
+        },
+        "/v1/{project_id}/cloudservers": {
+            "post": {"operationId": "CreateServers",
+                     "parameters": [{"name": "project_id", "in": "path", "type": "string"}],
+                     "responses": {"200": {"description": "OK"}}},
+        },
+    },
+}
 
-def _run(api_name, params=None, rules=RULES_ALLOW_ECS):
-    client = HttpClient(mock=True)
-    return execute.execute_api(
-        doc={"host": "ecs.cn-north-4.myhuaweicloud.com"},
-        path="/v1/{project_id}/cloudservers",
-        method="get",
-        op={"operationId": api_name},
-        product="ECS",
-        api_name=api_name,
-        region="cn-north-4",
-        params=params or {},
-        policy_rules=rules,
-        client=client,
-        credentials=CRED,
-        mock=True,
-    )
+
+def _service(tmp_path, rules):
+    out = tmp_path / "data" / "openapi" / "ECS"
+    out.mkdir(parents=True)
+    (out / "LifecycleManagement.json").write_text(
+        json.dumps(MINI_OPENAPI_DOC, ensure_ascii=False), encoding="utf-8")
+    return ToolService(ServiceConfig(mock=True, policy_rules=rules, data_root=tmp_path))
 
 
 def test_mock_list_servers_details():
-    out = _run("ListServersDetails")
-    assert out["ok"] is True
-    assert out["mock"] is True
-    assert out["status"] == 200
-    body = out["body"]
+    resp = MockApiClient().mock_request("ECS", "ListServersDetails", "cn-north-4")
+    assert resp["status"] == 200
+    body = resp["body"]
     assert isinstance(body, dict)
     assert "count" in body
     assert "servers" in body
 
 
 def test_mock_create_servers_returns_job_id():
-    out = _run("CreateServers", params={}, rules=policy.parse_policy(["ECS:Create*=allow", "*=deny"]))
-    assert out["ok"] is True
-    body = out["body"]
-    assert "job_id" in body
+    resp = MockApiClient().mock_request("ECS", "CreateServers", "cn-north-4")
+    assert resp["status"] == 200
+    assert "job_id" in resp["body"]
 
 
 def test_mock_status_code_non_200_empty_body():
-    out = _run("ListServersDetails", params={"_status_code": 400})
+    resp = MockApiClient().mock_request("ECS", "ListServersDetails", "cn-north-4", status_code=400)
+    assert resp["status"] == 200
+    assert resp["body"] is None
+
+
+def test_service_execute_mock_end_to_end(tmp_path):
+    service = _service(tmp_path, RULES_ALLOW_ECS)
+    out = service.execute_api("ECS", "ListServersDetails")
     assert out["ok"] is True
     assert out["status"] == 200
-    assert out["body"] is None
+    assert "servers" in out["body"]
 
 
-def test_mock_deny_by_policy_no_http():
-    client = HttpClient(mock=True)
-    rules = policy.parse_policy(["ECS:*Show*=allow", "*=deny"])
-    out = execute.execute_api(
-        doc={"host": "x"}, path="/", method="get", op={"operationId": "ListServersDetails"},
-        product="ECS", api_name="ListServersDetails", region="cn-north-4",
-        params={}, policy_rules=rules, client=client, credentials=CRED, mock=True)
+def test_service_execute_mock_denied(tmp_path):
+    service = _service(tmp_path, policy.parse_policy(["ECS:*Show*=allow", "*=deny"]))
+    out = service.execute_api("ECS", "ListServersDetails")
     assert out["ok"] is False
     assert "policy" in out["reason"]

@@ -1,23 +1,55 @@
-"""六元数据工具业务函数（纯函数 + 磁盘加载器，不耦合 MCP 协议）。"""
+"""六元数据工具纯函数（不碰磁盘、不耦合 MCP 协议）。"""
 
 import json
-import os
 import re
+from typing import Any, TypedDict
 
-from ..apie import region_paths
 
-PROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+class ProductItem(TypedDict):
+    product: str
+    name: str
+    category: str
+    api_count: int
+    is_global: bool | None
+    link: str | None
+
+
+class ApiItem(TypedDict):
+    name: str
+    method: str
+    summary: str
+    tags: str
+    info_version: str
+
+
+class ApiSuggestion(TypedDict):
+    product: str
+    name: str
+    method: str
+    summary: str
+    tags: str
+    score: int
+    matched_keywords: list[str]
+
+
+class ApiExample(TypedDict):
+    description: str | None
+    example: Any
+
 
 _CJK = re.compile(r"[\u4e00-\u9fff]+")
 
 
-# ---------- 纯函数 ----------
+# ---------- 产品 ----------
 
-def list_products(groups, counts=None, category=None, keyword=None):
+def list_products(groups: list[dict[str, Any]], *,
+                  counts: dict[str, int] | None = None,
+                  category: str | None = None,
+                  keyword: str | None = None) -> dict[str, Any]:
     """groups: huawei_products.json 的 groups；counts: {PRODUCT_UPPER: api_count}。"""
     counts = counts or {}
     kw = (keyword or "").lower()
-    products = []
+    products: list[ProductItem] = []
     for g in groups:
         gname = g.get("name", "")
         if category and category not in gname:
@@ -38,7 +70,8 @@ def list_products(groups, counts=None, category=None, keyword=None):
     return {"total": len(products), "products": products}
 
 
-def get_product(groups, product, counts=None):
+def get_product(groups: list[dict[str, Any]], product: str, *,
+                counts: dict[str, int] | None = None) -> dict[str, Any] | None:
     counts = counts or {}
     target = (product or "").lower()
     for g in groups:
@@ -56,7 +89,11 @@ def get_product(groups, product, counts=None):
     return None
 
 
-def list_apis(apis, product, tag=None, search=None, limit=20, offset=0):
+# ---------- API 目录 ----------
+
+def list_apis(apis: list[dict[str, Any]], product: str, *,
+              tag: str | None = None, search: str | None = None,
+              limit: int = 20, offset: int = 0) -> dict[str, Any]:
     p = (product or "").lower()
     matched = [a for a in apis if (a.get("product_short") or "").lower() == p]
     if tag:
@@ -67,29 +104,33 @@ def list_apis(apis, product, tag=None, search=None, limit=20, offset=0):
                    if kw in (a.get("name") or "").lower() or kw in (a.get("summary") or "").lower()]
     total = len(matched)
     page = matched[offset:offset + limit]
+    items: list[ApiItem] = [{
+        "name": a.get("name") or "",
+        "method": a.get("method") or "",
+        "summary": a.get("summary") or "",
+        "tags": a.get("tags") or "",
+        "info_version": a.get("info_version") or "",
+    } for a in page]
     return {
         "product": product,
         "total": total,
         "offset": offset,
         "limit": limit,
-        "apis": [{
-            "name": a.get("name"),
-            "method": a.get("method"),
-            "summary": a.get("summary"),
-            "tags": a.get("tags"),
-            "info_version": a.get("info_version"),
-        } for a in page],
+        "apis": items,
     }
 
 
-def find_api_in_doc(doc, api_name):
+# ---------- API 详情 ----------
+
+def find_api_in_doc(doc: dict[str, Any] | None, api_name: str) -> tuple[str, str, dict[str, Any]] | None:
     """在 OpenAPI 文档中查找接口，返回 (path, method, op) 或 None。
 
     先 operationId 精确，再大小写不敏感，最后子串匹配。
     """
     if not doc:
         return None
-    exact = fuzzy = None
+    exact: tuple[str, str, dict[str, Any]] | None = None
+    fuzzy: tuple[str, str, dict[str, Any]] | None = None
     target = (api_name or "").lower()
     for path, path_item in (doc.get("paths") or {}).items():
         for method, op in path_item.items():
@@ -105,7 +146,8 @@ def find_api_in_doc(doc, api_name):
     return exact or fuzzy
 
 
-def _resolve_schema(obj, doc, depth=0, collected=None):
+def _resolve_schema(obj: Any, doc: dict[str, Any], depth: int = 0,
+                    collected: set[str] | None = None) -> Any:
     if collected is None:
         collected = set()
     if isinstance(obj, dict):
@@ -125,20 +167,20 @@ def _resolve_schema(obj, doc, depth=0, collected=None):
     return obj
 
 
-def format_api_detail(doc, product, path, method, op):
+def format_api_detail(doc: dict[str, Any], product: str, path: str,
+                      method: str, op: dict[str, Any]) -> dict[str, Any]:
     """把单个 operation 格式化为 AI 友好的结构化详情。"""
     definitions = doc.get("definitions") or {}
-    collected = set()
+    collected: set[str] = set()
 
-    parameters = []
+    parameters: list[dict[str, Any]] = []
     for p in op.get("parameters") or []:
-        out_p = {k: v for k, v in p.items()}
+        out_p = dict(p)
         if p.get("in") == "body":
-            schema = _resolve_schema(p.get("schema") or {}, doc, 0, collected)
-            out_p["schema"] = schema
+            out_p["schema"] = _resolve_schema(p.get("schema") or {}, doc, 0, collected)
         parameters.append(out_p)
 
-    responses = {}
+    responses: dict[str, dict[str, Any]] = {}
     for code, resp in (op.get("responses") or {}).items():
         r = {k: v for k, v in resp.items() if k in ("description", "headers", "examples")}
         schema = _resolve_schema(resp.get("schema") or {}, doc, 0, collected)
@@ -161,7 +203,7 @@ def format_api_detail(doc, product, path, method, op):
     }
 
 
-def extract_examples(op):
+def extract_examples(op: dict[str, Any] | None) -> list[ApiExample]:
     """提取 x-request-examples-N 系列示例，返回 [{"description", "example"}]。"""
     if not isinstance(op, dict):
         return []
@@ -170,7 +212,7 @@ def extract_examples(op):
         m = re.match(r"^x-request-examples(?:-text)?-(\d+)$", key)
         if m:
             nums.add(m.group(1))
-    examples = []
+    examples: list[ApiExample] = []
     for n in sorted(nums):
         desc = op.get(f"x-request-examples-description-{n}")
         ex = op.get(f"x-request-examples-{n}")
@@ -185,8 +227,10 @@ def extract_examples(op):
     return examples
 
 
-def _task_keywords(task):
-    keywords = []
+# ---------- 任务 → API 推荐 ----------
+
+def _task_keywords(task: str) -> list[str]:
+    keywords: list[str] = []
     for token in re.split(r"[^a-zA-Z0-9]+", task or ""):
         t = token.strip().lower()
         if len(t) >= 2:
@@ -197,12 +241,13 @@ def _task_keywords(task):
     return list(dict.fromkeys(keywords))
 
 
-def suggest_apis(apis, task, product=None, limit=10):
+def suggest_apis(apis: list[dict[str, Any]], task: str, *,
+                 product: str | None = None, limit: int = 10) -> dict[str, Any]:
     """任务描述 → 推荐 API 列表。关键词（英文词/CJK 二元组）加权匹配。"""
     keywords = _task_keywords(task)
     if not keywords:
         return {"task": task, "total": 0, "apis": []}
-    scored = []
+    scored: list[ApiSuggestion] = []
     for a in apis:
         if product and (a.get("product_short") or "").lower() != product.lower():
             continue
@@ -210,7 +255,7 @@ def suggest_apis(apis, task, product=None, limit=10):
         summary = (a.get("summary") or "").lower()
         tags = (a.get("tags") or "").lower()
         score = 0
-        matched = []
+        matched: list[str] = []
         for kw in keywords:
             if kw in name:
                 score += 3
@@ -223,66 +268,13 @@ def suggest_apis(apis, task, product=None, limit=10):
                 matched.append(kw)
         if score > 0:
             scored.append({
-                "product": a.get("product_short"),
-                "name": a.get("name"),
-                "method": a.get("method"),
-                "summary": a.get("summary"),
-                "tags": a.get("tags"),
+                "product": a.get("product_short") or "",
+                "name": a.get("name") or "",
+                "method": a.get("method") or "",
+                "summary": a.get("summary") or "",
+                "tags": a.get("tags") or "",
                 "score": score,
                 "matched_keywords": list(dict.fromkeys(matched)),
             })
     scored.sort(key=lambda x: -x["score"])
-    scored = scored[:limit]
-    return {"task": task, "total": len(scored), "apis": scored}
-
-
-# ---------- 磁盘加载器 ----------
-
-def _load_json(rel_path):
-    full = os.path.join(PROOT, rel_path)
-    if not os.path.exists(full):
-        return None
-    with open(full, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def load_products():
-    d = _load_json("raw/huawei_products.json")
-    return d.get("groups", []) if d else None
-
-
-def load_docs():
-    d = _load_json("raw/apis_docs.json")
-    return d.get("apis", []) if d else None
-
-
-def load_counts():
-    d = _load_json("raw/apis_count.json")
-    if not d:
-        return {}
-    return {g["product_short"].upper(): g["api_count"] for g in d.get("groups", [])}
-
-
-def load_api_doc(product, api_name, region=None):
-    """在 data/openapi 中查找接口所在 tag 文档，返回 (doc, path, method, op) 或 None。"""
-    root = os.path.join(PROOT, region_paths.openapi_out_dir(region))
-    if not os.path.isdir(root):
-        return None
-    base = None
-    target_dir = (product or "").lower()
-    for d in os.listdir(root):
-        if d.lower() == target_dir:
-            base = os.path.join(root, d)
-            break
-    if base is None:
-        return None
-    for fn in sorted(os.listdir(base)):
-        if not fn.endswith(".json") or fn.startswith("."):
-            continue
-        with open(os.path.join(base, fn), encoding="utf-8") as f:
-            doc = json.load(f)
-        hit = find_api_in_doc(doc, api_name)
-        if hit:
-            path, method, op = hit
-            return (doc, path, method, op)
-    return None
+    return {"task": task, "total": len(scored[:limit]), "apis": scored[:limit]}

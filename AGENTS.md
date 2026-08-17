@@ -38,12 +38,14 @@
 | `raw/apis_docs.json` | 接口索引（id/name/method/summary/tags/product_short/info_version），支撑 `list_apis`/`suggest_apis` | `api-refresh docs` | 是 |
 | `raw/apis_detail.json` | 全量接口详情（断点文件 `raw/apis_detail_partial.json`）；非默认 region 在 `raw/{region}/` | `api-refresh details` + `retry` | 是 |
 | `data/openapi/` | **元数据产物**：`{Product}/{Tag}.json` OpenAPI 2.0 文档（默认 region `cn-north-4` 平铺，非默认 region 在 `data/openapi/{region}/`） | `api-refresh`（split→convert→merge→organize） | 是 |
-| `src/huaweicloud_mcp/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs） | — | — |
-| `src/huaweicloud_mcp/signer/` | SDK-HMAC-SHA256 签名 + HTTP 客户端（超时/429 退避/错误解析） | — | — |
+| `src/huaweicloud_mcp/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端） | — | — |
+| `src/huaweicloud_mcp/signer/` | SDK-HMAC-SHA256 签名 + 真实模式 HTTP 客户端（超时/429 退避/错误解析） | — | — |
 | `src/huaweicloud_mcp/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
-| `src/huaweicloud_mcp/safety/` | safety policy 解析与匹配 | — | — |
-| `src/huaweicloud_mcp/tools/` | 7 工具业务函数（纯函数，不耦合 MCP 协议） | — | — |
-| `src/huaweicloud_mcp/server.py` | stdio MCP server 装配（mcp SDK） | — | — |
+| `src/huaweicloud_mcp/safety/` | safety policy 解析与匹配（PolicyRule dataclass） | — | — |
+| `src/huaweicloud_mcp/tools/` | 7 工具：metadata/execute 纯函数 + service 编排层（加载/配置/客户端工厂注入） | — | — |
+| `src/huaweicloud_mcp/types.py` | 跨模块共享 TypedDict（ClientResponse/ExecuteResult） | — | — |
+| `src/huaweicloud_mcp/paths.py` | 项目根路径解析（统一 project_root） | — | — |
+| `src/huaweicloud_mcp/server.py` | stdio MCP server 装配（mcp SDK，业务全部委托 ToolService） | — | — |
 | `configs/` | safety policy 示例、tag 中文→英文翻译映射 | — | — |
 | `tests/` | TDD 测试（见「测试」章节） | — | — |
 
@@ -68,6 +70,7 @@ uv run pytest -m e2e                     # 真实数据/凭证 E2E（需 AK/SK�
 uv run pytest --cov=src/huaweicloud_mcp  # 覆盖率
 uv run ruff check src tests              # lint（ruff，规则 E/F/W/I，line-length 120）
 uv run ruff check src tests --fix        # 自动修复可修问题
+uv run mypy src                          # 类型检查（全量类型标注）
 ```
 
 CLI 入口（`pyproject.toml` 注册 console scripts）：
@@ -107,7 +110,7 @@ uv run huaweicloud-mcp --policy configs/safety-policy.example.json  # 指定 saf
 
 分层与纪律：
 
-- **单元测试**（`tests/test_signer.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`）：纯函数，不联网、不碰真实数据。
+- **单元测试**（`tests/test_signer.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`）：纯函数，不联网、不碰真实数据；service 层用数据根路径注入 + 客户端工厂注入。
 - **集成测试**（`tests/test_execute_mock.py`）：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名。
 - **E2E 测试**（`tests/test_e2e.py`）：真实 AK/SK + 真实 API（只读），标 `@pytest.mark.e2e` 默认跳过。
 - red→green 垂直切片，禁止先写全部测试再写实现；禁止 mock 自有模块；期望值禁止用被测代码同法重算。

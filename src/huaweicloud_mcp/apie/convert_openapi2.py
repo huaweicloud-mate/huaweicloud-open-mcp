@@ -5,6 +5,7 @@
 
 import json
 import re
+from typing import Any, cast
 
 TYPE_MAP = {
     "long": "integer",
@@ -50,7 +51,7 @@ SCHEMA_KEYS = {
 }
 
 
-def fix_schema_type(schema):
+def fix_schema_type(schema: Any) -> Any:
     if not isinstance(schema, dict):
         return schema
     if "type" in schema and isinstance(schema["type"], str) and schema["type"] in TYPE_MAP:
@@ -65,7 +66,7 @@ def fix_schema_type(schema):
     return schema
 
 
-def remove_bool_required(obj):
+def remove_bool_required(obj: Any) -> Any:
     if isinstance(obj, dict):
         for k, v in list(obj.items()):
             if k == "required" and isinstance(v, bool):
@@ -78,7 +79,7 @@ def remove_bool_required(obj):
     return obj
 
 
-def convert_ref(doc, obj):
+def convert_ref(doc: dict[str, Any], obj: Any) -> Any:
     if isinstance(obj, dict):
         if "$ref" in obj and isinstance(obj["$ref"], str):
             ref = obj["$ref"]
@@ -96,7 +97,7 @@ def convert_ref(doc, obj):
     return obj
 
 
-def oas2_parameter(param):
+def oas2_parameter(param: Any) -> Any:
     if not isinstance(param, dict) or "in" not in param:
         return param
     p = dict(param)
@@ -122,7 +123,7 @@ def oas2_parameter(param):
     return {k: v for k, v in p.items() if k in PARAM_ALLOWED or k.startswith("x-")}
 
 
-def convert_3_to_2(api):
+def convert_3_to_2(api: dict[str, Any]) -> dict[str, Any]:
     doc = {k: v for k, v in api.items() if k in (
         "swagger", "openapi", "info", "host", "basePath", "schemes", "consumes",
         "produces", "paths", "definitions", "parameters", "responses",
@@ -191,7 +192,7 @@ def convert_3_to_2(api):
     return doc
 
 
-def fix_2_doc(api):
+def fix_2_doc(api: dict[str, Any]) -> dict[str, Any]:
     doc = {k: v for k, v in api.items() if k in (
         "swagger", "info", "host", "basePath", "schemes", "consumes",
         "produces", "paths", "definitions", "parameters", "responses",
@@ -232,7 +233,7 @@ def fix_2_doc(api):
     return doc
 
 
-def clean_header(h):
+def clean_header(h: Any) -> Any:
     if not isinstance(h, dict):
         return h
     if "schema" in h:
@@ -250,7 +251,7 @@ def clean_header(h):
     return {k: v for k, v in h.items() if k in HEADER_ALLOWED or k.startswith("x-")}
 
 
-def clean_response(resp, header_defs=None):
+def clean_response(resp: Any, header_defs: dict[str, Any] | None = None) -> Any:
     if not isinstance(resp, dict):
         return resp
     r = {k: v for k, v in resp.items()
@@ -280,7 +281,7 @@ def clean_response(resp, header_defs=None):
     return r
 
 
-def clean_schema(obj):
+def clean_schema(obj: Any) -> Any:
     if isinstance(obj, dict):
         for k in ("nullable", "deprecated", "oneOf", "discriminator", "xml", "example", "externalDocs",
                   "writeOnly", "linkage_node_fields", "allOf"):
@@ -323,7 +324,7 @@ def clean_schema(obj):
     return obj
 
 
-def finalize(doc):
+def finalize(doc: dict[str, Any]) -> dict[str, Any]:
     doc["swagger"] = "2.0"
     if "info" not in doc:
         doc["info"] = {"title": doc.get("host", "API"), "version": "1.0"}
@@ -378,7 +379,7 @@ def finalize(doc):
     return doc
 
 
-def convert_api(api):
+def convert_api(api: dict[str, Any]) -> dict[str, Any]:
     has3 = bool(api.get("components")) or any(
         (m.get("requestBody") is not None) or any(
             isinstance(c, dict) and c.get("content")
@@ -394,10 +395,10 @@ def convert_api(api):
     doc = finalize(doc)
     doc = convert_ref(doc, doc)
     doc = fix_schema_type(doc)
-    return doc
+    return cast(dict[str, Any], doc)
 
 
-def main():
+def main() -> None:
     import os
     import shutil
 

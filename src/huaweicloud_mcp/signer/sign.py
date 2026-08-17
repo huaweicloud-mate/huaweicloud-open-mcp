@@ -36,7 +36,7 @@ def canonical_uri(path: str) -> str:
     return uri
 
 
-def _str_value(v):
+def _str_value(v: object) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if v is None:
@@ -44,10 +44,10 @@ def _str_value(v):
     return str(v)
 
 
-def canonical_query_string(query) -> str:
+def canonical_query_string(query: dict | None) -> str:
     if not query:
         return ""
-    collected = {}
+    collected: dict[str, list[str]] = {}
     for key, value in query.items():
         if isinstance(value, (list, tuple)):
             vals = [_str_value(v) for v in value]
@@ -61,7 +61,7 @@ def canonical_query_string(query) -> str:
     return "&".join(parts)
 
 
-def signed_headers_list(headers) -> list:
+def signed_headers_list(headers: dict[str, str]) -> list[str]:
     sh = []
     for key in headers:
         low = key.lower()
@@ -73,8 +73,8 @@ def signed_headers_list(headers) -> list:
     return sh
 
 
-def canonical_headers(headers, signed_headers, host) -> str:
-    by_low = {}
+def canonical_headers(headers: dict[str, str], signed_headers: list[str], host: str) -> str:
+    by_low: dict[str, list[str]] = {}
     for key, value in headers.items():
         by_low.setdefault(key.lower(), []).append(str(value).strip())
     lines = []
@@ -88,7 +88,7 @@ def canonical_headers(headers, signed_headers, host) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def content_hash(headers, body) -> str:
+def content_hash(headers: dict[str, str], body: bytes | str | None) -> str:
     content_type = ""
     for key, value in headers.items():
         if key.lower() == "content-type":
@@ -106,7 +106,8 @@ def content_hash(headers, body) -> str:
     return sha256_hex(body)
 
 
-def build_canonical_request(method, host, path, query, headers, body) -> str:
+def build_canonical_request(method: str, host: str, path: str, query: dict | None,
+                            headers: dict[str, str], body: bytes | str | None) -> str:
     method = method.upper()
     signed_headers = signed_headers_list(headers)
     payload_hash = content_hash(headers, body)
@@ -128,8 +129,10 @@ def _sign(string_to_sign: str, sk: str) -> str:
     return hmac.new(sk.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def sign_request(method, host, path, query=None, headers=None, body=None,
-                 ak=None, sk=None, x_sdk_date=None):
+def sign_request(method: str, host: str, path: str, *,
+                 query: dict | None = None, headers: dict[str, str] | None = None,
+                 body: bytes | str | None = None, ak: str | None = None,
+                 sk: str | None = None, x_sdk_date: str | None = None) -> dict[str, str]:
     """对请求签名，返回需附加的请求头 dict（含 X-Sdk-Date 与 Authorization）。"""
     if not ak or not sk:
         raise ValueError("ak and sk are required")

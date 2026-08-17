@@ -117,9 +117,10 @@ def test_request_body_serialized(monkeypatch):
     assert get_header(req, "Content-Type") == "application/json"
 
 
-def test_mock_request_url(monkeypatch):
+def test_mock_api_client_url(monkeypatch):
+    from huaweicloud_mcp.apie.mock import MockApiClient
     calls = _install(monkeypatch, [FakeResponse(200, b'{"servers": []}')])
-    client = HttpClient(mock=True)
+    client = MockApiClient()
     resp = client.mock_request("ECS", "ListServersDetails", "cn-north-4", status_code=200, number=2)
     assert resp["status"] == 200
     assert resp["body"] == {"servers": []}

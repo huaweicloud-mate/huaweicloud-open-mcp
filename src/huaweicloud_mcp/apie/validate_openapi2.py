@@ -3,18 +3,19 @@
 import collections
 import json
 import os
+from typing import Any
 
 from jsonschema import Draft4Validator
 
 DEFAULT_SCHEMA = "/tmp/swagger2_schema.json"
 
 
-def load_validator(schema_path=DEFAULT_SCHEMA):
+def load_validator(schema_path: str = DEFAULT_SCHEMA) -> Draft4Validator:
     with open(schema_path, encoding="utf-8") as f:
         return Draft4Validator(json.load(f))
 
 
-def validate_doc(validator, doc):
+def validate_doc(validator: Draft4Validator, doc: dict[str, Any]) -> list[tuple[str, str]]:
     """校验单个 OpenAPI 文档，返回错误列表（每条为 (absolute_path, message)）。"""
     errors = []
     for e in validator.iter_errors(doc):
@@ -24,12 +25,12 @@ def validate_doc(validator, doc):
     return errors
 
 
-def validate_dir(validator, src_dir):
+def validate_dir(validator: Draft4Validator, src_dir: str) -> dict[str, Any]:
     """校验目录下所有文件的 apis 字段，返回统计。"""
-    res = collections.Counter()
-    issues = collections.Counter()
-    examples = {}
-    by_product = collections.Counter()
+    res: collections.Counter[str] = collections.Counter()
+    issues: collections.Counter[str] = collections.Counter()
+    examples: dict[str, str] = {}
+    by_product: collections.Counter[str] = collections.Counter()
     total = 0
 
     for ps_dir in sorted(os.listdir(src_dir)):
@@ -67,7 +68,7 @@ def validate_dir(validator, src_dir):
     }
 
 
-def validate_final_dir(validator, root):
+def validate_final_dir(validator: Draft4Validator, root: str) -> tuple[int, int]:
     """校验最终产物目录（每文件一份完整 OpenAPI 文档）。返回 (checked, invalid)。"""
     checked = 0
     invalid = 0
@@ -89,7 +90,7 @@ def validate_final_dir(validator, root):
     return checked, invalid
 
 
-def main():
+def main() -> None:
     from . import region_paths
     validator = load_validator()
     src_dir = region_paths.openapi2_dir()

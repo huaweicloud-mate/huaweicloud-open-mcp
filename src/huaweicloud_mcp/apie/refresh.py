@@ -10,9 +10,10 @@ import subprocess
 import sys
 import time
 
+from ..paths import project_root
 from . import region_paths
 
-PROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+PROOT = str(project_root())
 
 STAGES = ["count", "products", "docs", "details", "retry", "split",
           "convert", "merge", "organize", "validate"]
@@ -35,11 +36,11 @@ CURL = {
 _REGION = {"region": "cn-north-4"}
 
 
-def current_region():
+def current_region() -> str:
     return _REGION["region"]
 
 
-def artifact_of(stage, region=None):
+def artifact_of(stage: str, region: str | None = None) -> str | None:
     r = region or current_region()
     if stage in ("count", "products", "docs"):
         return {"count": "raw/apis_count.json",
@@ -58,11 +59,11 @@ def artifact_of(stage, region=None):
     return None
 
 
-def stage_index(stage):
+def stage_index(stage: str) -> int:
     return STAGES.index(stage)
 
 
-def run_cmd(args, dry_run=False, env=None):
+def run_cmd(args: list[str], dry_run: bool = False, env: dict[str, str] | None = None) -> int:
     print("+ " + " ".join(args), flush=True)
     if dry_run:
         return 0
@@ -72,7 +73,7 @@ def run_cmd(args, dry_run=False, env=None):
     return subprocess.call(args, cwd=PROOT, env=full_env)
 
 
-def stage_count(dry_run):
+def stage_count(dry_run: bool) -> int:
     url, out = CURL["count"]
     tmp = out + ".tmp"
     os.makedirs(os.path.join(PROOT, "raw"), exist_ok=True)
@@ -94,7 +95,7 @@ def stage_count(dry_run):
     return 0
 
 
-def stage_products(dry_run):
+def stage_products(dry_run: bool) -> int:
     url, out = CURL["products"]
     tmp = out + ".tmp"
     rc = run_cmd(["curl", "-s", url, "-o", tmp], dry_run)
@@ -115,7 +116,7 @@ def stage_products(dry_run):
     return 0
 
 
-def stage_script(name, dry_run, full=False):
+def stage_script(name: str, dry_run: bool, full: bool = False) -> int:
     env = None
     if name in ("details", "retry"):
         env = {"API_EXPLORER_REGION": current_region()}
@@ -125,7 +126,7 @@ def stage_script(name, dry_run, full=False):
     return run_cmd(args, dry_run, env=env)
 
 
-def stage_validate(dry_run, full=False):
+def stage_validate(dry_run: bool, full: bool = False) -> int:
     if full:
         code = run_cmd([sys.executable, "-m", "huaweicloud_mcp.apie.validate_openapi2"], dry_run)
         if dry_run or code != 0:
@@ -147,7 +148,7 @@ def stage_validate(dry_run, full=False):
     return 1 if invalid else 0
 
 
-def describe_file(path):
+def describe_file(path: str | None) -> str:
     if path is None:
         return "—"
     if os.path.isdir(path):
@@ -160,7 +161,7 @@ def describe_file(path):
     return "缺失"
 
 
-def cmd_status(args):
+def cmd_status(args: argparse.Namespace) -> None:
     region = getattr(args, "region", "cn-north-4") or "cn-north-4"
     print(f"region: {region}")
     print(f"{'stage':<10} {'artifact':<32} {'status'}")
@@ -172,7 +173,7 @@ def cmd_status(args):
         print(f"{s:<10} {art or '—':<32} {mark} {describe_file(art)}")
 
 
-def cmd_single(args, name):
+def cmd_single(args: argparse.Namespace, name: str) -> int:
     handlers = {
         "count": lambda: stage_count(args.dry_run),
         "products": lambda: stage_products(args.dry_run),
@@ -187,7 +188,7 @@ def cmd_single(args, name):
     return fn()
 
 
-def detail_region_matches(region):
+def detail_region_matches(region: str) -> bool:
     """检查 raw 详情产物的 region_id 是否与目标 region 一致（隐式识别）。"""
     path = region_paths.raw_detail_path(region)
     if not os.path.exists(os.path.join(PROOT, path)):
@@ -195,12 +196,12 @@ def detail_region_matches(region):
     try:
         with open(os.path.join(PROOT, path), encoding="utf-8") as f:
             d = json.load(f)
-        return d.get("region_id") == region
+        return bool(d.get("region_id") == region)
     except Exception:
         return False
 
 
-def cmd_refresh(args):
+def cmd_refresh(args: argparse.Namespace) -> int:
     start = stage_index(args.start) if args.start else 0
     end = stage_index(args.end) if args.end else len(STAGES) - 1
     if start > end:
@@ -230,7 +231,7 @@ def cmd_refresh(args):
     return 0
 
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="api-refresh", description="华为云 API Explorer 接口文档刷新工具")
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--dry-run", action="store_true", help="只打印命令，不执行")
@@ -253,12 +254,13 @@ def build_parser():
     return p
 
 
-def main():
+def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
     if args.command == "status":
-        return cmd_status(args)
+        cmd_status(args)
+        return 0
     _REGION["region"] = getattr(args, "region", "cn-north-4")
     if args.command == "refresh":
         return cmd_refresh(args)

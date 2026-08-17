@@ -7,14 +7,13 @@ import argparse
 import json
 import os
 import sys
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
+from typing import Any, cast
 
-from . import region_paths
+from ..paths import project_root
+from . import http, region_paths
 
-PROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+PROOT = str(project_root())
 
 PRODUCTS_FILE = "raw/huawei_products.json"
 DOCS_FILE = "raw/apis_docs.json"
@@ -27,7 +26,7 @@ PAGE_SIZE = 100
 
 # ---------- 输出 ----------
 
-def emit(data, fmt):
+def emit(data: dict, fmt: str) -> None:
     if fmt == "json":
         print(json.dumps(data, ensure_ascii=False, indent=2))
     elif fmt == "yaml":
@@ -38,7 +37,7 @@ def emit(data, fmt):
         print_table(data)
 
 
-def print_table(data):
+def print_table(data: dict) -> None:
     t = data.get("_table")
     if not t:
         print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -60,29 +59,29 @@ def print_table(data):
 
 # ---------- 本地数据读取 ----------
 
-def load_json(path):
+def load_json(path: str) -> dict[str, Any] | None:
     full = os.path.join(PROOT, path)
     if not os.path.exists(full):
         return None
     with open(full, encoding="utf-8") as f:
-        return json.load(f)
+        return cast(dict[str, Any], json.load(f))
 
 
-def load_products_local():
+def load_products_local() -> list[dict[str, Any]] | None:
     d = load_json(PRODUCTS_FILE)
     if not d:
         return None
-    return d.get("groups", [])
+    return cast(list[dict[str, Any]], d.get("groups", []))
 
 
-def load_docs_local(region):
+def load_docs_local(region: str) -> list[dict[str, Any]] | None:
     d = load_json(DOCS_FILE)
     if not d:
         return None
-    return d.get("apis", [])
+    return cast(list[dict[str, Any]], d.get("apis", []))
 
 
-def find_openapi_doc(product, api_name, region):
+def find_openapi_doc(product: str, api_name: str, region: str) -> tuple[dict, str, str, dict] | None:
     """在 data/openapi 中查找接口所在 tag 文档，返回 (doc, path, method, op)。"""
     root = os.path.join(PROOT, region_paths.openapi_out_dir(region))
     if not os.path.isdir(root):
@@ -119,35 +118,18 @@ def find_openapi_doc(product, api_name, region):
 
 # ---------- APIE 实时调用 ----------
 
-def http_get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
-    for attempt in range(4):
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            try:
-                return json.loads(e.read().decode("utf-8"))
-            except Exception:
-                return {"error_msg": str(e)}
-        except Exception:
-            if attempt == 3:
-                raise
-            time.sleep(2 * (attempt + 1))
+def fetch_products_live() -> list[dict[str, Any]]:
+    d = http.fetch_json(BASE_PRODUCTS, retries=4, backoff=2.0)
+    return cast(list[dict[str, Any]], d.get("groups", []))
 
 
-def fetch_products_live():
-    d = http_get(BASE_PRODUCTS)
-    return d.get("groups", [])
-
-
-def fetch_apis_live(product_short):
-    apis = []
+def fetch_apis_live(product_short: str) -> list[dict[str, Any]]:
+    apis: list[dict[str, Any]] = []
     offset = 0
     while True:
         params = urllib.parse.urlencode({"offset": offset, "limit": PAGE_SIZE, "product_short": product_short})
-        d = http_get(f"{BASE_APIS}?{params}")
-        batch = d.get("api_basic_infos", [])
+        d = http.fetch_json(f"{BASE_APIS}?{params}", retries=4, backoff=2.0)
+        batch = cast(list[dict[str, Any]], d.get("api_basic_infos", []))
         apis.extend(batch)
         if not batch:
             break
@@ -157,17 +139,18 @@ def fetch_apis_live(product_short):
     return apis
 
 
-def fetch_detail_live(product_short, name, region):
+def fetch_detail_live(product_short: str, name: str, region: str) -> dict[str, Any]:
     params = urllib.parse.urlencode({"product_short": product_short, "name": name, "region_id": region})
-    d = http_get(f"{BASE_DETAIL}?{params}")
+    d = http.fetch_json(f"{BASE_DETAIL}?{params}", retries=4, backoff=2.0)
     if isinstance(d, dict) and d.get("error_code") == "APIEXPLORER.1055":
-        d = http_get(f"{BASE_DETAIL}?{urllib.parse.urlencode({'product_short': product_short, 'name': name})}")
+        fallback = urllib.parse.urlencode({"product_short": product_short, "name": name})
+        d = http.fetch_json(f"{BASE_DETAIL}?{fallback}", retries=4, backoff=2.0)
     return d
 
 
 # ---------- 工具函数 ----------
 
-def extract_example(op):
+def extract_example(op: dict | None) -> tuple[object, object] | tuple[None, None]:
     if not isinstance(op, dict):
         return None, None
     ex = op.get("x-request-examples-1")
@@ -181,36 +164,36 @@ def extract_example(op):
     return ex, desc
 
 
-def load_count_map():
+def load_count_map() -> dict[str, int]:
     d = load_json("raw/apis_count.json")
     if not d:
         return {}
     return {g["product_short"].upper(): g["api_count"] for g in d.get("groups", [])}
 
 
-def filter_by_product(apis, product):
+def filter_by_product(apis: list[dict[str, Any]], product: str) -> list[dict[str, Any]]:
     p = product.lower()
     return [a for a in apis if (a.get("product_short") or "").lower() == p]
 
 
 # ---------- 命令实现 ----------
 
-def cmd_products(args):
+def cmd_products(args: argparse.Namespace) -> int:
     groups = load_products_local()
     live = False
     if groups is None:
         groups = fetch_products_live()
         live = True
     counts = load_count_map() if not live else {}
-    out = {"source": "live" if live else "local",
-           "total_products": sum(len(g["products"]) for g in groups), "groups": []}
-    trows = []
+    out: dict[str, Any] = {"source": "live" if live else "local",
+                           "total_products": sum(len(g["products"]) for g in groups), "groups": []}
+    trows: list[dict[str, Any]] = []
     for g in groups:
         name = g.get("name", "")
         prods = g.get("products", [])
         if args.category and args.category not in name:
             continue
-        group_out = {"category": name, "products": []}
+        group_out: dict[str, Any] = {"category": name, "products": []}
         for p in prods:
             ps = p.get("productshort")
             cnt = counts.get(ps.upper()) if ps else 0
@@ -225,7 +208,7 @@ def cmd_products(args):
     return 0
 
 
-def cmd_product(args):
+def cmd_product(args: argparse.Namespace) -> int:
     groups = load_products_local()
     live = False
     if groups is None:
@@ -262,7 +245,7 @@ def cmd_product(args):
     return 0
 
 
-def cmd_tags(args):
+def cmd_tags(args: argparse.Namespace) -> int:
     docs = load_docs_local(args.region)
     live = False
     if docs is None:
@@ -283,7 +266,7 @@ def cmd_tags(args):
     return 0
 
 
-def cmd_apis(args):
+def cmd_apis(args: argparse.Namespace) -> int:
     docs = load_docs_local(args.region)
     live = False
     if docs is None:
@@ -313,7 +296,7 @@ def cmd_apis(args):
     return 0
 
 
-def cmd_api(args):
+def cmd_api(args: argparse.Namespace) -> int:
     hit = find_openapi_doc(args.product, args.api, args.region)
     if hit:
         doc, path, method, op = hit
@@ -338,30 +321,30 @@ def cmd_api(args):
     except Exception as e:
         print(f"规范化失败: {e}", file=sys.stderr)
         return 2
-    op = None
-    path = None
-    method = None
-    for p, pi in (doc.get("paths") or {}).items():
-        for m, o in pi.items():
-            op, path, method = o, p, m
+    op2: dict[str, Any] | None = None
+    path2: str | None = None
+    method2: str | None = None
+    for p2, pi2 in (doc.get("paths") or {}).items():
+        for m2, o2 in pi2.items():
+            op2, path2, method2 = o2, p2, m2
             break
-        if op:
+        if op2:
             break
-    ex, exdesc = extract_example(op)
+    ex, exdesc = extract_example(op2)
     out = {"product": args.product, "api": args.api, "source": "live",
-           "method": method.upper() if method else None, "path": path,
-           "summary": op.get("summary") if op else None,
-           "description": op.get("description") if op else None,
-           "operationId": op.get("operationId") if op else None,
+           "method": method2.upper() if method2 else None, "path": path2,
+           "summary": op2.get("summary") if op2 else None,
+           "description": op2.get("description") if op2 else None,
+           "operationId": op2.get("operationId") if op2 else None,
            "example": ex, "example_description": exdesc,
-           "parameters": op.get("parameters", []) if op else [],
-           "responses": op.get("responses", {}) if op else {},
+           "parameters": op2.get("parameters", []) if op2 else [],
+           "responses": op2.get("responses", {}) if op2 else {},
            "openapi_document": doc}
     emit(out, args.fmt)
     return 0
 
 
-def cmd_search(args):
+def cmd_search(args: argparse.Namespace) -> int:
     docs = load_docs_local(args.region)
     if docs is None:
         print("本地 apis_docs 缺失，search 需先运行 api-refresh docs 拉取", file=sys.stderr)
@@ -388,7 +371,7 @@ def cmd_search(args):
 
 # ---------- 解析 ----------
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="api-docs", description="华为云 API Explorer 渐进式查询 CLI")
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--region", default="cn-north-4", help="region（默认 cn-north-4）")
@@ -431,7 +414,7 @@ def build_parser():
     return p
 
 
-def main():
+def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     rc = args.func(args)
