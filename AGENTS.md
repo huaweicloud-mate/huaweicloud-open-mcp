@@ -112,7 +112,7 @@ uv run huaweicloud-mcp --policy configs/safety-policy.example.json  # 指定 saf
 
 - **单元测试**（`tests/test_signer.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`）：纯函数，不联网、不碰真实数据；service 层用数据根路径注入 + 客户端工厂注入。
 - **集成测试**（`tests/test_execute_mock.py`）：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名。
-- **E2E 测试**（`tests/test_e2e.py`）：真实 AK/SK + 真实 API（只读），标 `@pytest.mark.e2e` 默认跳过。
+- **E2E 测试**（`tests/test_e2e.py`）：真实 AK/SK + 真实 API（只读），标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。
 - red→green 垂直切片，禁止先写全部测试再写实现；禁止 mock 自有模块；期望值禁止用被测代码同法重算。
 
 ## 校验规则（必须满足）

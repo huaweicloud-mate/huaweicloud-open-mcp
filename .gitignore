@@ -4,6 +4,11 @@ __pycache__/
 .pytest_cache/
 .coverage
 
+# 本地凭证（禁止提交）
+.env
+.env.*
+!.env.example
+
 # 数据产物（可从 API 重建，不入库）
 raw/
 data/
