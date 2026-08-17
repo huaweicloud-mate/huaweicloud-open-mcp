@@ -1,5 +1,5 @@
 [project]
-name = "huaweicloud-mcp"
+name = "huaweicloud-open-mcp"
 version = "0.1.0"
 description = "华为云 MCP server：本地 stdio 通用网关（Core 模式），7 个核心工具编排触达华为云全量 OpenAPI"
 readme = "README.md"
@@ -14,7 +14,7 @@ dependencies = [
 [project.scripts]
 api-refresh = "huaweicloud_mcp.apie.refresh:main"
 api-docs = "huaweicloud_mcp.apie.api_docs:main"
-huaweicloud-mcp = "huaweicloud_mcp.server:main"
+huaweicloud-open-mcp = "huaweicloud_mcp.server:main"
 
 [build-system]
 requires = ["hatchling"]

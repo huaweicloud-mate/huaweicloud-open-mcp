@@ -90,9 +90,9 @@ uv run api-docs search 云服务器 --product ECS
 MCP server 启动（stdio，由 MCP 客户端拉起）：
 
 ```bash
-uv run huaweicloud-mcp                    # 真实模式：AK/SK 签名直连华为云
-uv run huaweicloud-mcp --mock             # mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）
-uv run huaweicloud-mcp --policy configs/safety-policy.example.json  # 指定 safety policy 文件
+uv run huaweicloud-open-mcp                    # 真实模式：AK/SK 签名直连华为云
+uv run huaweicloud-open-mcp --mock             # mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）
+uv run huaweicloud-open-mcp --policy configs/safety-policy.example.json  # 指定 safety policy 文件
 ```
 
 前置依赖：`uv`；Swagger 2.0 schema 文件 `/tmp/swagger2_schema.json`（`curl -sL https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json`），丢失后重新下载。
@@ -141,7 +141,7 @@ uv run huaweicloud-mcp --policy configs/safety-policy.example.json  # 指定 saf
 - MCP 工具增删或输入输出契约变化。
 - safety policy 语法、默认行为（无 policy 时拒绝/放行）变化。
 - 测试接缝（S1–S5）增删或重新确认。
-- `pyproject.toml` 依赖或 CLI 入口变化（`api-refresh`/`api-docs`/`huaweicloud-mcp`）。
+- `pyproject.toml` 依赖或 CLI 入口变化（`api-refresh`/`api-docs`/`huaweicloud-open-mcp`）。
 - mock 端点地址或 `--mock` 模式行为变化。
 
 以下变化通常不需要更新：

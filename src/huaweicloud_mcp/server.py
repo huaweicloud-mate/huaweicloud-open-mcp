@@ -61,7 +61,7 @@ def build_config(args: argparse.Namespace) -> ServiceConfig:
 
 def build_app(service: ToolService | None = None) -> MCPServer:
     service = service or ToolService()
-    server = MCPServer(name="huaweicloud-mcp", version="0.1.0", instructions=INSTRUCTIONS)
+    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0", instructions=INSTRUCTIONS)
 
     @server.tool()
     def list_products(category: str | None = None, keyword: str | None = None) -> ProductListResult | ToolError:
@@ -114,7 +114,7 @@ def build_app(service: ToolService | None = None) -> MCPServer:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="huaweicloud-mcp", description="华为云 MCP server（stdio）")
+    parser = argparse.ArgumentParser(prog="huaweicloud-open-mcp", description="华为云 MCP server（stdio）")
     parser.add_argument("--mock", action="store_true", default=None,
                         help="mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）")
     parser.add_argument("--policy", default=None, help="safety policy 文件路径")

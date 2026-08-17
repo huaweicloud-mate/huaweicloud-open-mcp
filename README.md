@@ -4,6 +4,6 @@
 
 - APIE 元数据管道：`api-refresh`（参考同作者 apis 项目的设计）
 - 元数据查询 CLI：`api-docs`
-- MCP server：`huaweicloud-mcp`（`--mock` 模式免凭证跑通全链路）
+- MCP server：`huaweicloud-open-mcp`（`--mock` 模式免凭证跑通全链路）
 
 详细设计见 `AGENTS.md` 与 [docs/design.md](docs/design.md)。

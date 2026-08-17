@@ -21,7 +21,7 @@ flowchart TB
         LLM["LLM + MCP Client"]
     end
 
-    subgraph Server["huaweicloud-mcp（本地 stdio）"]
+    subgraph Server["huaweicloud-open-mcp（本地 stdio）"]
         GW["MCP 网关层（server.py）<br/>6 工具注册 + instructions"]
         SV["ToolService 编排层<br/>加载/配置/客户端工厂注入"]
         MT["纯函数层<br/>metadata / execute"]
