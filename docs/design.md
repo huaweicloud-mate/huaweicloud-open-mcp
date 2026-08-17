@@ -195,7 +195,7 @@ flowchart LR
 
 ```mermaid
 graph LR
-    subgraph src["src/huaweicloud_mcp/"]
+    subgraph src["src/openmcp/"]
         T["types.py<br/>TypedDict 词表"]
         P["paths.py<br/>project_root"]
         SRV["server.py"]
@@ -261,7 +261,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["logger: huaweicloud_mcp.*"] --> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
+    A["logger: openmcp.*"] --> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
     A --> C["StreamHandler(stderr)<br/>WARNING+ 兜底"]
     D["stdout（JSON-RPC 通道）"] -. "禁止日志" .-> A
 

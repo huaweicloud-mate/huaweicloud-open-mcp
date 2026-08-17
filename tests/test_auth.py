@@ -1,6 +1,6 @@
 """凭证加载单元测试。"""
 
-from huaweicloud_mcp.auth import credentials
+from openmcp.auth import credentials
 
 
 def test_load_from_env_full(monkeypatch):

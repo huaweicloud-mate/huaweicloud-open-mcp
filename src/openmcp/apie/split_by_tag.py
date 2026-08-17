@@ -6,7 +6,7 @@ import logging
 import os
 import shutil
 
-logger = logging.getLogger("huaweicloud_mcp.apie.split_by_tag")
+logger = logging.getLogger("openmcp.apie.split_by_tag")
 
 
 def split_by_tag(src: str, out_dir: str) -> tuple[int, dict[str, dict[str, int]]]:

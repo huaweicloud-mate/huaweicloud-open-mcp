@@ -9,9 +9,9 @@ mock 端点行为（实测确认）：
 
 import json
 
-from huaweicloud_mcp.apie.mock import MockApiClient
-from huaweicloud_mcp.safety import policy
-from huaweicloud_mcp.tools.service import ServiceConfig, ToolService
+from openmcp.apie.mock import MockApiClient
+from openmcp.safety import policy
+from openmcp.tools.service import ServiceConfig, ToolService
 
 RULES_ALLOW_ECS = policy.parse_policy(["ECS:*=allow", "*=deny"])
 

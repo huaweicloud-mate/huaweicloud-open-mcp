@@ -1,6 +1,6 @@
 """convert_openapi2 转换逻辑单元测试。"""
 
-from huaweicloud_mcp.apie import convert_openapi2 as conv
+from openmcp.apie import convert_openapi2 as conv
 
 # ---------- fix_schema_type ----------
 

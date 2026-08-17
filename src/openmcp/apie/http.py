@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, cast
 
-logger = logging.getLogger("huaweicloud_mcp.http")
+logger = logging.getLogger("openmcp.http")
 
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 

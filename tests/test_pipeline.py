@@ -3,7 +3,7 @@
 import json
 import os
 
-from huaweicloud_mcp.apie import convert_openapi2, merge_by_tag, organize, split_by_tag
+from openmcp.apie import convert_openapi2, merge_by_tag, organize, split_by_tag
 
 
 def run_split(src, out_dir):

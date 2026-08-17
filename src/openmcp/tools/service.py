@@ -27,7 +27,7 @@ from ..types import (
 )
 from . import execute, metadata
 
-logger = logging.getLogger("huaweicloud_mcp.tools.service")
+logger = logging.getLogger("openmcp.tools.service")
 
 DEFAULT_REGION = "cn-north-4"
 

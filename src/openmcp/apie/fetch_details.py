@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from . import http, region_paths
 
-logger = logging.getLogger("huaweicloud_mcp.fetch_details")
+logger = logging.getLogger("openmcp.fetch_details")
 
 BASE = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
 REGION = region_paths.current_region()

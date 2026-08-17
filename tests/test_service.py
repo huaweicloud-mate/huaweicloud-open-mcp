@@ -3,9 +3,9 @@
 import json
 from pathlib import Path
 
-from huaweicloud_mcp.auth.credentials import Credentials
-from huaweicloud_mcp.safety import policy
-from huaweicloud_mcp.tools.service import ServiceConfig, ToolService
+from openmcp.auth.credentials import Credentials
+from openmcp.safety import policy
+from openmcp.tools.service import ServiceConfig, ToolService
 
 
 def _service(workdir, **kwargs) -> ToolService:
@@ -172,7 +172,7 @@ def test_execute_audit_logs_policy_decision(workdir, caplog):
     cred = Credentials(ak="AK", sk="SK", project_id="proj123")
     service = _service(workdir, policy_rules=_policy("ECS:*=allow"),
                        credentials=cred, http_client_factory=lambda: http_client)
-    with caplog.at_level(logging.INFO, logger="huaweicloud_mcp.tools.execute"):
+    with caplog.at_level(logging.INFO, logger="openmcp.tools.execute"):
         service.execute_api("ECS", "ListServersDetails", params={"limit": 1})
     assert "ECS:ListServersDetails" in caplog.text
     assert "policy=allow" in caplog.text
@@ -184,6 +184,6 @@ def test_execute_deny_is_logged(workdir, caplog):
     _install_openapi_doc(workdir)
     service = _service(workdir, policy_rules=_policy("ECS:*Show*=allow", "*=deny"),
                        http_client_factory=lambda: StubHttpClient())
-    with caplog.at_level(logging.INFO, logger="huaweicloud_mcp.tools.execute"):
+    with caplog.at_level(logging.INFO, logger="openmcp.tools.execute"):
         service.execute_api("ECS", "ListServersDetails")
     assert "policy=deny" in caplog.text

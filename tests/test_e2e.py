@@ -10,8 +10,8 @@
 
 import pytest
 
-from huaweicloud_mcp.auth.credentials import Credentials, load_from_env
-from huaweicloud_mcp.signer.client import HttpClient
+from openmcp.auth.credentials import Credentials, load_from_env
+from openmcp.signer.client import HttpClient
 
 pytestmark = pytest.mark.e2e
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from huaweicloud_mcp.safety import policy
+from openmcp.safety import policy
 
 
 def test_parse_basic_rules():

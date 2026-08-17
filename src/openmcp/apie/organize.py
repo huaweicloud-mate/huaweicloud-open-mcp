@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from ..paths import project_root
 
-logger = logging.getLogger("huaweicloud_mcp.organize")
+logger = logging.getLogger("openmcp.organize")
 
 TRANSLATIONS_FILE = str(project_root() / "configs" / "tag_translations.json")
 

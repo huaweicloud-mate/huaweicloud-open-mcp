@@ -9,7 +9,7 @@ from ..auth.credentials import Credentials
 from ..safety import policy as safety_policy
 from ..types import ClientResponse, ExecuteResult
 
-logger = logging.getLogger("huaweicloud_mcp.tools.execute")
+logger = logging.getLogger("openmcp.tools.execute")
 
 MAX_RESPONSE_CHARS = 200_000
 PATH_PARAM = re.compile(r"\{([^}]+)\}")

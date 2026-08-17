@@ -15,7 +15,7 @@ from ..logconf import configure_logging
 from ..paths import project_root
 from . import region_paths
 
-logger = logging.getLogger("huaweicloud_mcp.apie.refresh")
+logger = logging.getLogger("openmcp.apie.refresh")
 
 PROOT = str(project_root())
 
@@ -126,7 +126,7 @@ def stage_script(name: str, dry_run: bool, full: bool = False) -> int:
         env = {"API_EXPLORER_REGION": current_region()}
         if dry_run:
             print(f"+ env API_EXPLORER_REGION={current_region()}", flush=True)
-    args = [sys.executable, "-m", f"huaweicloud_mcp.apie.{MODULE[name]}"]
+    args = [sys.executable, "-m", f"openmcp.apie.{MODULE[name]}"]
     import os as _os
     for var in ("HUAWEICLOUD_MCP_LOG_LEVEL", "HUAWEICLOUD_MCP_LOG_FILE"):
         if _os.environ.get(var) and (env is None or var not in env):
@@ -137,7 +137,7 @@ def stage_script(name: str, dry_run: bool, full: bool = False) -> int:
 
 def stage_validate(dry_run: bool, full: bool = False) -> int:
     if full:
-        code = run_cmd([sys.executable, "-m", "huaweicloud_mcp.apie.validate_openapi2"], dry_run)
+        code = run_cmd([sys.executable, "-m", "openmcp.apie.validate_openapi2"], dry_run)
         if dry_run or code != 0:
             return code
     from .validate_openapi2 import load_validator, validate_final_dir

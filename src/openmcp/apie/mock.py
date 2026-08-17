@@ -14,7 +14,7 @@ from typing import Any
 
 from ..types import ClientResponse
 
-logger = logging.getLogger("huaweicloud_mcp.apie.mock")
+logger = logging.getLogger("openmcp.apie.mock")
 
 MOCK_BASE = "https://apiexplorer.cn-north-4.myhuaweicloud.com"
 MOCK_PATH = "/v1/mock"

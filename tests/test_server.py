@@ -1,8 +1,8 @@
 """server 装配冒烟测试（不启动 stdio 进程）。"""
 
-from huaweicloud_mcp.safety import policy
-from huaweicloud_mcp.server import build_app
-from huaweicloud_mcp.tools.service import ServiceConfig, ToolService
+from openmcp.safety import policy
+from openmcp.server import build_app
+from openmcp.tools.service import ServiceConfig, ToolService
 
 EXPECTED_TOOLS = {
     "list_products", "get_product", "list_apis", "get_api",

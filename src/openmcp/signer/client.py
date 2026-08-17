@@ -12,7 +12,7 @@ from ..auth.credentials import Credentials
 from ..types import ClientResponse
 from . import sign
 
-logger = logging.getLogger("huaweicloud_mcp.signer.client")
+logger = logging.getLogger("openmcp.signer.client")
 
 MAX_RETRIES = 4
 RETRY_BACKOFF = 2.0

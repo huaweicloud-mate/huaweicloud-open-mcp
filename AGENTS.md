@@ -7,7 +7,7 @@
 三层架构：
 
 ```text
-┌─ MCP 网关层  src/huaweicloud_mcp/tools/ + server.py
+┌─ MCP 网关层  src/openmcp/tools/ + server.py
 │     list_products / get_product / list_apis / get_api /
 │     get_api_examples / execute_api
 │        ↓ execute 前强制过 safety policy
@@ -46,15 +46,15 @@
 | `raw/apis_docs.json` | 接口索引（id/name/method/summary/tags/product_short/info_version），支撑 `list_apis` | `api-refresh docs` | 是 |
 | `raw/apis_detail.json` | 全量接口详情（断点文件 `raw/apis_detail_partial.json`）；非默认 region 在 `raw/{region}/` | `api-refresh details` + `retry` | 是 |
 | `data/openapi/` | **元数据产物**：`{Product}/{Tag}.json` OpenAPI 2.0 文档（默认 region `cn-north-4` 平铺，非默认 region 在 `data/openapi/{region}/`） | `api-refresh`（split→convert→merge→organize） | 是 |
-| `src/huaweicloud_mcp/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端） | — | — |
-| `src/huaweicloud_mcp/signer/` | SDK-HMAC-SHA256 签名 + 真实模式 HTTP 客户端（超时/429 退避/错误解析） | — | — |
-| `src/huaweicloud_mcp/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
-| `src/huaweicloud_mcp/safety/` | safety policy 解析与匹配（PolicyRule dataclass） | — | — |
-| `src/huaweicloud_mcp/tools/` | 6 工具：metadata/execute 纯函数 + service 编排层（加载/配置/客户端工厂注入） | — | — |
-| `src/huaweicloud_mcp/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封（*Result TypedDict，含 ProductItem/ApiItem/TagGroup/ApiExample 实体） | — | — |
-| `src/huaweicloud_mcp/paths.py` | 项目根路径解析（统一 project_root） | — | — |
-| `src/huaweicloud_mcp/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
-| `src/huaweicloud_mcp/server.py` | stdio MCP server 装配（mcp SDK，业务全部委托 ToolService） | — | — |
+| `src/openmcp/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端） | — | — |
+| `src/openmcp/signer/` | SDK-HMAC-SHA256 签名 + 真实模式 HTTP 客户端（超时/429 退避/错误解析） | — | — |
+| `src/openmcp/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
+| `src/openmcp/safety/` | safety policy 解析与匹配（PolicyRule dataclass） | — | — |
+| `src/openmcp/tools/` | 6 工具：metadata/execute 纯函数 + service 编排层（加载/配置/客户端工厂注入） | — | — |
+| `src/openmcp/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封（*Result TypedDict，含 ProductItem/ApiItem/TagGroup/ApiExample 实体） | — | — |
+| `src/openmcp/paths.py` | 项目根路径解析（统一 project_root） | — | — |
+| `src/openmcp/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
+| `src/openmcp/server.py` | stdio MCP server 装配（mcp SDK，业务全部委托 ToolService） | — | — |
 | `configs/` | safety policy 示例、tag 中文→英文翻译映射 | — | — |
 | `tests/` | TDD 测试（见「测试」章节） | — | — |
 
@@ -76,7 +76,7 @@
 uv sync                                  # 安装依赖（含 dev）
 uv run pytest                            # 跑全部测试（默认跳过 e2e）
 uv run pytest -m e2e                     # 真实数据/凭证 E2E（需 AK/SK）
-uv run pytest --cov=src/huaweicloud_mcp  # 覆盖率
+uv run pytest --cov=src/openmcp  # 覆盖率
 uv run ruff check src tests              # lint（ruff，规则 E/F/W/I，line-length 120）
 uv run ruff check src tests --fix        # 自动修复可修问题
 uv run mypy src                          # 类型检查（全量类型标注）

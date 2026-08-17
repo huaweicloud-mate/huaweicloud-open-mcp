@@ -1,8 +1,8 @@
 """execute 工具纯函数单元测试（stub client）。"""
 
-from huaweicloud_mcp.auth.credentials import Credentials
-from huaweicloud_mcp.tools import execute
-from huaweicloud_mcp.types import ClientResponse
+from openmcp.auth.credentials import Credentials
+from openmcp.tools import execute
+from openmcp.types import ClientResponse
 
 
 class StubClient:
@@ -16,15 +16,15 @@ class StubClient:
 
 
 def _get_op(mini_detail, key="ECS::ListServers"):
-    from huaweicloud_mcp.apie import convert_openapi2 as conv
+    from openmcp.apie import convert_openapi2 as conv
     doc = conv.convert_api(mini_detail["apis"][key])
-    from huaweicloud_mcp.tools import metadata
+    from openmcp.tools import metadata
     path, method, op = metadata.find_api_in_doc(doc, key.split("::")[-1])
     return doc, path, method, op
 
 
 def _policy(*lines):
-    from huaweicloud_mcp.safety import policy
+    from openmcp.safety import policy
     return policy.parse_policy(list(lines))
 
 

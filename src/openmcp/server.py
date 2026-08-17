@@ -24,7 +24,7 @@ from .types import (
     ToolError,
 )
 
-logger = logging.getLogger("huaweicloud_mcp.server")
+logger = logging.getLogger("openmcp.server")
 
 
 INSTRUCTIONS = """# 华为云 Open MCP 使用指引

@@ -1,6 +1,6 @@
 """元数据工具纯函数单元测试（mini fixture）。"""
 
-from huaweicloud_mcp.tools import metadata
+from openmcp.tools import metadata
 
 
 def _count_map():
@@ -90,7 +90,7 @@ def test_list_apis_case_insensitive_product(mini_docs):
 
 
 def test_find_api_in_doc_exact(mini_detail):
-    from huaweicloud_mcp.apie import convert_openapi2 as conv
+    from openmcp.apie import convert_openapi2 as conv
     doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
     path, method, op = metadata.find_api_in_doc(doc, "ListServers")
     assert method == "get"
@@ -99,27 +99,27 @@ def test_find_api_in_doc_exact(mini_detail):
 
 
 def test_find_api_in_doc_case_insensitive(mini_detail):
-    from huaweicloud_mcp.apie import convert_openapi2 as conv
+    from openmcp.apie import convert_openapi2 as conv
     doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
     path, method, op = metadata.find_api_in_doc(doc, "listservers")
     assert op["operationId"] == "ListServers"
 
 
 def test_find_api_in_doc_substring(mini_detail):
-    from huaweicloud_mcp.apie import convert_openapi2 as conv
+    from openmcp.apie import convert_openapi2 as conv
     doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
     path, method, op = metadata.find_api_in_doc(doc, "ListServer")
     assert op["operationId"] == "ListServers"
 
 
 def test_find_api_in_doc_not_found(mini_detail):
-    from huaweicloud_mcp.apie import convert_openapi2 as conv
+    from openmcp.apie import convert_openapi2 as conv
     doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
     assert metadata.find_api_in_doc(doc, "NopeApi") is None
 
 
 def test_format_api_detail(mini_detail):
-    from huaweicloud_mcp.apie import convert_openapi2 as conv
+    from openmcp.apie import convert_openapi2 as conv
     doc = conv.convert_api(mini_detail["apis"]["RabbitMQ::BatchCreateOrDeleteRabbitMqTag"])
     path, method, op = metadata.find_api_in_doc(doc, "BatchCreateOrDeleteRabbitMqTag")
     out = metadata.format_api_detail(doc, "RabbitMQ", path, method, op)
@@ -137,7 +137,7 @@ def test_format_api_detail(mini_detail):
 
 
 def test_format_api_detail_path_required_flag(mini_detail):
-    from huaweicloud_mcp.apie import convert_openapi2 as conv
+    from openmcp.apie import convert_openapi2 as conv
     doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
     path, method, op = metadata.find_api_in_doc(doc, "ListServers")
     out = metadata.format_api_detail(doc, "ECS", path, method, op)

@@ -8,7 +8,7 @@ from typing import Any
 
 from jsonschema import Draft4Validator
 
-logger = logging.getLogger("huaweicloud_mcp.validate_openapi2")
+logger = logging.getLogger("openmcp.validate_openapi2")
 
 DEFAULT_SCHEMA = "/tmp/swagger2_schema.json"
 

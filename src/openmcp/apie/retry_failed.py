@@ -7,7 +7,7 @@ from typing import Any
 
 from . import http, region_paths
 
-logger = logging.getLogger("huaweicloud_mcp.retry_failed")
+logger = logging.getLogger("openmcp.retry_failed")
 
 BASE = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
 REGION = region_paths.current_region()

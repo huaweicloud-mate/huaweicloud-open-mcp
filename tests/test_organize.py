@@ -1,6 +1,6 @@
 """organize 命名与合并逻辑单元测试。"""
 
-from huaweicloud_mcp.apie import organize
+from openmcp.apie import organize
 
 
 def test_sanitize_tag_slash():

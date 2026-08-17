@@ -15,7 +15,7 @@ from ..logconf import configure_logging
 from ..paths import project_root
 from . import http, region_paths
 
-logger = logging.getLogger("huaweicloud_mcp.apie.api_docs")
+logger = logging.getLogger("openmcp.apie.api_docs")
 
 PROOT = str(project_root())
 

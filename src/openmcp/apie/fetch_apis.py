@@ -7,7 +7,7 @@ from typing import Any
 
 from . import http
 
-logger = logging.getLogger("huaweicloud_mcp.fetch_apis")
+logger = logging.getLogger("openmcp.fetch_apis")
 
 BASE = "https://console.huaweicloud.com/apiexplorer/new/v3/apis"
 PAGE_SIZE = 100

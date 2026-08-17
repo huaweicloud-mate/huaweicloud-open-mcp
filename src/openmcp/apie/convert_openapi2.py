@@ -8,7 +8,7 @@ import logging
 import re
 from typing import Any, cast
 
-logger = logging.getLogger("huaweicloud_mcp.convert_openapi2")
+logger = logging.getLogger("openmcp.convert_openapi2")
 
 TYPE_MAP = {
     "long": "integer",

@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any
 
-logger = logging.getLogger("huaweicloud_mcp.merge_by_tag")
+logger = logging.getLogger("openmcp.merge_by_tag")
 
 
 def merge_doc(apis: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], list[tuple]]:

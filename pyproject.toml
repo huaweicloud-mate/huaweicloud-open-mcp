@@ -12,16 +12,16 @@ dependencies = [
 ]
 
 [project.scripts]
-api-refresh = "huaweicloud_mcp.apie.refresh:main"
-api-docs = "huaweicloud_mcp.apie.api_docs:main"
-huaweicloud-open-mcp = "huaweicloud_mcp.server:main"
+api-refresh = "openmcp.apie.refresh:main"
+api-docs = "openmcp.apie.api_docs:main"
+huaweicloud-open-mcp = "openmcp.server:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/huaweicloud_mcp"]
+packages = ["src/openmcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
