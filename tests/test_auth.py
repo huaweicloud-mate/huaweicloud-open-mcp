@@ -16,8 +16,9 @@ def test_load_from_env_full(monkeypatch):
 
 
 def test_load_from_env_minimal(monkeypatch):
-    monkeypatch.delenv("HUAWEICLOUD_SDK_AK", raising=False)
-    monkeypatch.delenv("HUAWEICLOUD_SDK_SK", raising=False)
+    for var in ("HUAWEICLOUD_SDK_AK", "HUAWEICLOUD_SDK_SK", "HUAWEICLOUD_SDK_SECURITY_TOKEN",
+                "HUAWEICLOUD_SDK_PROJECT_ID", "HUAWEICLOUD_SDK_DOMAIN_ID"):
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("HUAWEICLOUD_SDK_AK", "AK2")
     monkeypatch.setenv("HUAWEICLOUD_SDK_SK", "SK2")
     cred = credentials.load_from_env()
