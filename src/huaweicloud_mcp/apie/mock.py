@@ -5,6 +5,7 @@
 """
 
 import json
+import logging
 import time
 import urllib.error
 import urllib.parse
@@ -12,6 +13,8 @@ import urllib.request
 from typing import Any
 
 from ..types import ClientResponse
+
+logger = logging.getLogger("huaweicloud_mcp.apie.mock")
 
 MOCK_BASE = "https://apiexplorer.cn-north-4.myhuaweicloud.com"
 MOCK_PATH = "/v1/mock"
@@ -42,7 +45,10 @@ class MockApiClient:
             except urllib.error.HTTPError as e:
                 last_err = e
                 if e.code == 429 and attempt < self.max_retries:
-                    time.sleep(self.retry_backoff * (2 ** attempt))
+                    sleep_s = self.retry_backoff * (2 ** attempt)
+                    logger.warning("mock 429 rate limited, retry %d/%d after %.1fs",
+                                   attempt + 1, self.max_retries, sleep_s)
+                    time.sleep(sleep_s)
                     continue
                 return {"status": e.code, "headers": dict(e.headers), "body": self._parse_body(e.read())}
             except Exception as e:

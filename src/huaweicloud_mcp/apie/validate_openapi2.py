@@ -2,10 +2,13 @@
 
 import collections
 import json
+import logging
 import os
 from typing import Any
 
 from jsonschema import Draft4Validator
+
+logger = logging.getLogger("huaweicloud_mcp.validate_openapi2")
 
 DEFAULT_SCHEMA = "/tmp/swagger2_schema.json"
 
@@ -85,8 +88,8 @@ def validate_final_dir(validator: Draft4Validator, root: str) -> tuple[int, int]
             errs = list(validator.iter_errors(d))
             if errs:
                 invalid += 1
-                print(f"  INVALID {os.path.join(ps, fn)}: {errs[0].message[:100]}")
-    print(f"checked={checked} invalid={invalid}")
+                logger.warning("INVALID %s: %s", os.path.join(ps, fn), errs[0].message[:100])
+    logger.info("checked=%d invalid=%d", checked, invalid)
     return checked, invalid
 
 
@@ -95,10 +98,11 @@ def main() -> None:
     validator = load_validator()
     src_dir = region_paths.openapi2_dir()
     stats = validate_dir(validator, src_dir)
-    print("total:", stats["total"], "| valid:", stats["valid"], "| invalid:", stats["invalid"])
+    logger.info("total: %d | valid: %d | invalid: %d",
+                stats["total"], stats["valid"], stats["invalid"])
     with open("validation_issues.json", "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
-    print("saved validation_issues.json")
+    logger.info("saved validation_issues.json")
 
 
 if __name__ == "__main__":

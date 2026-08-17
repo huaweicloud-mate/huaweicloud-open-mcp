@@ -257,7 +257,26 @@ flowchart LR
 - 纵深防御：policy 白名单 + 最小权限 IAM 用户的 AK/SK
 - 凭证约定：`HUAWEICLOUD_SDK_AK/SK/SECURITY_TOKEN/PROJECT_ID`（env 或 `~/.huaweicloud/credentials` [basic]）；E2E 测试从项目根 `.env` 加载（gitignore，已存在环境变量优先）
 
-## 7. 测试与 TDD
+## 7. 可观测性（日志）
+
+```mermaid
+flowchart LR
+    A["logger: huaweicloud_mcp.*"] --> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
+    A --> C["StreamHandler(stderr)<br/>WARNING+ 兜底"]
+    D["stdout（JSON-RPC 通道）"] -. "禁止日志" .-> A
+
+    style B fill:#e8f5e9
+    style C fill:#fff3e0
+    style D fill:#ffebee
+```
+
+- **配置**：`logconf.configure_logging(program, level, log_file)`；`--log-level`/`--log-file` 参数与环境变量 `HUAWEICLOUD_MCP_LOG_LEVEL/FILE`；默认 INFO
+- **审计（INFO）**：`execute {product}:{api} region=.. mode=real|mock policy=allow|deny|unconfigured`；HTTP 请求 `GET https://host/path -> 200 (123ms)`；server 启动摘要（region/mock/policy/凭证状态）
+- **运行（WARNING）**：429 退避重试、policy 拒绝、抓取失败、Swagger 校验 INVALID
+- **脱敏红线**：`Authorization`/`X-Security-Token`/AK/SK 永不入日志；请求 body 仅 DEBUG 且截断 500 字符；测试用 caplog 断言红线
+- **CLI**：api-refresh/api-docs 全部进度/错误迁至 logging（stderr），stdout 仅保留结构化输出（emit 表格/JSON）
+
+## 8. 测试与 TDD
 
 | 接缝 | 内容 | 测试方式 | 独立真值 |
 | --- | --- | --- | --- |
@@ -269,7 +288,7 @@ flowchart LR
 
 纪律：red→green 垂直切片；只 mock 系统边界（外部 HTTP）；期望值来自独立真值，禁止同义反复。
 
-## 8. 已实现能力清单
+## 9. 已实现能力清单
 
 - [x] APIE 全量管道：218 产品 / 17666 接口 → 2714 OpenAPI 2.0 文档，Swagger 校验 invalid=0
 - [x] 6 工具：list_products / get_product / list_apis（含 tag_groups）/ get_api / get_api_examples / execute_api
@@ -278,9 +297,10 @@ flowchart LR
 - [x] safety policy（阿里云式白名单，无 policy 全拒）
 - [x] mock 模式全链路（`--mock`）
 - [x] 类型系统：TypedDict 结果信封 + mypy 0 错误
-- [x] 122 单测+集成 / 6 e2e（真实凭证 3 + 渐进式工作流 3，`.env` 加载）
+- [x] 131 单测+集成 / 6 e2e（真实凭证 3 + 渐进式工作流 3，`.env` 加载）
+- [x] 日志体系：文件为主轮转 + stderr 兜底，execute 审计，脱敏红线
 
-## 9. 二期路线
+## 10. 二期路线
 
 - 远程形态：Streamable HTTP + OAuth（分层已预留，service 与协议解耦）
 - `wait_job`：ECS 异步 job 轮询固化（当前 LLM 可经 execute_api 自行轮询 QueryJobStatus）

@@ -1,6 +1,7 @@
 """HTTP 客户端：真实模式（SDK-HMAC-SHA256 签名直连华为云）。"""
 
 import json
+import logging
 import time
 import urllib.error
 import urllib.parse
@@ -10,6 +11,8 @@ from typing import Any
 from ..auth.credentials import Credentials
 from ..types import ClientResponse
 from . import sign
+
+logger = logging.getLogger("huaweicloud_mcp.signer.client")
 
 MAX_RETRIES = 4
 RETRY_BACKOFF = 2.0
@@ -35,13 +38,19 @@ class HttpClient:
             except urllib.error.HTTPError as e:
                 last_err = e
                 if e.code == 429 and attempt < self.max_retries:
-                    time.sleep(self.retry_backoff * (2 ** attempt))
+                    sleep_s = self.retry_backoff * (2 ** attempt)
+                    logger.warning("429 rate limited, retry %d/%d after %.1fs",
+                                   attempt + 1, self.max_retries, sleep_s)
+                    time.sleep(sleep_s)
                     continue
                 return e.code, dict(e.headers), e.read()
             except Exception as e:
                 last_err = e
                 if attempt < self.max_retries:
-                    time.sleep(self.retry_backoff * (2 ** attempt))
+                    sleep_s = self.retry_backoff * (2 ** attempt)
+                    logger.warning("http error: %s, retry %d/%d after %.1fs",
+                                   e, attempt + 1, self.max_retries, sleep_s)
+                    time.sleep(sleep_s)
                     continue
                 raise
         if last_err is None:
@@ -76,7 +85,13 @@ class HttpClient:
         if query:
             url += "?" + urllib.parse.urlencode(self._flatten(query), doseq=True)
 
+        t0 = time.monotonic()
         status, resp_headers, raw = self._open(url, method, headers, body_bytes)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info("%s https://%s%s -> %s (%.0fms)",
+                    method.upper(), host, path, status, elapsed_ms)
+        if body is not None:
+            logger.debug("request body: %s", json.dumps(body, ensure_ascii=False)[:500])
         return {"status": status, "headers": resp_headers, "body": self._parse_body(raw)}
 
     @staticmethod

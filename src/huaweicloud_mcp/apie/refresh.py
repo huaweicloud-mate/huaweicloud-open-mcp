@@ -5,13 +5,17 @@
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
 import time
 
+from ..logconf import configure_logging
 from ..paths import project_root
 from . import region_paths
+
+logger = logging.getLogger("huaweicloud_mcp.apie.refresh")
 
 PROOT = str(project_root())
 
@@ -64,7 +68,7 @@ def stage_index(stage: str) -> int:
 
 
 def run_cmd(args: list[str], dry_run: bool = False, env: dict[str, str] | None = None) -> int:
-    print("+ " + " ".join(args), flush=True)
+    logger.debug("+ %s", " ".join(args))
     if dry_run:
         return 0
     full_env = dict(os.environ)
@@ -123,6 +127,11 @@ def stage_script(name: str, dry_run: bool, full: bool = False) -> int:
         if dry_run:
             print(f"+ env API_EXPLORER_REGION={current_region()}", flush=True)
     args = [sys.executable, "-m", f"huaweicloud_mcp.apie.{MODULE[name]}"]
+    import os as _os
+    for var in ("HUAWEICLOUD_MCP_LOG_LEVEL", "HUAWEICLOUD_MCP_LOG_FILE"):
+        if _os.environ.get(var) and (env is None or var not in env):
+            env = dict(env or {})
+            env[var] = _os.environ[var]
     return run_cmd(args, dry_run, env=env)
 
 
@@ -214,20 +223,20 @@ def cmd_refresh(args: argparse.Namespace) -> int:
         if not args.force and not args.dry_run:
             if s in ("details", "retry"):
                 if detail_region_matches(current_region()):
-                    print(f"跳过 {s}: 产物 region 与当前 region 一致（--force 强制刷新）", flush=True)
+                    logger.info("跳过 %s: 产物 region 与当前 region 一致（--force 强制刷新）", s)
                     continue
             art = artifact_of(s)
             if art and os.path.exists(os.path.join(PROOT, art)):
-                print(f"跳过 {s}: 产物 {art} 已存在（--force 强制刷新）", flush=True)
+                logger.info("跳过 %s: 产物 %s 已存在（--force 强制刷新）", s, art)
                 continue
-        print(f"\n===== {s} =====", flush=True)
+        logger.info("===== %s =====", s)
         t0 = time.time()
         rc = cmd_single(args, s)
         if rc != 0:
-            print(f"阶段 {s} 失败 (rc={rc})", file=sys.stderr)
+            logger.error("阶段 %s 失败 (rc=%d)", s, rc)
             return rc
-        print(f"阶段 {s} 完成，耗时 {time.time() - t0:.0f}s", flush=True)
-    print("\n全部完成。")
+        logger.info("阶段 %s 完成，耗时 %.0fs", s, time.time() - t0)
+    logger.info("全部完成。")
     return 0
 
 
@@ -238,6 +247,9 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--force", action="store_true", help="忽略产物存在检查，强制刷新")
     common.add_argument("--full", action="store_true", help="validate 阶段同时校验 apis_detail_by_tag_openapi2/ 片段")
     common.add_argument("--region", default="cn-north-4", help="详情接口 region_id（默认 cn-north-4）")
+    common.add_argument("--log-level", default=None,
+                        help="日志级别（默认 INFO，可用 DEBUG/INFO/WARNING/ERROR）")
+    common.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/api-refresh.log）")
 
     sub = p.add_subparsers(dest="command")
 
@@ -257,6 +269,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    level = getattr(args, "log_level", None) or None
+    log_file = getattr(args, "log_file", None) or None
+    configure_logging(program="api-refresh", level=level, log_file=log_file)
 
     if args.command == "status":
         cmd_status(args)

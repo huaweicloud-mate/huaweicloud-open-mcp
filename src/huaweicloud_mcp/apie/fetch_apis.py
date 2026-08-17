@@ -1,10 +1,13 @@
 """抓取接口索引 → raw/apis_docs.json。"""
 
 import json
+import logging
 import time
 from typing import Any
 
 from . import http
+
+logger = logging.getLogger("huaweicloud_mcp.fetch_apis")
 
 BASE = "https://console.huaweicloud.com/apiexplorer/new/v3/apis"
 PAGE_SIZE = 100
@@ -37,14 +40,14 @@ def main() -> None:
 
     for i, p in enumerate(products, 1):
         short, n = p["product_short"], p["api_count"]
-        print(f"[{i}/{len(products)}] {short} ({n})", flush=True)
+        logger.info("[%d/%d] %s (%d)", i, len(products), short, n)
         try:
             apis = fetch_product(short, n)
             all_apis.extend(apis)
             if len(apis) != n:
-                print(f"  WARN: expected {n}, got {len(apis)}", flush=True)
+                logger.warning("%s expected %d, got %d", short, n, len(apis))
         except Exception as e:
-            print(f"  ERROR: {e}", flush=True)
+            logger.error("%s: %s", short, e)
             failed.append({"product_short": short, "error": str(e)})
         time.sleep(0.3)
 
@@ -59,9 +62,9 @@ def main() -> None:
     with open("raw/apis_docs.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f"\nDone. total_apis={len(all_apis)}, failed={len(failed)}")
+    logger.info("Done. total_apis=%d failed=%d", len(all_apis), len(failed))
     if failed:
-        print("Failed products:", [x["product_short"] for x in failed])
+        logger.error("Failed products: %s", [x["product_short"] for x in failed])
 
 
 if __name__ == "__main__":

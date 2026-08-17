@@ -1,10 +1,13 @@
 """重试 raw/apis_detail.json 中 failed 项（429 大退避）。"""
 
 import json
+import logging
 import time
 from typing import Any
 
 from . import http, region_paths
+
+logger = logging.getLogger("huaweicloud_mcp.retry_failed")
 
 BASE = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
 REGION = region_paths.current_region()
@@ -36,20 +39,20 @@ def main() -> None:
     done: dict[str, dict[str, Any]] = result["apis"]
     still_failed: list[dict[str, str]] = []
 
-    print(f"retrying {len(failed)} failed items", flush=True)
+    logger.info("retrying %d failed items", len(failed))
     for f in failed:
         key = f"{f['product_short']}::{f['name']}"
         try:
             det, err = fetch_detail(f["product_short"], f["name"])
             if err is None:
                 done[key] = det
-                print(f"  OK {key}", flush=True)
+                logger.debug("OK %s", key)
             else:
                 still_failed.append({**f, "error": str(err)})
-                print(f"  FAIL {key}: {err}", flush=True)
+                logger.warning("FAIL %s: %s", key, err)
         except Exception as e:
             still_failed.append({**f, "error": str(e)})
-            print(f"  FAIL {key}: {e}", flush=True)
+            logger.warning("FAIL %s: %s", key, e)
         time.sleep(2)
 
     result["apis"] = done
@@ -57,7 +60,7 @@ def main() -> None:
     result["total_apis"] = len(done)
     with open(DETAIL_PATH, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-    print(f"Done. total={len(done)} failed={len(still_failed)}", flush=True)
+    logger.info("Done. total=%d failed=%d", len(done), len(still_failed))
 
 
 if __name__ == "__main__":

@@ -2,12 +2,15 @@
 
 import collections
 import json
+import logging
 import os
 import re
 import shutil
 from typing import Any, cast
 
 from ..paths import project_root
+
+logger = logging.getLogger("huaweicloud_mcp.organize")
 
 TRANSLATIONS_FILE = str(project_root() / "configs" / "tag_translations.json")
 
@@ -147,7 +150,7 @@ def build_index(out_dir: str) -> dict[str, Any]:
 def main() -> None:
     from . import region_paths
     total_files, total_ops = organize(region_paths.merged_dir(), region_paths.openapi_out_dir())
-    print(f"files: {total_files}, operations: {total_ops}")
+    logger.info("files: %d, operations: %d", total_files, total_ops)
 
 
 if __name__ == "__main__":

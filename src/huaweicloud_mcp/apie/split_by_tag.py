@@ -2,8 +2,11 @@
 
 import collections
 import json
+import logging
 import os
 import shutil
+
+logger = logging.getLogger("huaweicloud_mcp.apie.split_by_tag")
 
 
 def split_by_tag(src: str, out_dir: str) -> tuple[int, dict[str, dict[str, int]]]:
@@ -55,8 +58,8 @@ def split_by_tag(src: str, out_dir: str) -> tuple[int, dict[str, dict[str, int]]
 def main() -> None:
     from . import region_paths
     total, summary = split_by_tag(region_paths.raw_detail_path(), region_paths.by_tag_dir())
-    print("total apis:", total)
-    print("products:", len(summary))
+    logger.info("total apis: %d", total)
+    logger.info("products: %d", len(summary))
 
 
 if __name__ == "__main__":

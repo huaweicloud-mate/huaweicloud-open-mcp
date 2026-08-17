@@ -5,6 +5,7 @@
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -25,6 +26,8 @@ from ..types import (
     ToolError,
 )
 from . import execute, metadata
+
+logger = logging.getLogger("huaweicloud_mcp.tools.service")
 
 DEFAULT_REGION = "cn-north-4"
 
@@ -199,8 +202,13 @@ class ToolService:
         """mock 模式：policy 检查后路由到 API Explorer mock 端点。"""
         rules = self.config.policy_rules
         if rules is None:
+            logger.warning("execute %s:%s region=%s mode=mock policy=unconfigured",
+                           product, api, region)
             return {"ok": False, "reason": "safety policy 未配置，execute_api 全部拒绝"}
-        if not safety_policy.evaluate(rules, product, api):
+        allowed = safety_policy.evaluate(rules, product, api)
+        logger.info("execute %s:%s region=%s mode=mock policy=%s",
+                    product, api, region, "allow" if allowed else "deny")
+        if not allowed:
             return {"ok": False, "reason": f"safety policy 拒绝执行 {product}:{api}"}
         status_code = params.get("_status_code", 200)
         number = params.get("_number", 1)

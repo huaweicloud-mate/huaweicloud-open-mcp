@@ -117,6 +117,30 @@ def test_request_body_serialized(monkeypatch):
     assert get_header(req, "Content-Type") == "application/json"
 
 
+def test_request_logs_never_contain_credentials(monkeypatch, caplog):
+    import logging
+    _install(monkeypatch, [FakeResponse(200, b"{}")])
+    client = HttpClient(credentials=CRED)
+    with caplog.at_level(logging.INFO, logger="huaweicloud_mcp"):
+        client.request("GET", "h.example.com", "/p")
+    text = caplog.text
+    assert "Authorization" not in text
+    assert "Access=" not in text
+    assert CRED.sk not in text
+    assert "X-Security-Token" not in text
+
+
+def test_request_logs_status_and_path(monkeypatch, caplog):
+    import logging
+    _install(monkeypatch, [FakeResponse(200, b"{}")])
+    client = HttpClient(credentials=CRED)
+    with caplog.at_level(logging.INFO, logger="huaweicloud_mcp"):
+        client.request("GET", "h.example.com", "/p", query={"limit": 1})
+    assert "GET" in caplog.text
+    assert "h.example.com/p" in caplog.text
+    assert "200" in caplog.text
+
+
 def test_mock_api_client_url(monkeypatch):
     from huaweicloud_mcp.apie.mock import MockApiClient
     calls = _install(monkeypatch, [FakeResponse(200, b'{"servers": []}')])

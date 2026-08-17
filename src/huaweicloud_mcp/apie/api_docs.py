@@ -5,13 +5,17 @@
 
 import argparse
 import json
+import logging
 import os
 import sys
 import urllib.parse
 from typing import Any, cast
 
+from ..logconf import configure_logging
 from ..paths import project_root
 from . import http, region_paths
+
+logger = logging.getLogger("huaweicloud_mcp.apie.api_docs")
 
 PROOT = str(project_root())
 
@@ -224,7 +228,7 @@ def cmd_product(args: argparse.Namespace) -> int:
         if found:
             break
     if found is None:
-        print(f"产品 {target} 未找到", file=sys.stderr)
+        logger.error("产品 %s 未找到", target)
         return 2
     if not live:
         counts = load_count_map()
@@ -254,7 +258,7 @@ def cmd_tags(args: argparse.Namespace) -> int:
     else:
         apis = filter_by_product(docs, args.product)
     if not apis:
-        print(f"产品 {args.product} 无接口或未找到", file=sys.stderr)
+        logger.error("产品 %s 无接口或未找到", args.product)
         return 2
     from collections import Counter
     cnt = Counter((a.get("tags") or "").strip() or "_untagged" for a in apis)
@@ -313,13 +317,13 @@ def cmd_api(args: argparse.Namespace) -> int:
         return 0
     raw = fetch_detail_live(args.product, args.api, args.region)
     if not isinstance(raw, dict) or not raw.get("paths"):
-        print(f"接口 {args.api} 实时拉取失败: {raw}", file=sys.stderr)
+        logger.error("接口 %s 实时拉取失败: %s", args.api, raw)
         return 2
     from . import convert_openapi2 as conv
     try:
         doc = conv.convert_api(raw)
     except Exception as e:
-        print(f"规范化失败: {e}", file=sys.stderr)
+        logger.error("规范化失败: %s", e)
         return 2
     op2: dict[str, Any] | None = None
     path2: str | None = None
@@ -347,7 +351,7 @@ def cmd_api(args: argparse.Namespace) -> int:
 def cmd_search(args: argparse.Namespace) -> int:
     docs = load_docs_local(args.region)
     if docs is None:
-        print("本地 apis_docs 缺失，search 需先运行 api-refresh docs 拉取", file=sys.stderr)
+        logger.error("本地 apis_docs 缺失，search 需先运行 api-refresh docs 拉取")
         return 2
     kw = args.keyword.lower()
     apis = docs
@@ -377,6 +381,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--region", default="cn-north-4", help="region（默认 cn-north-4）")
     common.add_argument("--format", dest="fmt", choices=["table", "json", "yaml"], default="table",
                         help="输出格式（默认 table）")
+    common.add_argument("--log-level", default=None, help="日志级别（默认 INFO）")
+    common.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/api-docs.log）")
 
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -417,6 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    configure_logging(program="api-docs", level=args.log_level, log_file=args.log_file)
     rc = args.func(args)
     return rc if rc is not None else 0
 

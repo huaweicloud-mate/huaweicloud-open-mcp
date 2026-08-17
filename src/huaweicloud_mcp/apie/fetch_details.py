@@ -1,11 +1,14 @@
 """抓取全量接口详情 → raw/apis_detail.json（断点续传）。"""
 
 import json
+import logging
 import os
 import time
 from typing import Any, cast
 
 from . import http, region_paths
+
+logger = logging.getLogger("huaweicloud_mcp.fetch_details")
 
 BASE = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
 REGION = region_paths.current_region()
@@ -57,7 +60,8 @@ def main() -> None:
         if key not in done:
             pending.append(a)
 
-    print(f"total={len(api_list)} done={len(done)} failed={len(failed)} pending={len(pending)}", flush=True)
+    logger.info("total=%d done=%d failed=%d pending=%d",
+                len(api_list), len(done), len(failed), len(pending))
 
     for i, a in enumerate(pending, 1):
         key = f"{a['product_short']}::{a['name']}"
@@ -67,9 +71,9 @@ def main() -> None:
             if len(done) % 50 == 0:
                 with open(CHECKPOINT, "w", encoding="utf-8") as f:
                     json.dump({"done": done, "failed": failed}, f, ensure_ascii=False)
-                print(f"  checkpoint: {len(done)}/{len(api_list)}", flush=True)
+                logger.info("checkpoint: %d/%d", len(done), len(api_list))
         except Exception as e:
-            print(f"  FAIL {key}: {e}", flush=True)
+            logger.warning("FAIL %s: %s", key, e)
             failed.append({"product_short": a["product_short"], "name": a["name"], "error": str(e)})
             with open(CHECKPOINT, "w", encoding="utf-8") as f:
                 json.dump({"done": done, "failed": failed}, f, ensure_ascii=False)
@@ -87,7 +91,7 @@ def main() -> None:
     if os.path.exists(CHECKPOINT):
         os.remove(CHECKPOINT)
 
-    print(f"\nDone. total={len(done)} failed={len(failed)}", flush=True)
+    logger.info("Done. total=%d failed=%d", len(done), len(failed))
 
 
 if __name__ == "__main__":

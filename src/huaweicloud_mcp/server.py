@@ -4,12 +4,14 @@
 """
 
 import argparse
+import logging
 import os
-import sys
+from typing import Literal, cast
 
 from mcp.server.mcpserver import MCPServer
 
 from .auth import credentials as cred_mod
+from .logconf import configure_logging
 from .safety import policy as safety
 from .tools.service import ServiceConfig, ToolService
 from .types import (
@@ -21,6 +23,9 @@ from .types import (
     ProductResult,
     ToolError,
 )
+
+logger = logging.getLogger("huaweicloud_mcp.server")
+
 
 INSTRUCTIONS = """# 华为云 Open MCP 使用指引
 
@@ -59,9 +64,13 @@ def build_config(args: argparse.Namespace) -> ServiceConfig:
     )
 
 
-def build_app(service: ToolService | None = None) -> MCPServer:
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+
+def build_app(service: ToolService | None = None, *, log_level: LogLevel = "INFO") -> MCPServer:
     service = service or ToolService()
-    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0", instructions=INSTRUCTIONS)
+    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
+                       instructions=INSTRUCTIONS, log_level=log_level)
 
     @server.tool()
     def list_products(category: str | None = None, keyword: str | None = None) -> ProductListResult | ToolError:
@@ -119,13 +128,24 @@ def main() -> None:
                         help="mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）")
     parser.add_argument("--policy", default=None, help="safety policy 文件路径")
     parser.add_argument("--region", default=None, help="默认 region（默认 cn-north-4）")
+    parser.add_argument("--log-level", default=None, help="日志级别（默认 INFO）")
+    parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")
     args = parser.parse_args()
 
+    level_name = (args.log_level or os.environ.get("HUAWEICLOUD_MCP_LOG_LEVEL") or "INFO").upper()
+    if level_name not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        level_name = "INFO"
+    configure_logging(program="huaweicloud-open-mcp", level=level_name,
+                      log_file=args.log_file)
+
     config = build_config(args)
+    logger.info("server start: region=%s mock=%s policy=%s credentials=%s",
+                config.region, config.mock,
+                "configured" if config.policy_rules else "MISSING",
+                "configured" if config.credentials else "none")
     if config.policy_rules is None:
-        print("提示: 未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）",
-              file=sys.stderr)
-    app = build_app(ToolService(config))
+        logger.warning("未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）")
+    app = build_app(ToolService(config), log_level=cast(LogLevel, level_name))
     app.run("stdio")
 
 

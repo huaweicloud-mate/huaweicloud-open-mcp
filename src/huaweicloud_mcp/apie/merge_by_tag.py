@@ -2,7 +2,10 @@
 
 import collections
 import json
+import logging
 from typing import Any
+
+logger = logging.getLogger("huaweicloud_mcp.merge_by_tag")
 
 
 def merge_doc(apis: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], list[tuple]]:
@@ -179,7 +182,8 @@ def main() -> None:
             "files": index,
         }, f, ensure_ascii=False, indent=2)
 
-    print(f"docs: {total_docs}, operations: {total_ops}, path dup: {stats['path_dup_total']}")
+    logger.info("docs: %d, operations: %d, path dup: %d",
+                total_docs, total_ops, stats["path_dup_total"])
 
 
 if __name__ == "__main__":

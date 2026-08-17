@@ -21,6 +21,13 @@
 └─ 测试层（TDD，见「测试」章节）
 ```
 
+日志约定：
+
+- 文件为主：默认 `logs/{program}.log`（RotatingFileHandler 10MB×5），stderr 同步 WARNING+；`--log-level`/`--log-file` 或环境变量 `HUAWEICLOUD_MCP_LOG_LEVEL/FILE` 覆盖；`logs/` 不入库。
+- stdio 协议安全：MCP server 的 stdout 是 JSON-RPC 通道，任何日志禁止写 stdout。
+- 脱敏红线：`Authorization`/`X-Security-Token`/AK/SK 永不入日志；响应 body 仅 DEBUG 且截断。
+- 审计：execute_api 的 policy 决策与执行结果记 INFO（`execute {product}:{api} region=.. mode=.. policy=..`）。
+
 核心原则：
 
 - **渐进式工作流**：LLM 决策驱动收窄——`list_products` 定产品 → `list_apis`（含 `tag_groups` 全量 tag 概览）定目录 → `get_api` 读文档 → `execute_api` 执行；完整指引写在 server instructions（initialize 响应）与各工具 description。
@@ -46,6 +53,7 @@
 | `src/huaweicloud_mcp/tools/` | 6 工具：metadata/execute 纯函数 + service 编排层（加载/配置/客户端工厂注入） | — | — |
 | `src/huaweicloud_mcp/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封（*Result TypedDict，含 ProductItem/ApiItem/TagGroup/ApiExample 实体） | — | — |
 | `src/huaweicloud_mcp/paths.py` | 项目根路径解析（统一 project_root） | — | — |
+| `src/huaweicloud_mcp/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
 | `src/huaweicloud_mcp/server.py` | stdio MCP server 装配（mcp SDK，业务全部委托 ToolService） | — | — |
 | `configs/` | safety policy 示例、tag 中文→英文翻译映射 | — | — |
 | `tests/` | TDD 测试（见「测试」章节） | — | — |
@@ -93,6 +101,7 @@ MCP server 启动（stdio，由 MCP 客户端拉起）：
 uv run huaweicloud-open-mcp                    # 真实模式：AK/SK 签名直连华为云
 uv run huaweicloud-open-mcp --mock             # mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）
 uv run huaweicloud-open-mcp --policy configs/safety-policy.example.json  # 指定 safety policy 文件
+uv run huaweicloud-open-mcp --log-level DEBUG  # 日志级别（默认 INFO）；--log-file 指定文件（默认 logs/huaweicloud-open-mcp.log）
 ```
 
 前置依赖：`uv`；Swagger 2.0 schema 文件 `/tmp/swagger2_schema.json`（`curl -sL https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json`），丢失后重新下载。

@@ -1,12 +1,15 @@
 """execute_api 业务函数：safety 检查 → 请求构建 → 调用 → 响应规范化（真实模式）。"""
 
 import json
+import logging
 import re
 from typing import Any, Protocol, Sequence
 
 from ..auth.credentials import Credentials
 from ..safety import policy as safety_policy
 from ..types import ClientResponse, ExecuteResult
+
+logger = logging.getLogger("huaweicloud_mcp.tools.execute")
 
 MAX_RESPONSE_CHARS = 200_000
 PATH_PARAM = re.compile(r"\{([^}]+)\}")
@@ -109,8 +112,13 @@ def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
                 client: ApiExecutor, credentials: Credentials | None = None) -> ExecuteResult:
     """执行真实 API：safety policy → 请求构建 → 调用 → 规范化。"""
     if policy_rules is None:
+        logger.warning("execute %s:%s region=%s mode=real policy=unconfigured",
+                       product, api_name, region)
         return _refuse("safety policy 未配置，execute_api 全部拒绝")
-    if not safety_policy.evaluate(policy_rules, product, api_name):
+    allowed = safety_policy.evaluate(policy_rules, product, api_name)
+    logger.info("execute %s:%s region=%s mode=real policy=%s",
+                product, api_name, region, "allow" if allowed else "deny")
+    if not allowed:
         return _refuse(f"safety policy 拒绝执行 {product}:{api_name}")
 
     filled, query, body, headers, err = build_request(op, path, params, credentials)

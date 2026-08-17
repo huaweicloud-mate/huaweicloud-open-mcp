@@ -13,6 +13,9 @@ __pycache__/
 raw/
 data/
 
+# 日志（不入库）
+logs/
+
 # 中间产物
 apis_detail_by_tag/
 apis_detail_by_tag_openapi2/

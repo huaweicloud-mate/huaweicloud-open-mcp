@@ -1,11 +1,14 @@
 """APIE 抓取公共 HTTP 助手：统一重试、超时与 429 退避。"""
 
 import json
+import logging
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, cast
+
+logger = logging.getLogger("huaweicloud_mcp.http")
 
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
@@ -39,6 +42,7 @@ def fetch_json(url: str, *, retries: int = 5, backoff: float = 2.0, timeout: int
         except Exception as e:
             last_err = e
             if attempt < retries - 1:
+                logger.debug("fetch retry %d/%d after error: %s", attempt + 1, retries - 1, e)
                 time.sleep(backoff * (attempt + 1))
     raise ApieHttpError(f"fetch failed after {retries} retries: {last_err}") from last_err
 
@@ -53,6 +57,7 @@ def fetch_json_retry(url: str, *, retries: int = 6, backoff: float = 2.0,
         except Exception as e:
             last_err = e
             if attempt < retries - 1:
+                logger.debug("fetch retry %d/%d after error: %s", attempt + 1, retries - 1, e)
                 time.sleep(backoff * (attempt + 1))
     raise ApieHttpError(f"fetch failed after {retries} retries: {last_err}") from last_err
 
@@ -65,6 +70,7 @@ def fetch_json_429(url: str, *, retries: int = 10, backoff_429: float = 20.0,
             body, err = open_url(url, timeout=timeout)
         except Exception as e:
             if attempt < retries - 1:
+                logger.debug("fetch retry %d/%d after error: %s", attempt + 1, retries - 1, e)
                 time.sleep(backoff)
                 continue
             raise ApieHttpError(f"fetch failed after {retries} retries: {e}") from e
@@ -73,6 +79,8 @@ def fetch_json_429(url: str, *, retries: int = 10, backoff_429: float = 20.0,
         if err.code != 429:
             return body, err
         if attempt < retries - 1:
+            logger.warning("429 rate limited, sleep %.0fs (attempt %d/%d)",
+                           backoff_429, attempt + 1, retries - 1)
             time.sleep(backoff_429)
             continue
         return body, err

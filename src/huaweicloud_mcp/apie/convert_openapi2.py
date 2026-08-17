@@ -4,8 +4,11 @@
 """
 
 import json
+import logging
 import re
 from typing import Any, cast
+
+logger = logging.getLogger("huaweicloud_mcp.convert_openapi2")
 
 TYPE_MAP = {
     "long": "integer",
@@ -436,7 +439,7 @@ def main() -> None:
                 json.dump({"product_short": data.get("product_short"), "tag": data.get("tag"),
                            "api_count": len(converted), "apis": converted},
                           f, ensure_ascii=False, indent=2)
-    print("total:", total, stats)
+    logger.info("total: %d %s", total, stats)
 
 
 if __name__ == "__main__":
