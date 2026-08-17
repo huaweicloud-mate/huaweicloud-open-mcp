@@ -15,7 +15,16 @@ from ..auth.credentials import Credentials
 from ..paths import project_root
 from ..safety import policy as safety_policy
 from ..signer.client import HttpClient
-from ..types import ExecuteResult
+from ..types import (
+    ApiDetailResult,
+    ApiListResult,
+    ExamplesResult,
+    ExecuteResult,
+    ProductListResult,
+    ProductResult,
+    SuggestResult,
+    ToolError,
+)
 from . import execute, metadata
 
 DEFAULT_REGION = "cn-north-4"
@@ -122,42 +131,39 @@ class ToolService:
 
     # ---------- 元数据工具 ----------
 
-    def list_products(self, category: str | None = None, keyword: str | None = None) -> dict[str, Any]:
+    def list_products(self, category: str | None = None,
+                      keyword: str | None = None) -> ProductListResult | ToolError:
         groups = self._groups()
         if groups is None:
             return {"ok": False, "reason": "本地元数据缺失，请先运行 api-refresh products"}
         return metadata.list_products(groups, counts=self._counts(),
                                       category=category, keyword=keyword)
 
-    def get_product(self, product: str) -> dict[str, Any]:
+    def get_product(self, product: str) -> ProductResult | ToolError:
         groups = self._groups()
         if groups is None:
             return {"ok": False, "reason": "本地元数据缺失，请先运行 api-refresh products"}
         out = metadata.get_product(groups, product, counts=self._counts())
         if out is None:
             return {"ok": False, "reason": f"产品 {product} 未找到"}
-        out["ok"] = True
         return out
 
     def list_apis(self, product: str, tag: str | None = None, search: str | None = None,
-                  limit: int = 20, offset: int = 0) -> dict[str, Any]:
+                  limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
         docs = self._docs()
         if docs is None:
             return {"ok": False, "reason": "本地接口索引缺失，请先运行 api-refresh docs"}
-        out = metadata.list_apis(docs, product, tag=tag, search=search, limit=limit, offset=offset)
-        out["ok"] = True
-        return out
+        return metadata.list_apis(docs, product, tag=tag, search=search, limit=limit, offset=offset)
 
-    def get_api(self, product: str, api: str, region: str | None = None) -> dict[str, Any]:
+    def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
         hit = self.load_api_doc(product, api, region)
         if hit is None:
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
-        out = metadata.format_api_detail(doc, product, path, method, op)
-        out["ok"] = True
-        return out
+        return metadata.format_api_detail(doc, product, path, method, op)
 
-    def get_api_examples(self, product: str, api: str, region: str | None = None) -> dict[str, Any]:
+    def get_api_examples(self, product: str, api: str,
+                         region: str | None = None) -> ExamplesResult | ToolError:
         hit = self.load_api_doc(product, api, region)
         if hit is None:
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
@@ -165,13 +171,12 @@ class ToolService:
         return {"ok": True, "product": product, "api": api,
                 "examples": metadata.extract_examples(op)}
 
-    def suggest_apis(self, task: str, product: str | None = None, limit: int = 10) -> dict[str, Any]:
+    def suggest_apis(self, task: str, product: str | None = None,
+                     limit: int = 10) -> SuggestResult | ToolError:
         docs = self._docs()
         if docs is None:
             return {"ok": False, "reason": "本地接口索引缺失，请先运行 api-refresh docs"}
-        out = metadata.suggest_apis(docs, task, product=product, limit=limit)
-        out["ok"] = True
-        return out
+        return metadata.suggest_apis(docs, task, product=product, limit=limit)
 
     # ---------- 执行工具 ----------
 

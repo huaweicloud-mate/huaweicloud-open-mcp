@@ -1,41 +1,24 @@
-"""六元数据工具纯函数（不碰磁盘、不耦合 MCP 协议）。"""
+"""六元数据工具纯函数（不碰磁盘、不耦合 MCP 协议）。
+
+返回结构为具名信封（types.py 的 *Result TypedDict），纯函数直接产出含
+ok=True 的完整结果；失败态（ToolError）由编排层（service）构造。
+"""
 
 import json
 import re
-from typing import Any, TypedDict
+from typing import Any
 
-
-class ProductItem(TypedDict):
-    product: str
-    name: str
-    category: str
-    api_count: int
-    is_global: bool | None
-    link: str | None
-
-
-class ApiItem(TypedDict):
-    name: str
-    method: str
-    summary: str
-    tags: str
-    info_version: str
-
-
-class ApiSuggestion(TypedDict):
-    product: str
-    name: str
-    method: str
-    summary: str
-    tags: str
-    score: int
-    matched_keywords: list[str]
-
-
-class ApiExample(TypedDict):
-    description: str | None
-    example: Any
-
+from ..types import (
+    ApiDetailResult,
+    ApiExample,
+    ApiItem,
+    ApiListResult,
+    ApiSuggestion,
+    ProductItem,
+    ProductListResult,
+    ProductResult,
+    SuggestResult,
+)
 
 _CJK = re.compile(r"[\u4e00-\u9fff]+")
 
@@ -45,7 +28,7 @@ _CJK = re.compile(r"[\u4e00-\u9fff]+")
 def list_products(groups: list[dict[str, Any]], *,
                   counts: dict[str, int] | None = None,
                   category: str | None = None,
-                  keyword: str | None = None) -> dict[str, Any]:
+                  keyword: str | None = None) -> ProductListResult:
     """groups: huawei_products.json 的 groups；counts: {PRODUCT_UPPER: api_count}。"""
     counts = counts or {}
     kw = (keyword or "").lower()
@@ -67,11 +50,11 @@ def list_products(groups: list[dict[str, Any]], *,
                 "is_global": p.get("is_global"),
                 "link": p.get("link") or None,
             })
-    return {"total": len(products), "products": products}
+    return {"ok": True, "total": len(products), "products": products}
 
 
 def get_product(groups: list[dict[str, Any]], product: str, *,
-                counts: dict[str, int] | None = None) -> dict[str, Any] | None:
+                counts: dict[str, int] | None = None) -> ProductResult | None:
     counts = counts or {}
     target = (product or "").lower()
     for g in groups:
@@ -79,6 +62,7 @@ def get_product(groups: list[dict[str, Any]], product: str, *,
             ps = p.get("productshort") or ""
             if ps.lower() == target or (p.get("name") or "").lower() == target:
                 return {
+                    "ok": True,
                     "product": ps,
                     "name": p.get("name"),
                     "category": g.get("name"),
@@ -93,7 +77,7 @@ def get_product(groups: list[dict[str, Any]], product: str, *,
 
 def list_apis(apis: list[dict[str, Any]], product: str, *,
               tag: str | None = None, search: str | None = None,
-              limit: int = 20, offset: int = 0) -> dict[str, Any]:
+              limit: int = 20, offset: int = 0) -> ApiListResult:
     p = (product or "").lower()
     matched = [a for a in apis if (a.get("product_short") or "").lower() == p]
     if tag:
@@ -112,6 +96,7 @@ def list_apis(apis: list[dict[str, Any]], product: str, *,
         "info_version": a.get("info_version") or "",
     } for a in page]
     return {
+        "ok": True,
         "product": product,
         "total": total,
         "offset": offset,
@@ -168,7 +153,7 @@ def _resolve_schema(obj: Any, doc: dict[str, Any], depth: int = 0,
 
 
 def format_api_detail(doc: dict[str, Any], product: str, path: str,
-                      method: str, op: dict[str, Any]) -> dict[str, Any]:
+                      method: str, op: dict[str, Any]) -> ApiDetailResult:
     """把单个 operation 格式化为 AI 友好的结构化详情。"""
     definitions = doc.get("definitions") or {}
     collected: set[str] = set()
@@ -189,8 +174,9 @@ def format_api_detail(doc: dict[str, Any], product: str, path: str,
         responses[code] = r
 
     return {
+        "ok": True,
         "product": product,
-        "api": op.get("operationId"),
+        "api": op.get("operationId") or "",
         "method": method.upper(),
         "path": path,
         "summary": op.get("summary"),
@@ -242,11 +228,11 @@ def _task_keywords(task: str) -> list[str]:
 
 
 def suggest_apis(apis: list[dict[str, Any]], task: str, *,
-                 product: str | None = None, limit: int = 10) -> dict[str, Any]:
+                 product: str | None = None, limit: int = 10) -> SuggestResult:
     """任务描述 → 推荐 API 列表。关键词（英文词/CJK 二元组）加权匹配。"""
     keywords = _task_keywords(task)
     if not keywords:
-        return {"task": task, "total": 0, "apis": []}
+        return {"ok": True, "task": task, "total": 0, "apis": []}
     scored: list[ApiSuggestion] = []
     for a in apis:
         if product and (a.get("product_short") or "").lower() != product.lower():
@@ -277,4 +263,4 @@ def suggest_apis(apis: list[dict[str, Any]], task: str, *,
                 "matched_keywords": list(dict.fromkeys(matched)),
             })
     scored.sort(key=lambda x: -x["score"])
-    return {"task": task, "total": len(scored[:limit]), "apis": scored[:limit]}
+    return {"ok": True, "task": task, "total": len(scored[:limit]), "apis": scored[:limit]}

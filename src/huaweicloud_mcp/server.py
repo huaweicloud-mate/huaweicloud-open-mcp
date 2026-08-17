@@ -13,7 +13,16 @@ from mcp.server.mcpserver import MCPServer
 from .auth import credentials as cred_mod
 from .safety import policy as safety
 from .tools.service import ServiceConfig, ToolService
-from .types import ExecuteResult
+from .types import (
+    ApiDetailResult,
+    ApiListResult,
+    ExamplesResult,
+    ExecuteResult,
+    ProductListResult,
+    ProductResult,
+    SuggestResult,
+    ToolError,
+)
 
 
 def build_config(args: argparse.Namespace) -> ServiceConfig:
@@ -34,33 +43,33 @@ def build_app(service: ToolService | None = None) -> MCPServer:
     server = MCPServer(name="huaweicloud-mcp", version="0.1.0")
 
     @server.tool()
-    def list_products(category: str | None = None, keyword: str | None = None) -> dict[str, Any]:
+    def list_products(category: str | None = None, keyword: str | None = None) -> ProductListResult | ToolError:
         """列出华为云产品。可按分类或产品名关键词过滤，返回产品及接口数。"""
         return service.list_products(category=category, keyword=keyword)
 
     @server.tool()
-    def get_product(product: str) -> dict[str, Any]:
+    def get_product(product: str) -> ProductResult | ToolError:
         """查询单个产品的详情（产品名/product_short、分类、接口数、是否全局级服务）。"""
         return service.get_product(product)
 
     @server.tool()
     def list_apis(product: str, tag: str | None = None, search: str | None = None,
-                  limit: int = 20, offset: int = 0) -> dict[str, Any]:
+                  limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
         """列出产品的 API 目录。按 tag 或关键词（名称/summary）过滤，支持分页。"""
         return service.list_apis(product, tag=tag, search=search, limit=limit, offset=offset)
 
     @server.tool()
-    def get_api(product: str, api: str, region: str | None = None) -> dict[str, Any]:
+    def get_api(product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
         """查询接口详情：方法/路径/参数（必填、类型、枚举、约束）/响应结构/相关模型定义。"""
         return service.get_api(product, api, region=region)
 
     @server.tool()
-    def get_api_examples(product: str, api: str, region: str | None = None) -> dict[str, Any]:
+    def get_api_examples(product: str, api: str, region: str | None = None) -> ExamplesResult | ToolError:
         """查询接口的官方请求示例（x-request-examples），用于指导参数填写。"""
         return service.get_api_examples(product, api, region=region)
 
     @server.tool()
-    def suggest_apis(task: str, product: str | None = None, limit: int = 10) -> dict[str, Any]:
+    def suggest_apis(task: str, product: str | None = None, limit: int = 10) -> SuggestResult | ToolError:
         """按任务描述推荐最合适的 API（关键词加权匹配 name/summary/tags）。"""
         return service.suggest_apis(task, product=product, limit=limit)
 

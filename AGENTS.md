@@ -43,7 +43,7 @@
 | `src/huaweicloud_mcp/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
 | `src/huaweicloud_mcp/safety/` | safety policy 解析与匹配（PolicyRule dataclass） | — | — |
 | `src/huaweicloud_mcp/tools/` | 7 工具：metadata/execute 纯函数 + service 编排层（加载/配置/客户端工厂注入） | — | — |
-| `src/huaweicloud_mcp/types.py` | 跨模块共享 TypedDict（ClientResponse/ExecuteResult） | — | — |
+| `src/huaweicloud_mcp/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 七工具结果信封（*Result TypedDict，含 ProductItem/ApiItem/ApiSuggestion/ApiExample 实体） | — | — |
 | `src/huaweicloud_mcp/paths.py` | 项目根路径解析（统一 project_root） | — | — |
 | `src/huaweicloud_mcp/server.py` | stdio MCP server 装配（mcp SDK，业务全部委托 ToolService） | — | — |
 | `configs/` | safety policy 示例、tag 中文→英文翻译映射 | — | — |
