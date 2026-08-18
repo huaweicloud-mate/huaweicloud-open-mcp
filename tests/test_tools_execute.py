@@ -17,9 +17,9 @@ class StubClient:
 
 def _get_op(mini_detail, key="ECS::ListServers"):
     from openmcp.apie import convert_openapi2 as conv
+    from openmcp.apie.local_store import find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"][key])
-    from openmcp.tools import metadata
-    path, method, op = metadata.find_api_in_doc(doc, key.split("::")[-1])
+    path, method, op = find_api_in_doc(doc, key.split("::")[-1])
     return doc, path, method, op
 
 

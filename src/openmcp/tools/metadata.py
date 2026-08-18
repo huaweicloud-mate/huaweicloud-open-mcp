@@ -114,30 +114,6 @@ def list_apis(apis: list[dict[str, Any]], product: str, *,
 
 # ---------- API 详情 ----------
 
-def find_api_in_doc(doc: dict[str, Any] | None, api_name: str) -> tuple[str, str, dict[str, Any]] | None:
-    """在 OpenAPI 文档中查找接口，返回 (path, method, op) 或 None。
-
-    先 operationId 精确，再大小写不敏感，最后子串匹配。
-    """
-    if not doc:
-        return None
-    exact: tuple[str, str, dict[str, Any]] | None = None
-    fuzzy: tuple[str, str, dict[str, Any]] | None = None
-    target = (api_name or "").lower()
-    for path, path_item in (doc.get("paths") or {}).items():
-        for method, op in path_item.items():
-            if not isinstance(op, dict):
-                continue
-            opid = op.get("operationId")
-            if opid == api_name:
-                return (path, method, op)
-            if exact is None and opid and opid.lower() == target:
-                exact = (path, method, op)
-            if fuzzy is None and opid and target in opid.lower():
-                fuzzy = (path, method, op)
-    return exact or fuzzy
-
-
 def _resolve_schema(obj: Any, doc: dict[str, Any], depth: int = 0,
                     collected: set[str] | None = None) -> Any:
     if collected is None:

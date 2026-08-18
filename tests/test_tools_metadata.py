@@ -89,39 +89,11 @@ def test_list_apis_case_insensitive_product(mini_docs):
     assert out["total"] == 4
 
 
-def test_find_api_in_doc_exact(mini_detail):
-    from openmcp.apie import convert_openapi2 as conv
-    doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
-    path, method, op = metadata.find_api_in_doc(doc, "ListServers")
-    assert method == "get"
-    assert path == "/v1/{project_id}/cloudservers"
-    assert op["operationId"] == "ListServers"
-
-
-def test_find_api_in_doc_case_insensitive(mini_detail):
-    from openmcp.apie import convert_openapi2 as conv
-    doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
-    path, method, op = metadata.find_api_in_doc(doc, "listservers")
-    assert op["operationId"] == "ListServers"
-
-
-def test_find_api_in_doc_substring(mini_detail):
-    from openmcp.apie import convert_openapi2 as conv
-    doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
-    path, method, op = metadata.find_api_in_doc(doc, "ListServer")
-    assert op["operationId"] == "ListServers"
-
-
-def test_find_api_in_doc_not_found(mini_detail):
-    from openmcp.apie import convert_openapi2 as conv
-    doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
-    assert metadata.find_api_in_doc(doc, "NopeApi") is None
-
-
 def test_format_api_detail(mini_detail):
     from openmcp.apie import convert_openapi2 as conv
+    from openmcp.apie.local_store import find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"]["RabbitMQ::BatchCreateOrDeleteRabbitMqTag"])
-    path, method, op = metadata.find_api_in_doc(doc, "BatchCreateOrDeleteRabbitMqTag")
+    path, method, op = find_api_in_doc(doc, "BatchCreateOrDeleteRabbitMqTag")
     out = metadata.format_api_detail(doc, "RabbitMQ", path, method, op)
     assert out["product"] == "RabbitMQ"
     assert out["api"] == "BatchCreateOrDeleteRabbitMqTag"
@@ -138,8 +110,9 @@ def test_format_api_detail(mini_detail):
 
 def test_format_api_detail_path_required_flag(mini_detail):
     from openmcp.apie import convert_openapi2 as conv
+    from openmcp.apie.local_store import find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
-    path, method, op = metadata.find_api_in_doc(doc, "ListServers")
+    path, method, op = find_api_in_doc(doc, "ListServers")
     out = metadata.format_api_detail(doc, "ECS", path, method, op)
     pid = [p for p in out["parameters"] if p["name"] == "project_id"][0]
     assert pid["required"] is True

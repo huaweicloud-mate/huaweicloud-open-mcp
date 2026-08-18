@@ -9,6 +9,7 @@ mock 端点行为（实测确认）：
 
 import json
 
+from openmcp.apie import catalog
 from openmcp.apie.mock import MockApiClient
 from openmcp.safety import policy
 from openmcp.tools.service import ServiceConfig, ToolService
@@ -34,12 +35,14 @@ MINI_OPENAPI_DOC = {
 }
 
 
-def _service(tmp_path, rules):
+def _service(tmp_path, monkeypatch, rules):
+    monkeypatch.setenv("HUAWEICLOUD_MCP_DATA_ROOT", str(tmp_path))
+    catalog._stores.clear()
     out = tmp_path / "data" / "openapi" / "ECS"
     out.mkdir(parents=True)
     (out / "LifecycleManagement.json").write_text(
         json.dumps(MINI_OPENAPI_DOC, ensure_ascii=False), encoding="utf-8")
-    return ToolService(ServiceConfig(mock=True, policy_rules=rules, data_root=tmp_path))
+    return ToolService(ServiceConfig(mock=True, policy_rules=rules, allow_live=False))
 
 
 def test_mock_list_servers_details():
@@ -63,16 +66,16 @@ def test_mock_status_code_non_200_empty_body():
     assert resp["body"] is None
 
 
-def test_service_execute_mock_end_to_end(tmp_path):
-    service = _service(tmp_path, RULES_ALLOW_ECS)
+def test_service_execute_mock_end_to_end(tmp_path, monkeypatch):
+    service = _service(tmp_path, monkeypatch, RULES_ALLOW_ECS)
     out = service.execute_api("ECS", "ListServersDetails")
     assert out["ok"] is True
     assert out["status"] == 200
     assert "servers" in out["body"]
 
 
-def test_service_execute_mock_denied(tmp_path):
-    service = _service(tmp_path, policy.parse_policy(["ECS:*Show*=allow", "*=deny"]))
+def test_service_execute_mock_denied(tmp_path, monkeypatch):
+    service = _service(tmp_path, monkeypatch, policy.parse_policy(["ECS:*Show*=allow", "*=deny"]))
     out = service.execute_api("ECS", "ListServersDetails")
     assert out["ok"] is False
     assert "policy" in out["reason"]

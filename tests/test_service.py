@@ -9,7 +9,10 @@ from openmcp.tools.service import ServiceConfig, ToolService
 
 
 def _service(workdir, **kwargs) -> ToolService:
-    config = ServiceConfig(data_root=Path(workdir), **kwargs)
+    config = ServiceConfig(**kwargs)
+    # 单元测试不联网：allow_live=False 确保不触发实时拉取
+    if "allow_live" not in kwargs:
+        config.allow_live = False
     return ToolService(config)
 
 

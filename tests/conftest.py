@@ -64,13 +64,18 @@ def mini_count():
 
 
 @pytest.fixture
-def workdir(tmp_path):
-    """每个测试独立的临时工作区，含迷你 raw/ 数据。"""
+def workdir(tmp_path, monkeypatch):
+    """每个测试独立的临时工作区，含迷你 raw/ 数据。
+    设置 HUAWEICLOUD_MCP_DATA_ROOT 环境变量让 catalog 使用此根。"""
     wd = tmp_path / "ws"
     raw = wd / "raw"
     raw.mkdir(parents=True)
     for name in ("apis_count.json", "apis_docs.json", "huawei_products.json", "apis_detail.json"):
         shutil.copy(fixture_path(name), raw / name)
+    monkeypatch.setenv("HUAWEICLOUD_MCP_DATA_ROOT", str(wd))
+    # 清空上次测试可能残留的 store registry
+    from openmcp.apie import catalog
+    catalog._stores.clear()
     return str(wd)
 
 

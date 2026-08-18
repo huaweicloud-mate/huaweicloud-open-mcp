@@ -1,19 +1,17 @@
 """ToolService：六工具的业务编排层。
 
-职责：数据加载（raw/ + data/openapi，路径可注入）、配置（region/mock/policy/凭证）、
-调用纯函数层（tools.metadata / tools.execute）与执行客户端。
+职责：配置（region/mock/policy/凭证/allow_live）、调用纯函数层（tools.metadata / tools.execute）
+与执行客户端；元数据加载委托 apie.catalog 功能接口。
 """
 
-import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from ..apie import catalog
 from ..apie import mock as apie_mock
-from ..apie import region_paths
+from ..apie.local_store import ApiHit
 from ..auth.credentials import Credentials
-from ..paths import project_root
 from ..safety import policy as safety_policy
 from ..signer.client import HttpClient
 from ..types import (
@@ -31,10 +29,6 @@ logger = logging.getLogger("openmcp.tools.service")
 
 DEFAULT_REGION = "cn-north-4"
 
-PRODUCTS_FILE = "raw/huawei_products.json"
-DOCS_FILE = "raw/apis_docs.json"
-COUNT_FILE = "raw/apis_count.json"
-
 
 @dataclass
 class ServiceConfig:
@@ -43,7 +37,7 @@ class ServiceConfig:
     policy_rules: Sequence[safety_policy.PolicyRule] | None = None
     credentials: Credentials | None = None
     mock_base: str = apie_mock.MOCK_BASE
-    data_root: Path | None = None
+    allow_live: bool = True
     http_client_factory: Callable[[], execute.ApiExecutor] | None = None
     mock_client_factory: Callable[[], apie_mock.MockApiClient] | None = None
 
@@ -52,12 +46,6 @@ class ToolService:
     def __init__(self, config: ServiceConfig | None = None):
         self.config = config or ServiceConfig()
         self._mock_client: apie_mock.MockApiClient | None = None
-        self._groups_cache: list[dict[str, Any]] | None = None
-        self._groups_loaded = False
-        self._docs_cache: list[dict[str, Any]] | None = None
-        self._docs_loaded = False
-        self._counts_cache: dict[str, int] | None = None
-        self._counts_loaded = False
 
     def _make_http_client(self) -> execute.ApiExecutor:
         if self.config.http_client_factory is not None:
@@ -71,85 +59,34 @@ class ToolService:
             self._mock_client = apie_mock.MockApiClient(base_url=self.config.mock_base)
         return self._mock_client
 
-    # ---------- 数据访问 ----------
-
-    @property
-    def data_root(self) -> Path:
-        return self.config.data_root or project_root()
-
-    def _load_json(self, rel_path: str) -> Any | None:
-        full = self.data_root / rel_path
-        if not full.exists():
-            return None
-        with open(full, encoding="utf-8") as f:
-            return json.load(f)
-
-    def _groups(self) -> list[dict[str, Any]] | None:
-        if not self._groups_loaded:
-            d = self._load_json(PRODUCTS_FILE)
-            self._groups_cache = d.get("groups", []) if d else None
-            self._groups_loaded = True
-        return self._groups_cache
-
-    def _docs(self) -> list[dict[str, Any]] | None:
-        if not self._docs_loaded:
-            d = self._load_json(DOCS_FILE)
-            self._docs_cache = d.get("apis", []) if d else None
-            self._docs_loaded = True
-        return self._docs_cache
-
-    def _counts(self) -> dict[str, int]:
-        if not self._counts_loaded:
-            d = self._load_json(COUNT_FILE)
-            self._counts_cache = ({g["product_short"].upper(): g["api_count"]
-                             for g in d.get("groups", [])} if d else {})
-            self._counts_loaded = True
-        return self._counts_cache or {}
-
     def load_api_doc(self, product: str, api_name: str, region: str | None = None
-                     ) -> tuple[dict[str, Any], str, str, dict[str, Any]] | None:
+                     ) -> ApiHit | None:
         """在 data/openapi 中查找接口所在 tag 文档，返回 (doc, path, method, op) 或 None。"""
-        root = self.data_root / region_paths.openapi_out_dir(region or self.config.region)
-        if not root.is_dir():
-            return None
-        base = None
-        target_dir = (product or "").lower()
-        for d in root.iterdir():
-            if d.is_dir() and d.name.lower() == target_dir:
-                base = d
-                break
-        if base is None:
-            return None
-        for fn in sorted(base.iterdir()):
-            if fn.suffix != ".json" or fn.name.startswith("."):
-                continue
-            with open(fn, encoding="utf-8") as f:
-                doc = json.load(f)
-            hit = metadata.find_api_in_doc(doc, api_name)
-            if hit:
-                path, method, op = hit
-                return doc, path, method, op
-        return None
+        r = catalog.find_api_doc(product, api_name, region or self.config.region,
+                                 allow_live=self.config.allow_live)
+        return r.data
 
     # ---------- 元数据工具 ----------
 
     def list_products(self, category: str | None = None,
                       keyword: str | None = None) -> ProductListResult | ToolError:
         logger.info("list_products category=%s keyword=%s", category or "-", keyword or "-")
-        groups = self._groups()
+        r = catalog.get_products(allow_live=self.config.allow_live)
+        groups = r.data
         if groups is None:
             logger.warning("list_products metadata=missing")
-            return {"ok": False, "reason": "本地元数据缺失，请先运行 api-refresh products"}
-        return metadata.list_products(groups, counts=self._counts(),
+            return {"ok": False, "reason": "产品列表不可用（本地缺失且实时拉取失败）"}
+        return metadata.list_products(groups, counts=catalog.get_api_counts(),
                                       category=category, keyword=keyword)
 
     def get_product(self, product: str) -> ProductResult | ToolError:
         logger.info("get_product product=%s", product)
-        groups = self._groups()
+        r = catalog.get_products(allow_live=self.config.allow_live)
+        groups = r.data
         if groups is None:
             logger.warning("get_product product=%s metadata=missing", product)
-            return {"ok": False, "reason": "本地元数据缺失，请先运行 api-refresh products"}
-        out = metadata.get_product(groups, product, counts=self._counts())
+            return {"ok": False, "reason": "产品列表不可用（本地缺失且实时拉取失败）"}
+        out = metadata.get_product(groups, product, counts=catalog.get_api_counts())
         if out is None:
             logger.warning("get_product product=%s result=not_found", product)
             return {"ok": False, "reason": f"产品 {product} 未找到"}
@@ -159,11 +96,12 @@ class ToolService:
                   limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
         logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d",
                     product, tag or "-", search or "-", limit, offset)
-        docs = self._docs()
-        if docs is None:
+        r = catalog.get_apis(product=product, allow_live=self.config.allow_live)
+        apis = r.data
+        if apis is None:
             logger.warning("list_apis product=%s metadata=missing", product)
-            return {"ok": False, "reason": "本地接口索引缺失，请先运行 api-refresh docs"}
-        return metadata.list_apis(docs, product, tag=tag, search=search, limit=limit, offset=offset)
+            return {"ok": False, "reason": "接口索引不可用（本地缺失且实时拉取失败）"}
+        return metadata.list_apis(apis, product, tag=tag, search=search, limit=limit, offset=offset)
 
     def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
         region = region or self.config.region
