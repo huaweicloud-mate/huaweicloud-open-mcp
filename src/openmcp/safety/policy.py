@@ -56,6 +56,15 @@ def evaluate(rules: Sequence[PolicyRule], product: str, api: str) -> bool:
     return False
 
 
+def check(rules: Sequence[PolicyRule] | None, product: str, api: str) -> str | None:
+    """检查执行是否被策略允许。返回 None 表示允许，返回字符串为拒绝原因。"""
+    if rules is None:
+        return "safety policy 未配置，execute_api 全部拒绝"
+    if not evaluate(rules, product, api):
+        return f"safety policy 拒绝执行 {product}:{api}"
+    return None
+
+
 def load_policy_file(path: str) -> list[PolicyRule]:
     with open(path, encoding="utf-8") as f:
         content = f.read()

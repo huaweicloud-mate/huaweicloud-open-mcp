@@ -4,15 +4,14 @@
 其它 status_code 返回空 body。
 """
 
-import json
 import logging
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
 
 from ..types import ClientResponse
+from .http import parse_body
 
 logger = logging.getLogger("openmcp.apie.mock")
 
@@ -41,7 +40,7 @@ class MockApiClient:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     return {"status": resp.status,
                             "headers": dict(resp.headers),
-                            "body": self._parse_body(resp.read())}
+                            "body": parse_body(resp.read())}
             except urllib.error.HTTPError as e:
                 last_err = e
                 if e.code == 429 and attempt < self.max_retries:
@@ -50,7 +49,7 @@ class MockApiClient:
                                    attempt + 1, self.max_retries, sleep_s)
                     time.sleep(sleep_s)
                     continue
-                return {"status": e.code, "headers": dict(e.headers), "body": self._parse_body(e.read())}
+                return {"status": e.code, "headers": dict(e.headers), "body": parse_body(e.read())}
             except Exception as e:
                 last_err = e
                 if attempt < self.max_retries:
@@ -60,13 +59,3 @@ class MockApiClient:
         if last_err is None:
             raise RuntimeError("mock request failed without exception")
         raise last_err
-
-    @staticmethod
-    def _parse_body(raw: bytes) -> Any:
-        if not raw:
-            return None
-        text = raw.decode("utf-8", errors="replace")
-        try:
-            return json.loads(text)
-        except Exception:
-            return text

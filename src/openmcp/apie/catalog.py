@@ -13,7 +13,8 @@ from typing import Any, cast
 
 from ..paths import project_root
 from . import http
-from .local_store import ApiHit, LocalStore, find_api_in_doc
+from .live_fallback import LiveFallback
+from .local_store import LocalStore
 
 logger = logging.getLogger("openmcp.apie.catalog")
 
@@ -21,7 +22,6 @@ ENV_DATA_ROOT = "HUAWEICLOUD_MCP_DATA_ROOT"
 
 BASE_PRODUCTS = "https://console.huaweicloud.com/apiexplorer/new/v5/products"
 BASE_APIS = "https://console.huaweicloud.com/apiexplorer/new/v3/apis"
-BASE_DETAIL = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
 PAGE_SIZE = 100
 
 _stores: dict[str, LocalStore] = {}
@@ -69,16 +69,6 @@ def _fetch_apis_live(product_short: str) -> list[dict[str, Any]]:
         if offset >= (d.get("count") or offset + 1):
             break
     return apis
-
-def _fetch_detail_live(product_short: str, name: str, region: str) -> dict[str, Any]:
-    params = urllib.parse.urlencode(
-        {"product_short": product_short, "name": name, "region_id": region})
-    d = http.fetch_json(f"{BASE_DETAIL}?{params}", retries=4, backoff=2.0)
-    if isinstance(d, dict) and d.get("error_code") == "APIEXPLORER.1055":
-        fallback = urllib.parse.urlencode(
-            {"product_short": product_short, "name": name})
-        d = http.fetch_json(f"{BASE_DETAIL}?{fallback}", retries=4, backoff=2.0)
-    return d
 
 
 # ---------- 公共接口 ----------
@@ -133,7 +123,7 @@ def get_api_counts() -> dict[str, int]:
 def find_api_doc(product: str, api: str, region: str,
                  allow_live: bool = False) -> CatalogResult:
     """查找接口 OpenAPI 文档。本地 data/openapi 命中返回 local；
-    未命中时 allow_live=True 实时拉并回写缓存；否则 miss。
+    未命中时 allow_live=True 委托 LiveFallback 适配器实时拉取并回写缓存；否则 miss。
     返回 data 为 (doc, path, method, op) 或 None。
     """
     store = _get_store()
@@ -143,19 +133,11 @@ def find_api_doc(product: str, api: str, region: str,
     if not allow_live:
         return CatalogResult(data=None, source="miss")
     try:
-        raw = _fetch_detail_live(product, api, region)
-        if not isinstance(raw, dict) or not raw.get("paths"):
-            return CatalogResult(data=None, source="miss")
-        from . import convert_openapi2 as conv
-        doc = conv.convert_api(raw)
-        match = find_api_in_doc(doc, api)
-        if match is None:
-            return CatalogResult(data=None, source="miss")
-        path, method, op = match
-        result: ApiHit = (doc, path, method, op)
-        key = ((product or "").lower(), api, region)
-        store.set_api_cache(key, result)
-        return CatalogResult(data=result, source="live")
+        fallback = LiveFallback(store)
+        result = fallback.fetch(product, api, region)
+        if result is not None:
+            return CatalogResult(data=result, source="live")
+        return CatalogResult(data=None, source="miss")
     except Exception:
         logger.warning("find_api_doc live fetch failed for %s:%s region=%s",
                        product, api, region, exc_info=True)

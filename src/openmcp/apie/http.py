@@ -89,3 +89,14 @@ def fetch_json_429(url: str, *, retries: int = 10, backoff_429: float = 20.0,
 
 def query_url(base: str, params: dict[str, Any]) -> str:
     return f"{base}?{urllib.parse.urlencode(params)}"
+
+
+def parse_body(raw: bytes) -> Any:
+    """解析 HTTP 响应体为 JSON 或原始文本。"""
+    if not raw:
+        return None
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        return json.loads(text)
+    except Exception:
+        return text

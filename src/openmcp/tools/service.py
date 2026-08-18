@@ -154,15 +154,12 @@ class ToolService:
                       params: dict[str, Any]) -> ExecuteResult:
         """mock 模式：policy 检查后路由到 API Explorer mock 端点。"""
         rules = self.config.policy_rules
-        if rules is None:
-            logger.warning("execute %s:%s region=%s mode=mock policy=unconfigured",
-                           product, api, region)
-            return {"ok": False, "reason": "safety policy 未配置，execute_api 全部拒绝"}
-        allowed = safety_policy.evaluate(rules, product, api)
-        logger.info("execute %s:%s region=%s mode=mock policy=%s",
-                    product, api, region, "allow" if allowed else "deny")
-        if not allowed:
-            return {"ok": False, "reason": f"safety policy 拒绝执行 {product}:{api}"}
+        err = safety_policy.check(rules, product, api)
+        if err:
+            logger.warning("execute %s:%s region=%s mode=mock policy=%s",
+                           product, api, region,
+                           "unconfigured" if rules is None else "deny")
+            return {"ok": False, "reason": err}
         status_code = params.get("_status_code", 200)
         number = params.get("_number", 1)
         resp = self._make_mock_client().mock_request(product, api, region,

@@ -111,15 +111,14 @@ def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
                 *, policy_rules: Sequence[safety_policy.PolicyRule] | None,
                 client: ApiExecutor, credentials: Credentials | None = None) -> ExecuteResult:
     """执行真实 API：safety policy → 请求构建 → 调用 → 规范化。"""
-    if policy_rules is None:
-        logger.warning("execute %s:%s region=%s mode=real policy=unconfigured",
-                       product, api_name, region)
-        return _refuse("safety policy 未配置，execute_api 全部拒绝")
-    allowed = safety_policy.evaluate(policy_rules, product, api_name)
-    logger.info("execute %s:%s region=%s mode=real policy=%s",
-                product, api_name, region, "allow" if allowed else "deny")
-    if not allowed:
-        return _refuse(f"safety policy 拒绝执行 {product}:{api_name}")
+    err = safety_policy.check(policy_rules, product, api_name)
+    if err:
+        logger.warning("execute %s:%s region=%s mode=real policy=%s",
+                       product, api_name, region,
+                       "unconfigured" if policy_rules is None else "deny")
+        return _refuse(err)
+    logger.info("execute %s:%s region=%s mode=real policy=allow",
+                product, api_name, region)
 
     filled, query, body, headers, err = build_request(op, path, params, credentials)
     if err:

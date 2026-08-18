@@ -8,6 +8,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from ..apie.http import parse_body
 from ..auth.credentials import Credentials
 from ..types import ClientResponse
 from . import sign
@@ -92,7 +93,7 @@ class HttpClient:
                     method.upper(), host, path, status, elapsed_ms)
         if body is not None:
             logger.debug("request body: %s", json.dumps(body, ensure_ascii=False)[:500])
-        return {"status": status, "headers": resp_headers, "body": self._parse_body(raw)}
+        return {"status": status, "headers": resp_headers, "body": parse_body(raw)}
 
     @staticmethod
     def _flatten(query: dict[str, Any]) -> dict[str, Any]:
@@ -102,13 +103,3 @@ class HttpClient:
                 continue
             flat[k] = str(v).lower() if isinstance(v, bool) else v
         return flat
-
-    @staticmethod
-    def _parse_body(raw: bytes) -> Any:
-        if not raw:
-            return None
-        text = raw.decode("utf-8", errors="replace")
-        try:
-            return json.loads(text)
-        except Exception:
-            return text
