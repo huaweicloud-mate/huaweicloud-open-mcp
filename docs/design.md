@@ -7,11 +7,11 @@
 
 | 目标 | 说明 |
 | --- | --- |
-| 全量覆盖 | 218 产品 / 17666 接口，通过元数据驱动而非逐服务编码 |
+| 全量覆盖 | 219 产品 / 17666 接口，通过元数据驱动而非逐服务编码 |
 | 上下文可控 | 永不把全量 API 塞入 LLM 上下文，LLM 渐进收窄（产品 → 目录 → 接口 → 执行） |
 | 零 SDK 依赖 | SDK-HMAC-SHA256 签名自实现，执行层元数据驱动直连 HTTP |
 | 安全前置 | `execute_api` 强制过 safety policy（阿里云式 allowlist/denylist） |
-| 可验证 | 全链可 mock（API Explorer mock 端点），TDD 五接缝 |
+| 可验证 | 全链可 mock（API Explorer mock 端点），TDD 六接缝（S1–S6） |
 
 ## 2. 总体架构
 
@@ -152,11 +152,11 @@ flowchart TD
     L["返回 ExecuteResult"]
 
     A --> B --> C
-    C -->|否| X1[{"ok:false, reason:接口未找到"}]
+    C -->|否| X1["{ok:false, reason:接口未找到}"]
     C -->|是| D
-    D -->|否| X2[{"ok:false, reason:policy 未配置"}]
+    D -->|否| X2["{ok:false, reason:policy 未配置}"]
     D -->|是| E
-    E -->|deny| X3[{"ok:false, reason:policy 拒绝"}]
+    E -->|deny| X3["{ok:false, reason:policy 拒绝}"]
     E -->|allow| F
     F -->|是| J --> K --> L
     F -->|否| G --> H --> I --> K --> L
@@ -190,6 +190,7 @@ flowchart LR
 - 端点：`https://apiexplorer.cn-north-4.myhuaweicloud.com/v1/mock/{product_short}/{api_name}?status_code=200&number=1&region_id={region}`
 - 行为（实测）：开放端点无需凭证；HTTP 状态恒为 200；`status_code=200` 返回与真实 API 同构的 mock 数据，其它值返回空 body
 - 用途：集成测试（S4）、`--mock` 启动参数下无凭证全链路演示；错误路径（429/4xx/5xx）由单元层 urllib 打桩覆盖
+- `--mock-base`（环境变量 `HUAWEICLOUD_MCP_MOCK_BASE`）可自定义端点基础地址：benchmark 本地 stub 用（确定性响应隔离网络抖动）
 
 ## 5. 模块组织
 
@@ -215,13 +216,20 @@ graph LR
         end
         SF["safety/policy.py"]
         AU["auth/credentials.py"]
+        LG["logconf.py"]
     end
     DS["raw/ + data/openapi/<br/>（产物，不入库）"]
+    subgraph BNM["benchmarks/（LLM Agent 级评估，S6）"]
+        BC["cases/（YAML 用例）"]
+        BSC["scorer / report / trace<br/>opencode_db（纯函数）"]
+        BR["runner / stub_server<br/>（opencode run 驱动）"]
+    end
 
     SRV --> SV --> MT
     SV --> EX --> SN --> CL
     SV --> SF
     SV --> AU
+    SRV --> LG
     SRV --> T
     MT --> T
     EX --> T
@@ -230,6 +238,8 @@ graph LR
     AP --> DS
     SV --> DS
     SV --> MK
+    BR -.opencode run（benchdir 配置 MCP）.-> SRV
+    BR --> BC --> BSC
 ```
 
 ### 类型设计（结果信封）
@@ -237,7 +247,7 @@ graph LR
 - 共享 TypedDict 词表（`types.py`）：`ClientResponse` / `ExecuteResult` / `ToolError` + 六工具结果信封（均含 `ok: Literal[True]`）
 - 纯函数直接产出完整信封；失败态 `ToolError(ok: Literal[False], reason)` 由编排层构造——服务方法返回 `X | ToolError` 联合
 - `ApiDetailResult` 用函数式 TypedDict 承载非标识符键 `x-constraint`
-- mypy 全量检查：`disallow_untyped_defs`，29 个源文件 0 错误
+- mypy 全量检查：`disallow_untyped_defs`，38 个源文件 0 错误
 
 ## 6. 安全设计
 
@@ -285,20 +295,22 @@ flowchart LR
 | S3 | 6 工具纯函数 | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段 |
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + urllib 打桩错误注入 | mock 端点返回 |
 | S5 | APIE 管道各阶段 | 单测 + 迷你样本集成 + e2e 全量 | Swagger 2.0 schema |
+| S6 | benchmark 纯函数（case 加载校验 / 分层评分 / 统计基线 / trace 提取 / DB token 读取 / 本地 stub） | 纯函数单测（迷你 fixture / 临时 sqlite / 回环 HTTP） | 手写字面量 + 独立构造样例调用序列 |
 
 纪律：red→green 垂直切片；只 mock 系统边界（外部 HTTP）；期望值来自独立真值，禁止同义反复。
 
 ## 9. 已实现能力清单
 
-- [x] APIE 全量管道：218 产品 / 17666 接口 → 2714 OpenAPI 2.0 文档，Swagger 校验 invalid=0
+- [x] APIE 全量管道：219 产品 / 17666 接口 → 2714 OpenAPI 2.0 文档，Swagger 校验 invalid=0
 - [x] 6 工具：list_products / get_product / list_apis（含 tag_groups）/ get_api / get_api_examples / execute_api
 - [x] server instructions + 渐进式工作流指引
 - [x] SDK-HMAC-SHA256 签名（官方向量 + 真实云验证）
 - [x] safety policy（阿里云式白名单，无 policy 全拒）
-- [x] mock 模式全链路（`--mock`）
+- [x] mock 模式全链路（`--mock` / `--mock-base`）
 - [x] 类型系统：TypedDict 结果信封 + mypy 0 错误
-- [x] 131 单测+集成 / 6 e2e（真实凭证 3 + 渐进式工作流 3，`.env` 加载）
+- [x] 192 单测+集成 / 6 e2e（真实凭证 3 + 渐进式工作流 3，`.env` 加载）
 - [x] 日志体系：文件为主轮转 + stderr 兜底，execute 审计，脱敏红线
+- [x] LLM Agent 级工作流 benchmark（S6）：自然语言用例驱动 opencode，评估精度/耗时/token，stub/real 双后端 + 基线回归（`benchmarks/`）
 
 ## 10. 二期路线
 

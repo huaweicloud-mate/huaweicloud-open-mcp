@@ -1,4 +1,4 @@
-"""ToolService：七工具的业务编排层。
+"""ToolService：六工具的业务编排层。
 
 职责：数据加载（raw/ + data/openapi，路径可注入）、配置（region/mock/policy/凭证）、
 调用纯函数层（tools.metadata / tools.execute）与执行客户端。
