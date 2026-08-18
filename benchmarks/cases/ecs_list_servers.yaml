@@ -1,0 +1,7 @@
+id: ecs_list_servers
+prompt: 帮我查询北京四地域的云服务器列表
+expect:
+  execute:
+    - {product: ECS, api: ListServersDetails}
+    - {product: ECS, api: ListCloudServers}
+  answer: 服务器

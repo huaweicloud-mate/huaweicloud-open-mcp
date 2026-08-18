@@ -1,0 +1,4 @@
+id: ecs_browse_apis
+prompt: ECS 产品有哪些生命周期管理相关的接口？告诉我接口名
+expect:
+  answer: ListServersDetails

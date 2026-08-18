@@ -31,7 +31,7 @@
 核心原则：
 
 - **渐进式工作流**：LLM 决策驱动收窄——`list_products` 定产品 → `list_apis`（含 `tag_groups` 全量 tag 概览）定目录 → `get_api` 读文档 → `execute_api` 执行；完整指引写在 server instructions（initialize 响应）与各工具 description。
-- **TDD**：red→green 垂直切片，一次一个接缝、一个测试、一个最小实现。测试只写在预先确认的接缝（S1–S5）上；只 mock 系统边界（外部 HTTP），不 mock 自有模块；期望值必须来自独立真值（官方签名向量、已知 mock 响应），禁止同义反复断言。写测试前如接缝清单有变，先与用户确认。
+- **TDD**：red→green 垂直切片，一次一个接缝、一个测试、一个最小实现。测试只写在预先确认的接缝（S1–S6）上；只 mock 系统边界（外部 HTTP），不 mock 自有模块；期望值必须来自独立真值（官方签名向量、已知 mock 响应），禁止同义反复断言。写测试前如接缝清单有变，先与用户确认。
 - **APIE 管道参考 `../apis` 项目重新实现**：阶段划分、断点续传、tag 映射、Swagger 2.0 校验规则与其保持一致；本仓库为独立实现，不 import apis 代码。
 - **安全**：`execute_api` 必须先过 safety policy（阿里云式 allowlist/denylist 模式匹配）；未配置 policy 时拒绝所有执行；凭证必须是最小权限 IAM 用户的 AK/SK。
 - **mock 端点**（`https://apiexplorer.cn-north-4.myhuaweicloud.com/v1/mock/<product_short>/<api_name>?status_code=200&number=1&region_id=<region_id>`）：开放端点、无需凭证，用于集成测试与 `--mock` 模式全链路验证。实测行为：HTTP 状态恒为 200；`status_code=200` 返回与真实 API 同构的 mock 成功数据，其它 status_code 返回空 body（错误路径用单元层 urllib 打桩覆盖）。
@@ -57,6 +57,7 @@
 | `src/openmcp/server.py` | stdio MCP server 装配（mcp SDK，业务全部委托 ToolService） | — | — |
 | `configs/` | safety policy 示例、tag 中文→英文翻译映射 | — | — |
 | `tests/` | TDD 测试（见「测试」章节） | — | — |
+| `benchmarks/` | LLM Agent 级工作流 benchmark（cases/ 用例、stub_server、scorer/report 纯函数、runner；`results/` 运行产物不入库，`baseline-*.json` 除外） | — | — |
 
 数据流（端到端）：`APIE 管道 → data/openapi/ + raw/apis_docs.json → 元数据工具（get_api 等）→ execute_api → safety 检查 → 签名 → 华为云 API（或 mock 端点）`。
 
@@ -100,9 +101,21 @@ MCP server 启动（stdio，由 MCP 客户端拉起）：
 ```bash
 uv run huaweicloud-open-mcp                    # 真实模式：AK/SK 签名直连华为云
 uv run huaweicloud-open-mcp --mock             # mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）
+uv run huaweicloud-open-mcp --mock-base http://127.0.0.1:8000  # 自定义 mock 端点基础地址（benchmark 本地 stub 用；环境变量 HUAWEICLOUD_MCP_MOCK_BASE）
 uv run huaweicloud-open-mcp --policy configs/safety-policy.example.json  # 指定 safety policy 文件
 uv run huaweicloud-open-mcp --log-level DEBUG  # 日志级别（默认 INFO）；--log-file 指定文件（默认 logs/huaweicloud-open-mcp.log）
 ```
+
+工作流 benchmark（LLM Agent 级，`opencode run` 驱动，评估精度/耗时/token）：
+
+```bash
+uv run python -m benchmarks.runner --dry-run                  # 只校验用例
+uv run python -m benchmarks.runner --backend stub --repeat 3  # stub 后端（确定性，默认）；real 为真实 mock 端点
+uv run python -m benchmarks.runner --baseline-save            # 保存基线到 benchmarks/results/baseline-{backend}.json
+uv run python -m benchmarks.runner --baseline-compare --fail-on-regression  # 对比基线，pass 率回退退出码 3
+```
+
+benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径、spike 结论）。
 
 前置依赖：`uv`；Swagger 2.0 schema 文件 `/tmp/swagger2_schema.json`（`curl -sL https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json`），丢失后重新下载。
 
@@ -117,10 +130,11 @@ uv run huaweicloud-open-mcp --log-level DEBUG  # 日志级别（默认 INFO）�
 | S3 | 6 个工具业务函数 `tools.*` | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/） |
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + 单元层 urllib 打桩注入错误（429/4xx/5xx） | mock 端点返回（HTTP 恒 200；`status_code` 非 200 返回空 body） |
 | S5 | APIE 管道各阶段转换 | 纯函数单测 + 迷你样本集成 + `@pytest.mark.e2e` 全量 | Swagger 2.0 schema 校验 |
+| S6 | benchmark 纯函数（`benchmarks/cases.py` 加载校验、`scorer.py` 分层评分、`report.py` 统计/基线对比、`trace.py` export/NDJSON 提取、`opencode_db.py` token 读取、`stub_server.py` 本地回环） | 纯函数单测（trace 用 spike 实测格式的迷你 fixture；DB 用临时 sqlite；stub 用回环 HTTP） | 手写字面量 + 独立构造的样例调用序列 |
 
 分层与纪律：
 
-- **单元测试**（`tests/test_signer.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`）：纯函数，不联网、不碰真实数据；service 层用数据根路径注入 + 客户端工厂注入。
+- **单元测试**（`tests/test_signer.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`、`tests/test_bench_*.py`）：纯函数，不联网、不碰真实数据；service 层用数据根路径注入 + 客户端工厂注入。
 - **集成测试**（`tests/test_execute_mock.py`）：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名。
 - **E2E 测试**（`tests/test_e2e.py`：真实 AK/SK 只读调用；`tests/test_workflow_e2e.py`：渐进式工作流全链，mock 模式 + 真实 data/openapi 产物）：标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。
 - red→green 垂直切片，禁止先写全部测试再写实现；禁止 mock 自有模块；期望值禁止用被测代码同法重算。
@@ -149,9 +163,10 @@ uv run huaweicloud-open-mcp --log-level DEBUG  # 日志级别（默认 INFO）�
 - APIE 管道阶段增删，或产物路径/命名规则变化。
 - MCP 工具增删或输入输出契约变化。
 - safety policy 语法、默认行为（无 policy 时拒绝/放行）变化。
-- 测试接缝（S1–S5）增删或重新确认。
+- 测试接缝（S1–S6）增删或重新确认。
 - `pyproject.toml` 依赖或 CLI 入口变化（`api-refresh`/`api-docs`/`huaweicloud-open-mcp`）。
-- mock 端点地址或 `--mock` 模式行为变化。
+- mock 端点地址或 `--mock` 模式行为变化（含 `--mock-base`）。
+- benchmark 用例 schema、评分口径、runner 参数变化 → 同步 `benchmarks/README.md`。
 
 以下变化通常不需要更新：
 

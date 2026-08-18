@@ -10,6 +10,7 @@ from typing import Literal, cast
 
 from mcp.server.mcpserver import MCPServer
 
+from .apie import mock as apie_mock
 from .auth import credentials as cred_mod
 from .logconf import configure_logging
 from .safety import policy as safety
@@ -56,11 +57,13 @@ def build_config(args: argparse.Namespace) -> ServiceConfig:
             else os.environ.get("HUAWEICLOUD_MCP_MOCK", "") in ("1", "true", "yes"))
     policy_file = args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")
     region = args.region or os.environ.get("HUAWEICLOUD_MCP_REGION") or None
+    mock_base = args.mock_base or os.environ.get("HUAWEICLOUD_MCP_MOCK_BASE") or None
     return ServiceConfig(
         region=region or "cn-north-4",
         mock=mock,
         policy_rules=safety.load_policy_file(policy_file) if policy_file else None,
         credentials=None if mock else cred_mod.get_credentials(),
+        mock_base=mock_base or apie_mock.MOCK_BASE,
     )
 
 
@@ -126,6 +129,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="huaweicloud-open-mcp", description="华为云 Open MCP server（stdio）")
     parser.add_argument("--mock", action="store_true", default=None,
                         help="mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）")
+    parser.add_argument("--mock-base", default=None,
+                        help="mock 端点基础地址（默认 API Explorer mock；环境变量 HUAWEICLOUD_MCP_MOCK_BASE）")
     parser.add_argument("--policy", default=None, help="safety policy 文件路径")
     parser.add_argument("--region", default=None, help="默认 region（默认 cn-north-4）")
     parser.add_argument("--log-level", default=None, help="日志级别（默认 INFO）")

@@ -25,7 +25,7 @@ packages = ["src/openmcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 markers = [
     "e2e: 真实数据/凭证端到端测试（默认跳过，用 -m e2e 启用）",
 ]

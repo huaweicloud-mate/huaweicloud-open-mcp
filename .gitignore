@@ -16,6 +16,10 @@ data/
 # 日志（不入库）
 logs/
 
+# benchmark 运行产物（原始数据不入库，基线保留用于回归对比）
+benchmarks/results/
+!benchmarks/results/baseline-*.json
+
 # 中间产物
 apis_detail_by_tag/
 apis_detail_by_tag_openapi2/

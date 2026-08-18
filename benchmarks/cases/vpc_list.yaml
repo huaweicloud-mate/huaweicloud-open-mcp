@@ -1,0 +1,7 @@
+id: vpc_list
+prompt: 列出我名下所有的 VPC
+expect:
+  execute:
+    product: VPC
+    api: ListVpcs
+  answer: VPC
