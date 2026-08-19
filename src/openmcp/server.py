@@ -1,18 +1,26 @@
 """华为云 Open MCP server：stdio 装配（mcp SDK）。
 
-只做 MCP 协议装配，全部业务逻辑委托 ToolService。
+只做 MCP 协议装配，全部业务逻辑委托 ToolService / discover helpers。
+支持两种运行模式（二选一，工具集互斥）：
+- openapi（默认）：6 工具直连华为云 OpenAPI
+- discover: 7 工具发现连接云端 MCP server
 """
 
 import argparse
+import json
 import logging
 import os
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from mcp.server.mcpserver import MCPServer
 
 from .apie import mock as apie_mock
 from .auth import credentials as cred_mod
 from .logconf import configure_logging
+from .mcpdiscover import catalog as discover_catalog
+from .mcpdiscover.config import DiscoverConfig
+from .mcpdiscover.manager import SessionManager
+from .mcpdiscover.sdk import SdkSessionClient
 from .safety import policy as safety
 from .tools.service import ServiceConfig, ToolService
 from .types import (
@@ -20,15 +28,24 @@ from .types import (
     ApiListResult,
     ExamplesResult,
     ExecuteResult,
+    McpCallResult,
+    McpConnectResult,
+    McpDisconnectResult,
+    McpServerItem,
+    McpServerListResult,
+    McpServerResult,
     ProductListResult,
     ProductResult,
+    ServerToolResult,
+    ServerToolsResult,
     ToolError,
 )
 
 logger = logging.getLogger("openmcp.server")
 
+# ---------- 指令 ----------
 
-INSTRUCTIONS = """# 华为云 Open MCP 使用指引
+INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模式）
 
 ## 推荐工作流（渐进收窄，LLM 决策）
 
@@ -51,8 +68,44 @@ INSTRUCTIONS = """# 华为云 Open MCP 使用指引
 - 产品 `is_global` 为 true 的全局级服务（如 IAM）与地域级服务认证模型不同。
 """
 
+INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现连接模式）
 
-def build_config(args: argparse.Namespace) -> ServiceConfig:
+## 推荐工作流（渐进收窄，LLM 决策）
+
+1. `list_mcp_servers`：列出华为云 MCP server 目录（含中文名/分类/认证模型），
+   根据用户任务语义用 keyword 搜索匹配候选 server；
+2. `get_mcp_server`：确认 server 详情（endpoint/传输层/认证方式/描述）；
+3. `connect_mcp_server`：建立连接（过 safety policy；真实模式 endpoint 严格取自目录）；
+4. `list_server_tools`：已连接 server 的工具摘要（工具名+首行描述+必填参数名），
+   用 `search`/`limit`/`offset` 收窄，**禁止无过滤全量拉取**；
+5. `get_server_tool`：选定候选后读**单个工具完整 schema**（参数类型/枚举/约束），
+   仅取调用目标一个，防止上下文暴涨；
+6. `call_server_tool`：代发调用（过 safety policy）；
+7. `disconnect_mcp_server`：释放连接（空闲 5 分钟自动回收，可选显式断开）。
+
+## 执行安全
+
+- `connect_mcp_server` 和 `call_server_tool` 执行前强制过 safety policy；
+- 未配置 policy 时所有连接与调用被拒绝；
+- 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的 server/tool 或询问用户。
+
+## 其它
+
+- endpoint 在真实模式下严格取自目录，不可覆盖（防目录外投毒）；
+- 目标 server 工具清单为实时拉取，不落目录以免过期；
+- 若目标 server 不存在或连接失败，检查 server id 是否匹配目录条目。
+"""
+
+
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+
+
+# ============================================================
+# OpenAPI 模式
+# ============================================================
+
+def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
     mock = (args.mock if args.mock is not None
             else os.environ.get("HUAWEICLOUD_MCP_MOCK", "") in ("1", "true", "yes"))
     policy_file = args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")
@@ -67,14 +120,12 @@ def build_config(args: argparse.Namespace) -> ServiceConfig:
     )
 
 
-LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+def build_config(args: argparse.Namespace) -> ServiceConfig:
+    """向后兼容别名。"""
+    return build_openapi_config(args)
 
 
-def build_app(service: ToolService | None = None, *, log_level: LogLevel = "INFO") -> MCPServer:
-    service = service or ToolService()
-    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
-                       instructions=INSTRUCTIONS, log_level=log_level)
-
+def _build_openapi_tools(server: MCPServer, service: ToolService) -> None:
     @server.tool()
     def list_products(category: str | None = None, keyword: str | None = None) -> ProductListResult | ToolError:
         """第一步：列出华为云产品（分类、中文名、接口数、是否全局级服务）。
@@ -122,20 +173,319 @@ def build_app(service: ToolService | None = None, *, log_level: LogLevel = "INFO
         """
         return service.execute_api(product, api, region=region, params=params)
 
+
+def build_openapi_app(service: ToolService | None = None, *,
+                      log_level: LogLevel = "INFO") -> MCPServer:
+    service = service or ToolService()
+    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
+                       instructions=INSTRUCTIONS_OPENAPI, log_level=log_level)
+    _build_openapi_tools(server, service)
     return server
 
 
+def build_app(service: ToolService | None = None, *,
+              log_level: LogLevel = "INFO") -> MCPServer:
+    """向后兼容：openapi 模式。"""
+    return build_openapi_app(service, log_level=log_level)
+
+
+# ============================================================
+# Discover 模式
+# ============================================================
+
+def build_discover_config(args: argparse.Namespace) -> DiscoverConfig:
+    mock = (args.mock if args.mock is not None
+            else os.environ.get("HUAWEICLOUD_MCP_MOCK", "") in ("1", "true", "yes"))
+    policy_file = args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")
+    catalog_path = os.environ.get("HUAWEICLOUD_MCP_SERVER_CATALOG") or DiscoverConfig.catalog_path
+    mock_base = args.mock_base or os.environ.get("HUAWEICLOUD_MCP_MOCK_BASE") or None
+    idle_timeout = int(os.environ.get("HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT",
+                                      str(DiscoverConfig.session_idle_timeout)))
+    max_sessions = int(os.environ.get("HUAWEICLOUD_MCP_MAX_SESSIONS",
+                                      str(DiscoverConfig.max_sessions)))
+    return DiscoverConfig(
+        catalog_path=catalog_path,
+        mock=mock,
+        mock_base=mock_base,
+        policy_rules=safety.load_policy_file(policy_file) if policy_file else None,
+        session_idle_timeout=idle_timeout,
+        max_sessions=max_sessions,
+    )
+
+
+def _to_mcp_server_item(entry: dict) -> McpServerItem:
+    return McpServerItem(
+        server=entry["id"],
+        name=entry["name"],
+        display_name=entry["display_name"],
+        category=entry["category"],
+        description=entry["description"],
+        auth=entry["auth"],
+        version=entry["version"],
+        endpoint=entry["endpoint"],
+    )
+
+
+def _discover_list_servers(source: discover_catalog.CatalogSource, *,
+                           category: str | None = None,
+                           keyword: str | None = None) -> McpServerListResult:
+    entries = discover_catalog.list_servers(source, category=category, keyword=keyword)
+    items = [_to_mcp_server_item(e) for e in entries]
+    return {"ok": True, "total": len(items), "servers": items}
+
+
+def _discover_get_server(source: discover_catalog.CatalogSource,
+                         server_id: str) -> McpServerResult | ToolError:
+    entry = discover_catalog.get_server(source, server_id)
+    if entry is None:
+        return {"ok": False, "reason": f"MCP server {server_id} 未找到"}
+    return {
+        "ok": True,
+        "server": entry["id"],
+        "name": entry["name"],
+        "display_name": entry["display_name"],
+        "category": entry["category"],
+        "description": entry["description"],
+        "auth": entry["auth"],
+        "version": entry["version"],
+        "endpoint": entry["endpoint"],
+    }
+
+
+SCHEMA_TRUNCATE = 16384  # ~16KB
+
+
+def _tool_summary(tool: dict[str, Any]) -> dict[str, Any]:
+    """提取工具摘要：name + 首行 description + required 参数名列表。"""
+    desc = tool.get("description", "") or ""
+    first_line = desc.split("\n")[0]
+    schema = tool.get("inputSchema") or {}
+    required: list[str] = list(schema.get("required", [])) if isinstance(schema, dict) else []
+    return {"name": tool["name"], "description": first_line, "required": required}
+
+
+def _search_tools(tools: list[dict[str, Any]], keyword: str) -> list[dict[str, Any]]:
+    kw = keyword.lower()
+    return [t for t in tools
+            if kw in t["name"].lower() or kw in (t.get("description", "") or "").lower()]
+
+
+def _safe_serialize(obj: Any) -> str:
+    try:
+        return json.dumps(obj, ensure_ascii=False)
+    except Exception:
+        return repr(obj)
+
+
+def build_discover_app(config: DiscoverConfig, *,
+                       log_level: LogLevel = "INFO") -> MCPServer:
+    catalog_source = discover_catalog.LocalCatalogSource(config.catalog_path)
+
+    manager = SessionManager(
+        client_factory=lambda: SdkSessionClient(),
+        idle_timeout=config.session_idle_timeout,
+        max_sessions=config.max_sessions,
+    )
+
+    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
+                       instructions=INSTRUCTIONS_DISCOVER, log_level=log_level)
+
+    @server.tool()
+    def list_mcp_servers(category: str | None = None,
+                         keyword: str | None = None) -> McpServerListResult | ToolError:
+        """第一步：列出华为云 MCP server 目录（含中文名/分类/认证模型）。
+
+        根据用户任务语义用 keyword 按 server 名/中文名/描述搜索；
+        不确定时先不加过滤全量浏览。
+        """
+        logger.info("list_mcp_servers category=%s keyword=%s", category or "-", keyword or "-")
+        return _discover_list_servers(catalog_source, category=category, keyword=keyword)
+
+    @server.tool()
+    def get_mcp_server(server: str) -> McpServerResult | ToolError:
+        """第二步：确认单个 MCP server 详情（endpoint/传输层/认证方式/描述）。
+
+        选定后调用 connect_mcp_server 建立连接。
+        """
+        logger.info("get_mcp_server server=%s", server)
+        return _discover_get_server(catalog_source, server)
+
+    @server.tool()
+    async def connect_mcp_server(server: str) -> McpConnectResult | ToolError:
+        """第三步：连接指定 MCP server（过 safety policy）。
+
+        policy 匹配 server 连接规则：server:serverId=allow|deny；
+        真实模式 endpoint 严格取自目录；mock 模式指向 --mock-base。
+        """
+        logger.info("connect_mcp_server server=%s", server)
+        entry = discover_catalog.get_server(catalog_source, server)
+        if entry is None:
+            return {"ok": False, "reason": f"MCP server {server} 未找到"}
+
+        err = safety.check_server(config.policy_rules, server)
+        if err:
+            logger.warning("connect %s policy=deny", server)
+            return {"ok": False, "reason": err}
+
+        endpoint = entry["endpoint"]
+        if config.mock and config.mock_base:
+            endpoint = config.mock_base
+        elif config.mock:
+            endpoint = "http://127.0.0.1:8000/mcp"
+
+        try:
+            info = await manager.connect(server, endpoint)
+        except Exception as exc:
+            logger.warning("connect %s failed: %s", server, exc)
+            return {"ok": False, "reason": f"连接失败: {exc}"}
+
+        return {
+            "ok": True,
+            "server": server,
+            "endpoint": endpoint,
+            "protocol_version": info.protocol_version,
+            "server_info": info.server_info,
+        }
+
+    @server.tool()
+    async def list_server_tools(server: str, search: str | None = None,
+                                limit: int = 20, offset: int = 0
+                                ) -> ServerToolsResult | ToolError:
+        """第四步：已连接 MCP server 的工具摘要列表（两级读取第一步）。
+
+        返回工具名+首行描述+必填参数名；用 search/limit/offset 收窄；
+        禁止无过滤全量拉取。选定后用 get_server_tool 读完整 schema。
+        """
+        logger.info("list_server_tools server=%s search=%s limit=%d offset=%d",
+                    server, search or "-", limit, offset)
+        if not manager.is_connected(server):
+            return {"ok": False, "reason": f"server {server} 未连接，请先调用 connect_mcp_server"}
+
+        try:
+            raw_tools = await manager.list_tools(server)
+        except Exception as exc:
+            logger.warning("list_server_tools %s failed: %s", server, exc)
+            return {"ok": False, "reason": f"获取工具列表失败: {exc}"}
+
+        summaries = [_tool_summary(t) for t in raw_tools]
+        if search:
+            summaries = _search_tools(raw_tools, search)
+            summaries = [_tool_summary(t) for t in summaries]
+
+        total = len(summaries)
+        summaries = summaries[offset:offset + limit]
+        return {
+            "ok": True, "server": server,
+            "total": total, "offset": offset, "limit": limit,
+            "tools": cast(list[Any], summaries),
+        }
+
+    @server.tool()
+    async def get_server_tool(server: str, tool: str) -> ServerToolResult | ToolError:
+        """第五步：获取单个工具的完整 schema（两级读取第二步）。
+
+        仅取调用目标一个工具，防上下文暴涨；超 16KB 自动截断。
+        """
+        logger.info("get_server_tool server=%s tool=%s", server, tool)
+        if not manager.is_connected(server):
+            return {"ok": False, "reason": f"server {server} 未连接，请先调用 connect_mcp_server"}
+
+        try:
+            raw_tools = await manager.list_tools(server)
+        except Exception as exc:
+            return {"ok": False, "reason": f"获取工具信息失败: {exc}"}
+
+        hit: dict[str, Any] | None = None
+        for t in raw_tools:
+            if t.get("name", "").lower() == tool.lower():
+                hit = t
+                break
+        if hit is None:
+            return {"ok": False, "reason": f"工具 {tool} 未找到（server {server}）"}
+
+        schema = hit.get("inputSchema", {})
+        serialized = _safe_serialize(schema)
+        truncated = len(serialized.encode("utf-8")) > SCHEMA_TRUNCATE
+        if truncated:
+            schema = {"_truncated": True, "_summary": hit.get("description", ""),
+                      "_original_size_bytes": len(serialized.encode("utf-8"))}
+        return {
+            "ok": True, "server": server, "tool": hit.get("name", tool),
+            "description": hit.get("description"),
+            "inputSchema": schema,
+            "truncated": truncated,
+        }
+
+    @server.tool()
+    async def call_server_tool(server: str, tool: str,
+                               arguments: dict[str, Any] | None = None
+                               ) -> McpCallResult:
+        """第六步：调用已连接 server 的指定工具（过 safety policy）。
+
+        arguments 为工具参数 dict；policy 匹配 server:serverId:toolPattern=allow|deny。
+        """
+        logger.info("call_server_tool server=%s tool=%s", server, tool)
+        if not manager.is_connected(server):
+            return {"ok": False, "reason": f"server {server} 未连接，请先调用 connect_mcp_server"}
+
+        err = safety.check_server(config.policy_rules, server, tool)
+        if err:
+            logger.warning("call_server_tool %s:%s policy=deny", server, tool)
+            return {"ok": False, "reason": err}
+
+        try:
+            result = await manager.call_tool(server, tool, arguments or {})
+        except Exception as exc:
+            logger.warning("call_server_tool %s:%s failed: %s", server, tool, exc)
+            return {"ok": False, "reason": str(exc), "server": server, "tool": tool}
+
+        serialized = _safe_serialize(result)
+        is_truncated = len(serialized.encode("utf-8")) > 65536
+        if is_truncated:
+            result = {"_truncated": True, "_text": serialized[:65536]}
+
+        return {
+            "ok": True, "server": server, "tool": tool,
+            "result": result,
+            "truncated": is_truncated,
+        }
+
+    @server.tool()
+    async def disconnect_mcp_server(server: str) -> McpDisconnectResult:
+        """第七步：断开指定 MCP server 连接（空闲超时自动回收）。
+
+        建议任务完成后显式调用释放资源。
+        """
+        logger.info("disconnect_mcp_server server=%s", server)
+        released = await manager.disconnect(server)
+        return {"ok": True, "server": server, "released": released}
+
+    return server
+
+
+# ============================================================
+# 主入口
+# ============================================================
+
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="huaweicloud-open-mcp", description="华为云 Open MCP server（stdio）")
+    parser = argparse.ArgumentParser(
+        prog="huaweicloud-open-mcp",
+        description="华为云 Open MCP server（stdio）。openapi 直连华为云 API；discover 发现连接云端 MCP server。")
+    parser.add_argument("--mode", choices=["openapi", "discover"], default=None,
+                        help="运行模式（默认 openapi；环境变量 HUAWEICLOUD_MCP_MODE）")
     parser.add_argument("--mock", action="store_true", default=None,
-                        help="mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）")
+                        help="mock 模式：openapi 模式指向 API Explorer mock；discover 模式指向本地 stub")
     parser.add_argument("--mock-base", default=None,
-                        help="mock 端点基础地址（默认 API Explorer mock；环境变量 HUAWEICLOUD_MCP_MOCK_BASE）")
+                        help="mock 端点基础地址（环境变量 HUAWEICLOUD_MCP_MOCK_BASE）")
     parser.add_argument("--policy", default=None, help="safety policy 文件路径")
-    parser.add_argument("--region", default=None, help="默认 region（默认 cn-north-4）")
+    parser.add_argument("--region", default=None, help="默认 region（openapi 模式，默认 cn-north-4）")
     parser.add_argument("--log-level", default=None, help="日志级别（默认 INFO）")
     parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")
     args = parser.parse_args()
+
+    mode = (args.mode or os.environ.get("HUAWEICLOUD_MCP_MODE") or "openapi").lower()
+    if mode not in ("openapi", "discover"):
+        mode = "openapi"
 
     level_name = (args.log_level or os.environ.get("HUAWEICLOUD_MCP_LOG_LEVEL") or "INFO").upper()
     if level_name not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
@@ -143,14 +493,25 @@ def main() -> None:
     configure_logging(program="huaweicloud-open-mcp", level=level_name,
                       log_file=args.log_file)
 
-    config = build_config(args)
-    logger.info("server start: region=%s mock=%s policy=%s credentials=%s",
-                config.region, config.mock,
-                "configured" if config.policy_rules else "MISSING",
-                "configured" if config.credentials else "none")
-    if config.policy_rules is None:
-        logger.warning("未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）")
-    app = build_app(ToolService(config), log_level=cast(LogLevel, level_name))
+    if mode == "discover":
+        discover_config = build_discover_config(args)
+        logger.info("server start: mode=discover mock=%s policy=%s catalog=%s",
+                     discover_config.mock,
+                     "configured" if discover_config.policy_rules else "MISSING",
+                     discover_config.catalog_path)
+        if discover_config.policy_rules is None:
+            logger.warning("未配置 safety policy，discover 连接与调用将全部拒绝（--policy 指定策略文件）")
+        app = build_discover_app(discover_config, log_level=cast(LogLevel, level_name))
+    else:
+        openapi_config = build_openapi_config(args)
+        logger.info("server start: mode=openapi region=%s mock=%s policy=%s credentials=%s",
+                     openapi_config.region, openapi_config.mock,
+                     "configured" if openapi_config.policy_rules else "MISSING",
+                     "configured" if openapi_config.credentials else "none")
+        if openapi_config.policy_rules is None:
+            logger.warning("未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）")
+        app = build_openapi_app(ToolService(openapi_config), log_level=cast(LogLevel, level_name))
+
     app.run("stdio")
 
 

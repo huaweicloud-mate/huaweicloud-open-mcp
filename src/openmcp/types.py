@@ -118,3 +118,88 @@ class ExamplesResult(TypedDict):
     product: str
     api: str
     examples: list[ApiExample]
+
+
+# ---------- MCP server 发现工具：内层实体 ----------
+
+class McpServerItem(TypedDict):
+    server: str
+    name: str
+    display_name: str
+    category: str
+    description: str
+    auth: str
+    version: str
+    endpoint: str
+
+
+class ServerToolSummary(TypedDict):
+    name: str
+    description: str
+    required: list[str]
+
+
+# ---------- MCP server 发现工具：结果信封 ----------
+
+class McpServerListResult(TypedDict):
+    ok: Literal[True]
+    total: int
+    servers: list[McpServerItem]
+
+
+class McpServerResult(TypedDict):
+    ok: Literal[True]
+    server: str
+    name: str
+    display_name: str
+    category: str
+    description: str
+    auth: str
+    version: str
+    endpoint: str
+
+
+class McpConnectResult(TypedDict, total=False):
+    ok: bool
+    reason: str | None
+    server: str | None
+    endpoint: str | None
+    protocol_version: str | None
+    server_info: dict[str, Any] | None
+
+
+class ServerToolsResult(TypedDict, total=False):
+    ok: bool
+    reason: str | None
+    server: str | None
+    total: int
+    offset: int
+    limit: int
+    tools: list[ServerToolSummary]
+
+
+class ServerToolResult(TypedDict, total=False):
+    ok: bool
+    reason: str | None
+    server: str | None
+    tool: str | None
+    description: str | None
+    inputSchema: Any
+    truncated: bool
+
+
+class McpCallResult(TypedDict, total=False):
+    ok: bool
+    reason: str | None
+    server: str | None
+    tool: str | None
+    result: Any
+    error_code: str | None
+    error_msg: str | None
+    truncated: bool
+
+
+class McpDisconnectResult(TypedDict):
+    ok: Literal[True]
+    server: str
+    released: bool

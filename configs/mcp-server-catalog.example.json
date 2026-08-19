@@ -1,0 +1,46 @@
+[
+  {
+    "id": "@huaweicloud/ecs",
+    "name": "ECS MCP Server",
+    "display_name": "弹性云服务器 MCP",
+    "description": "查询与管理华为云 ECS 云服务器实例，支持列表/详情/创建/启停操作",
+    "category": "计算",
+    "endpoint": "https://ecs-mcp.example.com/mcp",
+    "transport": "streamable-http",
+    "auth": "none",
+    "version": "1.0.0"
+  },
+  {
+    "id": "@huaweicloud/vpc",
+    "name": "VPC MCP Server",
+    "display_name": "虚拟私有云 MCP",
+    "description": "查询与管理华为云 VPC、子网、安全组等网络资源",
+    "category": "网络",
+    "endpoint": "https://vpc-mcp.example.com/mcp",
+    "transport": "streamable-http",
+    "auth": "none",
+    "version": "1.0.0"
+  },
+  {
+    "id": "@huaweicloud/obs",
+    "name": "OBS MCP Server",
+    "display_name": "对象存储服务 MCP",
+    "description": "查询与管理华为云 OBS 桶与对象",
+    "category": "存储",
+    "endpoint": "https://obs-mcp.example.com/mcp",
+    "transport": "streamable-http",
+    "auth": "none",
+    "version": "1.0.0"
+  },
+  {
+    "id": "@huaweicloud/iam",
+    "name": "IAM MCP Server",
+    "display_name": "统一身份认证 MCP",
+    "description": "查询华为云 IAM 用户、用户组、权限策略",
+    "category": "管理与监管",
+    "endpoint": "https://iam-mcp.example.com/mcp",
+    "transport": "streamable-http",
+    "auth": "none",
+    "version": "1.0.0"
+  }
+]

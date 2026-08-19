@@ -5,11 +5,16 @@
 - 按文件行序首个命中生效；无匹配默认 deny。
 - `#` 开头与空行忽略；格式非法抛 ValueError。
 - 策略文件支持 JSON 数组（保序）或纯文本行两种格式。
+
+MCP discover 扩展：
+- `server:serverId=allow|deny`              控制 connect_mcp_server
+- `server:serverId:toolPattern=allow|deny`  控制 call_server_tool
+- 与 product 规则同文件、保行序；kind 字段区分，前缀天然隔离。
 """
 
 import fnmatch
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 
@@ -18,10 +23,20 @@ class PolicyRule:
     product: str
     api_pattern: str
     allow: bool
+    kind: str = field(default="product")
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("product", "server"):
+            raise ValueError(f"PolicyRule.kind must be 'product' or 'server', got {self.kind!r}")
 
 
 def parse_policy(lines: Sequence[str]) -> list[PolicyRule]:
-    """把规则行列表解析为 PolicyRule 列表，保持行序。"""
+    """把规则行列表解析为 PolicyRule 列表，保持行序。
+
+    支持两种前缀：
+    - product:apiPattern=allow|deny  (kind="product"，向后兼容)
+    - server:serverId[:toolPattern]=allow|deny  (kind="server")
+    """
     rules: list[PolicyRule] = []
     for line in lines:
         text = line.strip()
@@ -33,26 +48,66 @@ def parse_policy(lines: Sequence[str]) -> list[PolicyRule]:
         action = action.strip().lower()
         if action not in ("allow", "deny"):
             raise ValueError(f"策略动作必须是 allow/deny: {line!r}")
+
+        kind = "product"
+        if target.startswith("server:"):
+            kind = "server"
+            target = target[len("server:"):]
+
+        product: str
+        pattern: str
         if ":" not in target:
-            if target == "*":
-                product, pattern = "*", "*"
+            if kind == "product":
+                if target == "*":
+                    product, pattern = "*", "*"
+                else:
+                    raise ValueError(f"策略规则缺少 product 前缀（product:apiPattern=action）: {line!r}")
             else:
-                raise ValueError(f"策略规则缺少 product 前缀（product:apiPattern=action）: {line!r}")
+                product = target.strip() or "*"
+                pattern = "*"
         else:
-            product, _, pattern = target.partition(":")
+            if kind == "server":
+                product, _, pattern = target.partition(":")
+            else:
+                product, _, pattern = target.partition(":")
         product = product.strip() or "*"
         pattern = pattern.strip() or "*"
-        rules.append(PolicyRule(product=product, api_pattern=pattern, allow=action == "allow"))
+
+        rules.append(PolicyRule(product=product, api_pattern=pattern, allow=action == "allow", kind=kind))
     return rules
 
 
 def evaluate(rules: Sequence[PolicyRule], product: str, api: str) -> bool:
-    """按行序首个命中生效；无匹配默认 deny。product/api 大小写不敏感。"""
+    """按行序首个命中生效；无匹配默认 deny。product/api 大小写不敏感。
+    仅评估 kind="product" 规则；kind="server" 规则由 evaluate_server 处理。
+    """
     for rule in rules:
+        if rule.kind != "product":
+            continue
         if rule.product != "*" and rule.product.lower() != product.lower():
             continue
         if fnmatch.fnmatch(api.lower(), rule.api_pattern.lower()):
             return rule.allow
+    return False
+
+
+def evaluate_server(rules: Sequence[PolicyRule], server: str, tool: str | None = None) -> bool:
+    """评估 server 类规则。按行序首个命中生效；无匹配默认 deny。
+
+    tool=None 时匹配 connect 级规则（api_pattern="*"）；
+    tool 非空时 fnmatch 匹配 tool 名。
+    """
+    for rule in rules:
+        if rule.kind != "server":
+            continue
+        if rule.product != "*" and rule.product.lower() != server.lower():
+            continue
+        if tool is not None:
+            if fnmatch.fnmatch(tool.lower(), rule.api_pattern.lower()):
+                return rule.allow
+        else:
+            if rule.api_pattern == "*":
+                return rule.allow
     return False
 
 
@@ -62,6 +117,17 @@ def check(rules: Sequence[PolicyRule] | None, product: str, api: str) -> str | N
         return "safety policy 未配置，execute_api 全部拒绝"
     if not evaluate(rules, product, api):
         return f"safety policy 拒绝执行 {product}:{api}"
+    return None
+
+
+def check_server(rules: Sequence[PolicyRule] | None, server: str, tool: str | None = None) -> str | None:
+    """检查 server 连接/调用是否被策略允许。返回 None 表示允许，返回字符串为拒绝原因。"""
+    if rules is None:
+        return "safety policy 未配置，discover 连接与调用全部拒绝"
+    if not evaluate_server(rules, server, tool=tool):
+        if tool is not None:
+            return f"safety policy 拒绝调用 {server}:{tool}"
+        return f"safety policy 拒绝连接 {server}"
     return None
 
 
