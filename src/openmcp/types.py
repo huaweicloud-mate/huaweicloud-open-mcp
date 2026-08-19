@@ -175,7 +175,7 @@ class ServerToolsResult(TypedDict, total=False):
     total: int
     offset: int
     limit: int
-    tools: list[ServerToolSummary]
+    tools: list[ServerToolSummary] | None
 
 
 class ServerToolResult(TypedDict, total=False):
@@ -185,7 +185,7 @@ class ServerToolResult(TypedDict, total=False):
     tool: str | None
     description: str | None
     inputSchema: Any
-    truncated: bool
+    truncated: bool | None
 
 
 class McpCallResult(TypedDict, total=False):
@@ -196,7 +196,7 @@ class McpCallResult(TypedDict, total=False):
     result: Any
     error_code: str | None
     error_msg: str | None
-    truncated: bool
+    truncated: bool | None
 
 
 class McpDisconnectResult(TypedDict):

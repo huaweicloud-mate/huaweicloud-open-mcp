@@ -64,10 +64,9 @@ def test_evaluate_connect_deny():
 
 
 def test_evaluate_connect_default_deny():
-    rules = policy.parse_policy(["server:@ecs:*=allow"])
-    # connect rule (api_pattern="*") is only "server:serverId=allow|deny"
-    # "server:serverId:*=allow" has api_pattern="*" which ALSO matches connect-level
-    assert policy.evaluate_server(rules, "@ecs") is True
+    """无 connect 级规则时，连接默认拒绝。"""
+    rules = policy.parse_policy(["server:@ecs:*list*=allow"])
+    assert policy.evaluate_server(rules, "@ecs") is False
 
 
 def test_evaluate_connect_unmatched_server():

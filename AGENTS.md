@@ -157,8 +157,8 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 分层与纪律：
 
 - **单元测试**（`tests/test_signer.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`、`tests/test_bench_*.py`、`tests/test_mcpdiscover_*.py`）：纯函数，不联网、不碰真实数据；service 层用数据根路径注入 + 客户端工厂注入。
-- **集成测试**（`tests/test_execute_mock.py`）：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名。
-- **E2E 测试**（`tests/test_e2e.py`：真实 AK/SK 只读调用；`tests/test_workflow_e2e.py`：渐进式工作流全链，mock 模式 + 真实 data/openapi 产物）：标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。
+- **集成测试**（`tests/test_execute_mock.py`：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名；`tests/test_execute_mcp_mock.py`：真 mcp SDK client → 本地 MCP stub 回环 HTTP，覆盖 Streamable HTTP 协议全链路）。
+- **E2E 测试**（`tests/test_e2e.py`：真实 AK/SK 只读调用；`tests/test_workflow_e2e.py`：openapi 渐进式工作流全链，mock 模式 + 真实 data/openapi 产物；`tests/test_workflow_discover_e2e.py`：discover 渐进式工作流全链，mock 模式 + 本地 MCP stub 回环，无外网依赖）：标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。
 - red→green 垂直切片，禁止先写全部测试再写实现；禁止 mock 自有模块；期望值禁止用被测代码同法重算。
 
 ## 校验规则（必须满足）

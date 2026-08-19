@@ -1,12 +1,18 @@
-"""MCP client 适配层：SessionClient 协议 + mcp SDK 实现。
+"""MCP client 适配层：SessionClient 协议 + mcp SDK 实现（background task 模式）。
 
-定义连接/查询/调用的抽象协议，供单元测试注入 fake 实现；
-生产环境用 SdkSessionClient 包装 mcp SDK 的 streamable_http_client + ClientSession。
+mcp SDK 的 ClientSession 使用 anyio cancel scopes，其生命周期绑定到进入 __aenter__
+的 asyncio task。但 MCP server 中 connect/list/call 是不同的 tool handler 调用
+（不同 task），跨 task 访问 ClientSession 会触发"attempted to exit cancel scope
+in a different task"错误。
+
+解决方案：每个 SdkSessionClient 在 connect() 时创建一个长期运行的 background
+asyncio task，由其持有 ClientSession 上下文；list_tools/call_tool 通过
+asyncio.Queue + Future 与 background task 通信。
 """
 
-import contextlib
+import asyncio
 import logging
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -15,66 +21,109 @@ logger = logging.getLogger("openmcp.mcpdiscover.sdk")
 
 
 class SessionClient(Protocol):
-    """MCP server 会话客户端协议（async）。
-
-    每个 server 连接对应一个 SessionClient 实例；
-    方法均为 async，与 mcp SDK 的异步模型保持一致。
-    """
+    """MCP server 会话客户端协议（async）。"""
 
     async def connect(self, endpoint: str) -> dict[str, Any]:
-        """建立连接，返回 {"protocol_version": str, "server_info": dict}。"""
         ...
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        """拉取工具清单，返回 [{"name": str, "description": str, "inputSchema": dict}, ...]。"""
         ...
 
     async def call_tool(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """调用工具，返回规范化结果 dict。"""
         ...
 
     async def disconnect(self) -> None:
-        """断开连接，释放资源。"""
         ...
 
 
 class SdkSessionClient:
-    """基于 mcp SDK 的 SessionClient 实现。
-
-    使用 AsyncExitStack 管理 streamable_http_client + ClientSession 的
-    生命周期；connect 时打开栈、disconnect 时关闭栈。
-    """
+    """基于 mcp SDK 的 SessionClient 实现（background task 模式）。"""
 
     def __init__(self, http_client: Any | None = None) -> None:
-        self._exit_stack = contextlib.AsyncExitStack()
-        self._session: ClientSession | None = None
-        self._endpoint: str | None = None
         self._http_client = http_client
+        self._queue: asyncio.Queue[tuple[str, int, tuple] | None] = asyncio.Queue()
+        self._pending: dict[int, asyncio.Future[Any]] = {}
+        self._next_id = 0
+        self._task: asyncio.Task[Any] | None = None
+        self._ready: asyncio.Event = asyncio.Event()
+        self._init_info: dict[str, Any] | None = None
+        self._endpoint: str | None = None
 
     async def connect(self, endpoint: str) -> dict[str, Any]:
-        transport = await self._exit_stack.enter_async_context(
-            streamable_http_client(endpoint, http_client=self._http_client,
-                                   terminate_on_close=False)
-        )
-        read_stream, write_stream = transport[:2]
-        self._session = await self._exit_stack.enter_async_context(
-            ClientSession(read_stream, write_stream)
-        )
-        init_result = await self._session.initialize()
+        self._queue = asyncio.Queue()
+        self._pending = {}
+        self._next_id = 0
+        self._ready = asyncio.Event()
+        self._init_info = None
         self._endpoint = endpoint
-        logger.info("mcp client connected: %s protocol=%s", endpoint, init_result.protocol_version)
-        return {
-            "protocol_version": init_result.protocol_version,
-            "server_info": {
-                "name": init_result.server_info.name,
-                "version": init_result.server_info.version,
-            } if init_result.server_info else {},
-        }
+
+        self._task = asyncio.create_task(self._runner(endpoint))
+        await self._ready.wait()
+
+        maybe_info: Any = self._init_info
+        if maybe_info is None:
+            raise RuntimeError("MCP session 连接失败（background task 异常退出）")
+        logger.info("mcp client connected: %s protocol=%s",
+                    endpoint, maybe_info.get("protocol_version"))
+        return cast(dict[str, Any], maybe_info)
+
+    async def _runner(self, endpoint: str) -> None:
+        try:
+            async with streamable_http_client(
+                endpoint, http_client=self._http_client, terminate_on_close=False
+            ) as transport:
+                read_stream, write_stream = transport[:2]
+                async with ClientSession(read_stream, write_stream) as session:
+                    init = await session.initialize()
+                    self._init_info = {
+                        "protocol_version": init.protocol_version,
+                        "server_info": (
+                            {"name": init.server_info.name, "version": init.server_info.version}
+                            if init.server_info else {}
+                        ),
+                    }
+                    self._ready.set()
+
+                    while True:
+                        msg = await self._queue.get()
+                        if msg is None:
+                            break
+                        cmd, mid, args = msg
+                        fut = self._pending.pop(mid, None)
+                        if fut is None:
+                            continue
+                        try:
+                            r: Any
+                            if cmd == "list_tools":
+                                r = await session.list_tools()
+                                fut.set_result(r)
+                            elif cmd == "call_tool":
+                                name, arguments = args
+                                r = await session.call_tool(name, arguments or {})
+                                fut.set_result(r)
+                            else:
+                                fut.set_exception(RuntimeError(f"unknown cmd: {cmd}"))
+                        except Exception as exc:
+                            fut.set_exception(exc)
+        except Exception:
+            logger.warning("mcp client runner crashed: %s", endpoint, exc_info=True)
+            if not self._ready.is_set():
+                self._ready.set()
+            for fut in list(self._pending.values()):
+                if not fut.done():
+                    fut.set_exception(RuntimeError("MCP session runner exited"))
+            self._pending.clear()
+
+    async def _send(self, cmd: str, *args: Any) -> Any:
+        mid = self._next_id
+        self._next_id += 1
+        fut: asyncio.Future[Any] = asyncio.Future()
+        self._pending[mid] = fut
+        await self._queue.put((cmd, mid, args))
+        return await fut
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        if self._session is None:
-            raise RuntimeError("session not connected")
-        result = await self._session.list_tools()
+        result = await self._send("list_tools")
         tools = []
         for tool in result.tools:
             d: dict[str, Any] = {"name": tool.name}
@@ -87,11 +136,9 @@ class SdkSessionClient:
         return tools
 
     async def call_tool(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        if self._session is None:
-            raise RuntimeError("session not connected")
         logger.info("call_tool: %s args=%s", tool,
                      str(arguments)[:200] if arguments else "{}")
-        result = await self._session.call_tool(tool, arguments or {})
+        result = await self._send("call_tool", tool, arguments)
         content = getattr(result, "content", None)
         is_error = getattr(result, "isError", False)
         out: dict[str, Any] = {}
@@ -102,8 +149,12 @@ class SdkSessionClient:
         return out
 
     async def disconnect(self) -> None:
-        logger.info("mcp client disconnecting: %s", self._endpoint)
-        await self._exit_stack.aclose()
-        self._session = None
+        if self._task is None:
+            return
+        await self._queue.put(None)
+        try:
+            await self._task
+        except Exception:
+            pass
+        self._task = None
         self._endpoint = None
-        self._exit_stack = contextlib.AsyncExitStack()

@@ -24,6 +24,7 @@ class PolicyRule:
     api_pattern: str
     allow: bool
     kind: str = field(default="product")
+    connect_only: bool = field(default=False)
 
     def __post_init__(self) -> None:
         if self.kind not in ("product", "server"):
@@ -56,6 +57,7 @@ def parse_policy(lines: Sequence[str]) -> list[PolicyRule]:
 
         product: str
         pattern: str
+        connect_only = False
         if ":" not in target:
             if kind == "product":
                 if target == "*":
@@ -65,6 +67,7 @@ def parse_policy(lines: Sequence[str]) -> list[PolicyRule]:
             else:
                 product = target.strip() or "*"
                 pattern = "*"
+                connect_only = True
         else:
             if kind == "server":
                 product, _, pattern = target.partition(":")
@@ -73,7 +76,10 @@ def parse_policy(lines: Sequence[str]) -> list[PolicyRule]:
         product = product.strip() or "*"
         pattern = pattern.strip() or "*"
 
-        rules.append(PolicyRule(product=product, api_pattern=pattern, allow=action == "allow", kind=kind))
+        rules.append(PolicyRule(
+            product=product, api_pattern=pattern, allow=action == "allow",
+            kind=kind, connect_only=connect_only,
+        ))
     return rules
 
 
@@ -103,11 +109,14 @@ def evaluate_server(rules: Sequence[PolicyRule], server: str, tool: str | None =
         if rule.product != "*" and rule.product.lower() != server.lower():
             continue
         if tool is not None:
+            if rule.connect_only:
+                continue
             if fnmatch.fnmatch(tool.lower(), rule.api_pattern.lower()):
                 return rule.allow
         else:
-            if rule.api_pattern == "*":
-                return rule.allow
+            if not rule.connect_only:
+                continue
+            return rule.allow
     return False
 
 
