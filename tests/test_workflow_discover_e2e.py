@@ -141,6 +141,8 @@ def session(tmp_path_factory):
         yield s
     finally:
         s.close()
+        if log.exists():
+            print("\n=== DISCOVER SERVER LOG ===", log.read_text(), sep="\n", file=sys.stderr)
         stub.stop()
 
 
