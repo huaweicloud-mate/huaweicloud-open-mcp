@@ -6,6 +6,26 @@ from typing import Any
 from .scorer import ToolCall
 
 
+def extract_usage(export: dict[str, Any]) -> dict[str, int | float] | None:
+    """从 export JSON 的 info 字段提取 token / cost 汇总。"""
+    info = export.get("info")
+    if not isinstance(info, dict):
+        return None
+    tokens = info.get("tokens")
+    if not isinstance(tokens, dict):
+        return None
+    cache = tokens.get("cache") or {}
+    cost = info.get("cost")
+    return {
+        "cost": cost if isinstance(cost, (int, float)) else None,
+        "input": tokens.get("input", 0),
+        "output": tokens.get("output", 0),
+        "reasoning": tokens.get("reasoning", 0),
+        "cache_read": cache.get("read", 0) if isinstance(cache, dict) else 0,
+        "cache_write": cache.get("write", 0) if isinstance(cache, dict) else 0,
+    }
+
+
 def extract_trace(export: dict[str, Any]) -> tuple[list[ToolCall], str]:
     """opencode export JSON → (工具调用序列, assistant 文本回答)。
 

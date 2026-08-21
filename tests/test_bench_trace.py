@@ -1,12 +1,19 @@
-"""S6：benchmark trace 提取（export JSON/NDJSON）与 opencode DB token 读取单测。"""
+"""S6：benchmark trace 提取（export JSON/NDJSON）单测。"""
 
-import sqlite3
-
-from benchmarks.opencode_db import default_db_path, get_session_usage
-from benchmarks.trace import extract_trace, parse_run_output
+from benchmarks.trace import extract_trace, extract_usage, parse_run_output
 
 EXPORT = {
-    "info": {"id": "ses_abc", "title": "t"},
+    "info": {
+        "id": "ses_abc",
+        "title": "t",
+        "cost": 0.0123,
+        "tokens": {
+            "input": 100,
+            "output": 20,
+            "reasoning": 5,
+            "cache": {"read": 50, "write": 0},
+        },
+    },
     "messages": [
         {
             "info": {"role": "user", "model": {}},
@@ -45,7 +52,6 @@ def test_extract_trace_tools_and_assistant_text():
         ("huaweicloud-open-mcp_execute_api", "completed"),
     ]
     assert tools[1].input == {"product": "ECS", "api": "ListServersDetails", "params": {"limit": 1}}
-    # 用户消息文本不计入最终回答
     assert answer == "找到了产品\n共 1 台 bench-server"
 
 
@@ -60,6 +66,20 @@ def test_extract_trace_tolerates_missing_state():
     assert tools[0].input == {}
     assert tools[0].status == ""
     assert answer == "x"
+
+
+def test_extract_usage():
+    u = extract_usage(EXPORT)
+    assert u == {"cost": 0.0123, "input": 100, "output": 20,
+                 "reasoning": 5, "cache_read": 50, "cache_write": 0}
+
+
+def test_extract_usage_no_info():
+    assert extract_usage({"messages": []}) is None
+
+
+def test_extract_usage_no_tokens():
+    assert extract_usage({"info": {"id": "x"}}) is None
 
 
 def test_parse_run_output():
@@ -88,47 +108,3 @@ def test_parse_run_output_multiple_steps_keeps_last_finish():
 def test_parse_run_output_empty():
     out = parse_run_output("")
     assert out == {"session_id": None, "answer": "", "finish_reason": None, "is_error": None}
-
-
-def _make_db(tmp_path):
-    db = tmp_path / "opencode.db"
-    conn = sqlite3.connect(db)
-    conn.execute("""create table session (
-        id text primary key,
-        cost real default 0 not null,
-        tokens_input integer default 0 not null,
-        tokens_output integer default 0 not null,
-        tokens_reasoning integer default 0 not null,
-        tokens_cache_read integer default 0 not null,
-        tokens_cache_write integer default 0 not null)""")
-    conn.execute("insert into session values (?, 0.0123, 100, 20, 5, 50, 0)", ("ses_1",))
-    conn.commit()
-    conn.close()
-    return db
-
-
-def test_get_session_usage(tmp_path):
-    db = _make_db(tmp_path)
-    u = get_session_usage(db, "ses_1")
-    assert u == {"cost": 0.0123, "input": 100, "output": 20,
-                 "reasoning": 5, "cache_read": 50, "cache_write": 0}
-
-
-def test_get_session_usage_unknown_session(tmp_path):
-    db = _make_db(tmp_path)
-    assert get_session_usage(db, "ses_nope") is None
-
-
-def test_get_session_usage_missing_db(tmp_path):
-    assert get_session_usage(tmp_path / "nope.db", "ses_1") is None
-
-
-def test_default_db_path_xdg(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    assert default_db_path() == tmp_path / "opencode" / "opencode.db"
-
-
-def test_default_db_path_home(monkeypatch, tmp_path):
-    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert default_db_path() == tmp_path / ".local" / "share" / "opencode" / "opencode.db"

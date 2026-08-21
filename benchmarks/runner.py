@@ -21,10 +21,9 @@ from pathlib import Path
 
 from .cases import BenchmarkCase, load_cases
 from .openapi.stub_server import StubServer
-from .opencode_db import default_db_path, get_session_usage
 from .report import CaseStats, RunResult, aggregate, dump_baseline, render_markdown
 from .scorer import ToolCall, score
-from .trace import extract_trace, parse_run_output
+from .trace import extract_trace, extract_usage, parse_run_output
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = "maas/glm-5.2"
@@ -75,7 +74,7 @@ def export_session(opencode_bin: str, session_id: str, retries: int = 3) -> dict
 
 
 def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
-             opencode_bin: str, policy: str, db_path: Path, mock_base: str | None,
+             opencode_bin: str, policy: str, mock_base: str | None,
              timeout: int) -> RunResult:
     benchdir = tempfile.mkdtemp(prefix="bench-")
     Path(benchdir, "opencode.json").write_text(build_benchdir_config(policy, mock_base),
@@ -93,7 +92,6 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
     elapsed = time.monotonic() - t0
     parsed = parse_run_output(proc.stdout)
     session_id = parsed["session_id"]
-    usage = get_session_usage(db_path, session_id) if session_id else None
     trace: list[ToolCall] = []
     answer: str = parsed["answer"]
     export_raw: dict | None = None
@@ -117,8 +115,10 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
     tokens: dict[str, int | float | None] = {"cost": None, "input": None, "output": None,
                                              "reasoning": None, "cache_read": None,
                                              "cache_write": None}
-    if usage:
-        tokens.update(usage)
+    if export_raw is not None:
+        usage = extract_usage(export_raw)
+        if usage:
+            tokens.update(usage)
     return RunResult(
         case_id=case.id, backend=backend, repeat=repeat, session_id=session_id,
         model=model, elapsed_s=elapsed,
@@ -129,7 +129,7 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
 
 
 def run_backend(cases: list[BenchmarkCase], backend: str, args: argparse.Namespace,
-                db_path: Path, stub: StubServer | None) -> list[RunResult]:
+                stub: StubServer | None) -> list[RunResult]:
     mock_base = stub.base_url if stub else None
     results: list[RunResult] = []
     total = sum(c.repeat for c in cases)
@@ -139,7 +139,7 @@ def run_backend(cases: list[BenchmarkCase], backend: str, args: argparse.Namespa
             done += 1
             print(f"[{backend}] {done}/{total} {case.id} #{i} ...", flush=True)
             r = run_once(case, backend, i, args.model, args.opencode, args.policy,
-                         db_path, mock_base, case.timeout)
+                         mock_base, case.timeout)
             suffix = "PASS" if (r.score and r.score.passed) else ("ERR" if r.error else "FAIL")
             print(f"  -> {suffix} {r.elapsed_s:.1f}s "
                   f"tok_in={r.tokens.get('input')} err={r.error}", flush=True)
@@ -167,7 +167,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=None, help="覆盖 case 默认 timeout")
     parser.add_argument("--opencode", default="opencode")
     parser.add_argument("--policy", default=str(PROJECT_ROOT / DEFAULT_POLICY))
-    parser.add_argument("--db", default=None, help="opencode 会话 DB 路径（默认自动探测）")
     parser.add_argument("--out", default=str(PROJECT_ROOT / DEFAULT_OUT))
     parser.add_argument("--dry-run", action="store_true", help="只校验用例，不跑 LLM")
     parser.add_argument("--baseline-save", action="store_true")
@@ -192,7 +191,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"共 {len(cases)} 个用例")
         return 0
 
-    db_path = Path(args.db) if args.db else default_db_path()
     backends = ["stub", "real"] if args.backend == "both" else [args.backend]
     run_dir = Path(args.out) / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -203,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         if stub:
             stub.start()
         try:
-            results = run_backend(cases, backend, args, db_path, stub)
+            results = run_backend(cases, backend, args, stub)
         finally:
             if stub:
                 stub.stop()
