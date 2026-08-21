@@ -28,7 +28,6 @@ flowchart TB
         SF["safety policy 匹配"]
         SG["signer：SDK-HMAC-SHA256"]
         MC["MockApiClient"]
-        LC["本地数据加载<br/>raw/ + data/openapi/"]
     end
 
     subgraph Offline["离线管道（api-refresh CLI）"]
@@ -36,7 +35,7 @@ flowchart TB
     end
 
     subgraph Cloud["华为云"]
-        AE["API Explorer<br/>（元数据源 / mock 端点）"]
+        AE["API Explorer<br/>（远端元数据 / mock 端点）"]
         HC["华为云服务 API<br/>（ECS/IAM/VPC…）"]
     end
 
@@ -44,9 +43,9 @@ flowchart TB
     GW --> SV --> MT
     MT --> SF --> SG --> HC
     SV --> MC --> AE
-    SV --> LC
+    SV --> AE
     AP -->|抓取| AE
-    AP --> LC
+    AP -->|产出 data/openapi/ 管道产物| D[/"data/openapi/<br/>（不入库）"/]
 
     style GW fill:#e1f5fe
     style SV fill:#e1f5fe
@@ -63,7 +62,7 @@ flowchart TB
 | 纯函数 | `tools/metadata.py` `tools/execute.py` | 元数据处理与请求构建/响应规范化，不碰磁盘、不碰 MCP 协议 | → types |
 | 安全 | `safety/policy.py` | policy 解析与匹配（PolicyRule dataclass） | 无依赖 |
 | 执行 | `signer/` `apie/mock.py` | 签名直连 / mock 端点 | → types / auth |
-| 元数据 | `apie/` | APIE 管道 + CLI（可独立运行） | → paths |
+| 元数据 | `apie/` | APIE 管道（可独立运行）+ 内存缓存（`memory_store.py`）+ 远端回退（`catalog.py`/`live_fallback.py`） | → http |
 
 ## 3. APIE 元数据管道
 
@@ -101,29 +100,29 @@ sequenceDiagram
     participant U as 用户
     participant L as LLM
     participant M as MCP Server
-    participant D as 本地元数据
-    participant C as 华为云
+    participant C as API Explorer 远端
+    participant H as 华为云
 
     U->>L: 自然语言任务（如「查 cn-north-4 云服务器列表」）
     L->>M: list_products(keyword?)
-    M->>D: raw/huawei_products.json + apis_count.json
+    M->>C: v5/products（首次拉取，缓存到内存）
     M-->>L: 产品列表（中文名/分类/接口数/is_global）
     Note over L: ① 基于任务语义决策产品范围（ECS）
     L->>M: list_apis(product=ECS)
-    M->>D: raw/apis_docs.json
+    M->>C: v3/apis?product_short=ECS（首次拉取，缓存到内存）
     M-->>L: 目录 + tag_groups 全量 tag 概览
     Note over L: ② 决策目录范围（如选「状态管理」tag 收窄）
     L->>M: list_apis(product=ECS, tag=状态管理)
-    M-->>L: 该 tag 接口列表（name/summary）
+    M-->>L: 该 tag 接口列表（name/summary）（内存命中）
     Note over L: ③ 决策候选接口（ListServersDetails）
     L->>M: get_api(ECS, ListServersDetails)
-    M->>D: data/openapi/ECS/*.json
+    M->>C: v4/apis/detail（首次拉取，缓存到内存 LRU）
     M-->>L: 接口文档（参数/必填/枚举/x-constraint）
     L->>M: get_api_examples(ECS, ListServersDetails)
-    M-->>L: 官方请求示例
+    M-->>L: 官方请求示例（内存命中）
     L->>M: execute_api(ECS, ListServersDetails, {limit: 2})
-    M->>C: 签名请求
-    C-->>M: 响应
+    M->>H: 签名请求
+    H-->>M: 响应
     M-->>L: 规范化结果
     L-->>U: 执行结果
 ```
@@ -139,7 +138,7 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     A["tools/call execute_api<br/>(product, api, region, params)"]
-    B["service: load_api_doc<br/>data/openapi/{Product}/*.json<br/>定位 (doc, path, method, op)"]
+    B["service: load_api_doc<br/>内存缓存(O(1)) → 远端拉取<br/>定位 (doc, path, method, op)"]
     C{"接口找到？"}
     D{"safety policy 配置？"}
     E{"evaluate(product, api)"}
@@ -192,6 +191,36 @@ flowchart LR
 - 用途：集成测试（S4）、`--mock` 启动参数下无凭证全链路演示；错误路径（429/4xx/5xx）由单元层 urllib 打桩覆盖
 - `--mock-base`（环境变量 `HUAWEICLOUD_MCP_MOCK_BASE`）可自定义端点基础地址：benchmark 本地 stub 用（确定性响应隔离网络抖动）
 
+### 4.5 元数据内存缓存
+
+MCP server 不依赖本地 `data/openapi/` 磁盘产物，元数据全部从 API Explorer 远端实时获取，纯内存缓存：
+
+```mermaid
+flowchart LR
+    A["ToolService 工具调用"] --> B{"MemoryStore 缓存命中？"}
+    B -->|是| C["直接返回（O(1)）"]
+    B -->|否| D["远端拉取<br/>v5/products / v3/apis / v4/detail"]
+    D --> E["convert / 写入 MemoryStore"]
+    E --> C
+    D -->|失败| F["返回 miss"]
+```
+
+三层缓存策略：
+
+| 缓存层 | 键 | 容量 | 生命周期 |
+|---|---|---|---|
+| `_products` | 无（单例） | 1 条 | 进程存活 |
+| `_apis` | `product_lower` | 按访问产品数 | 进程存活 |
+| `_api_details` | `(product_lower, api_name, region)` | 500 LRU | 按访问淘汰 |
+
+远端端点：
+
+| 数据 | 端点 | 缓存位置 |
+|---|---|---|
+| 产品列表 | `v5/products` | `_products` |
+| 单产品 API 列表 | `v3/apis?product_short=ECS` | `_apis[ecs]` |
+| API 详情 | `v4/apis/detail?product_short=ECS&name=ListServers` | `_api_details` |
+
 ## 5. 模块组织
 
 ```mermaid
@@ -213,12 +242,12 @@ graph LR
             PIPE["fetch/split/convert/merge/<br/>organize/validate/refresh/api_docs"]
             H["http.py（抓取助手）"]
             MK["mock.py"]
+            MS["memory_store.py（纯内存缓存）"]
         end
         SF["safety/policy.py"]
         AU["auth/credentials.py"]
         LG["logconf.py"]
     end
-    DS["raw/ + data/openapi/<br/>（产物，不入库）"]
     subgraph BNM["benchmarks/（LLM Agent 级评估，S6）"]
         BC["cases/（YAML 用例）"]
         BSC["scorer / report / trace<br/>opencode_db（纯函数）"]
@@ -235,8 +264,8 @@ graph LR
     EX --> T
     AP --> H
     AP --> MK
-    AP --> DS
-    SV --> DS
+    AP --> MS
+    SV --> MS
     SV --> MK
     BR -.opencode run（benchdir 配置 MCP）.-> SRV
     BR --> BC --> BSC

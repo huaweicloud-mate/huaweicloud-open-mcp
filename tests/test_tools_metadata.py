@@ -91,9 +91,9 @@ def test_list_apis_case_insensitive_product(mini_docs):
 
 def test_format_api_detail(mini_detail):
     from openmcp.apie import convert_openapi2 as conv
-    from openmcp.apie.local_store import find_api_in_doc
+    from openmcp.apie.live_fallback import _find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"]["RabbitMQ::BatchCreateOrDeleteRabbitMqTag"])
-    path, method, op = find_api_in_doc(doc, "BatchCreateOrDeleteRabbitMqTag")
+    path, method, op = _find_api_in_doc(doc, "BatchCreateOrDeleteRabbitMqTag")
     out = metadata.format_api_detail(doc, "RabbitMQ", path, method, op)
     assert out["product"] == "RabbitMQ"
     assert out["api"] == "BatchCreateOrDeleteRabbitMqTag"
@@ -110,9 +110,9 @@ def test_format_api_detail(mini_detail):
 
 def test_format_api_detail_path_required_flag(mini_detail):
     from openmcp.apie import convert_openapi2 as conv
-    from openmcp.apie.local_store import find_api_in_doc
+    from openmcp.apie.live_fallback import _find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
-    path, method, op = find_api_in_doc(doc, "ListServers")
+    path, method, op = _find_api_in_doc(doc, "ListServers")
     out = metadata.format_api_detail(doc, "ECS", path, method, op)
     pid = [p for p in out["parameters"] if p["name"] == "project_id"][0]
     assert pid["required"] is True

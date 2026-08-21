@@ -1,7 +1,7 @@
 """ToolService：六工具的业务编排层。
 
-职责：配置（region/mock/policy/凭证/allow_live）、调用纯函数层（tools.metadata / tools.execute）
-与执行客户端；元数据加载委托 apie.catalog 功能接口。
+职责：配置（region/mock/policy/凭证）、调用纯函数层（tools.metadata / tools.execute）
+与执行客户端；元数据加载委托 apie.catalog 功能接口（纯内存远端）。
 """
 
 import logging
@@ -10,7 +10,7 @@ from typing import Any, Callable, Sequence
 
 from ..apie import catalog
 from ..apie import mock as apie_mock
-from ..apie.local_store import ApiHit
+from ..apie.memory_store import ApiHit
 from ..auth.credentials import Credentials
 from ..safety import policy as safety_policy
 from ..signer.client import HttpClient
@@ -37,7 +37,6 @@ class ServiceConfig:
     policy_rules: Sequence[safety_policy.PolicyRule] | None = None
     credentials: Credentials | None = None
     mock_base: str = apie_mock.MOCK_BASE
-    allow_live: bool = True
     http_client_factory: Callable[[], execute.ApiExecutor] | None = None
     mock_client_factory: Callable[[], apie_mock.MockApiClient] | None = None
 
@@ -61,9 +60,8 @@ class ToolService:
 
     def load_api_doc(self, product: str, api_name: str, region: str | None = None
                      ) -> ApiHit | None:
-        """在 data/openapi 中查找接口所在 tag 文档，返回 (doc, path, method, op) 或 None。"""
-        r = catalog.find_api_doc(product, api_name, region or self.config.region,
-                                 allow_live=self.config.allow_live)
+        """查找接口 OpenAPI 文档（内存缓存或远端拉取），返回 (doc, path, method, op) 或 None。"""
+        r = catalog.find_api_doc(product, api_name, region or self.config.region)
         return r.data
 
     # ---------- 元数据工具 ----------
@@ -71,21 +69,21 @@ class ToolService:
     def list_products(self, category: str | None = None,
                       keyword: str | None = None) -> ProductListResult | ToolError:
         logger.info("list_products category=%s keyword=%s", category or "-", keyword or "-")
-        r = catalog.get_products(allow_live=self.config.allow_live)
+        r = catalog.get_products()
         groups = r.data
         if groups is None:
             logger.warning("list_products metadata=missing")
-            return {"ok": False, "reason": "产品列表不可用（本地缺失且实时拉取失败）"}
+            return {"ok": False, "reason": "产品列表不可用（远端拉取失败）"}
         return metadata.list_products(groups, counts=catalog.get_api_counts(),
                                       category=category, keyword=keyword)
 
     def get_product(self, product: str) -> ProductResult | ToolError:
         logger.info("get_product product=%s", product)
-        r = catalog.get_products(allow_live=self.config.allow_live)
+        r = catalog.get_products()
         groups = r.data
         if groups is None:
             logger.warning("get_product product=%s metadata=missing", product)
-            return {"ok": False, "reason": "产品列表不可用（本地缺失且实时拉取失败）"}
+            return {"ok": False, "reason": "产品列表不可用（远端拉取失败）"}
         out = metadata.get_product(groups, product, counts=catalog.get_api_counts())
         if out is None:
             logger.warning("get_product product=%s result=not_found", product)
@@ -96,11 +94,11 @@ class ToolService:
                   limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
         logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d",
                     product, tag or "-", search or "-", limit, offset)
-        r = catalog.get_apis(product=product, allow_live=self.config.allow_live)
+        r = catalog.get_apis(product=product)
         apis = r.data
         if apis is None:
             logger.warning("list_apis product=%s metadata=missing", product)
-            return {"ok": False, "reason": "接口索引不可用（本地缺失且实时拉取失败）"}
+            return {"ok": False, "reason": "接口索引不可用（远端拉取失败）"}
         return metadata.list_apis(apis, product, tag=tag, search=search, limit=limit, offset=offset)
 
     def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
@@ -125,7 +123,6 @@ class ToolService:
         _, _, _, op = hit
         return {"ok": True, "product": product, "api": api,
                 "examples": metadata.extract_examples(op)}
-
 
     # ---------- 执行工具 ----------
 

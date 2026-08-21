@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import sys
+from collections import Counter
 from typing import Any
 
 from ..logconf import configure_logging
@@ -42,7 +43,7 @@ def print_table(data: dict) -> None:
     table_rows = [[r.get(c, "") if r.get(c, "") is not None else "" for c in cols] for r in rows]
     col_max = t.get("maxcolwidths")
     print(tabulate.tabulate(table_rows, headers=cols, tablefmt="simple",
-                            maxcolwidths=col_max or 60, disable_numparse=True))
+                             maxcolwidths=col_max or 60, disable_numparse=True))
     if t.get("note"):
         print()
         print(t["note"])
@@ -67,9 +68,9 @@ def extract_example(op: dict | None) -> tuple[object, object] | tuple[None, None
 # ---------- 命令实现 ----------
 
 def cmd_products(args: argparse.Namespace) -> int:
-    r = catalog.get_products(allow_live=True)
+    r = catalog.get_products()
     groups = r.data or []
-    counts = catalog.get_api_counts() if r.source == "local" else {}
+    counts = catalog.get_api_counts()
     out: dict[str, Any] = {"source": r.source,
                            "total_products": sum(len(g["products"]) for g in groups), "groups": []}
     trows: list[dict[str, Any]] = []
@@ -94,7 +95,7 @@ def cmd_products(args: argparse.Namespace) -> int:
 
 
 def cmd_product(args: argparse.Namespace) -> int:
-    r = catalog.get_products(allow_live=True)
+    r = catalog.get_products()
     groups = r.data or []
     target = args.product
     found = None
@@ -108,12 +109,9 @@ def cmd_product(args: argparse.Namespace) -> int:
     if found is None:
         logger.error("产品 %s 未找到", target)
         return 2
-    if r.source == "local":
-        counts = catalog.get_api_counts()
-        ps = found.get("productshort")
-        found["api_count"] = counts.get(ps.upper()) if ps else 0
-    else:
-        found["api_count"] = found.get("api_count") or 0
+    counts = catalog.get_api_counts()
+    ps = found.get("productshort")
+    found["api_count"] = counts.get(ps.upper()) if ps else 0
     out = {"product": found.get("productshort"),
            "name": found.get("name"),
            "api_count": found.get("api_count") or 0,
@@ -130,12 +128,11 @@ def cmd_product(args: argparse.Namespace) -> int:
 
 
 def cmd_tags(args: argparse.Namespace) -> int:
-    r = catalog.get_apis(product=args.product, allow_live=True)
+    r = catalog.get_apis(product=args.product)
     apis = r.data
     if not apis:
         logger.error("产品 %s 无接口或未找到", args.product)
         return 2
-    from collections import Counter
     cnt = Counter((a.get("tags") or "").strip() or "_untagged" for a in apis)
     rows = [{"tag": t, "api_count": c} for t, c in sorted(cnt.items(), key=lambda x: -x[1])]
     out = {"product": args.product, "source": r.source,
@@ -146,7 +143,7 @@ def cmd_tags(args: argparse.Namespace) -> int:
 
 
 def cmd_apis(args: argparse.Namespace) -> int:
-    r = catalog.get_apis(product=args.product, allow_live=True)
+    r = catalog.get_apis(product=args.product)
     apis = r.data
     if not apis:
         logger.error("产品 %s 无接口或未找到", args.product)
@@ -174,7 +171,7 @@ def cmd_apis(args: argparse.Namespace) -> int:
 
 
 def cmd_api(args: argparse.Namespace) -> int:
-    r = catalog.find_api_doc(args.product, args.api, args.region, allow_live=True)
+    r = catalog.find_api_doc(args.product, args.api, args.region)
     hit = r.data
     if not hit:
         logger.error("接口 %s 未找到（产品 %s）", args.api, args.product)
@@ -194,10 +191,13 @@ def cmd_api(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    r = catalog.get_apis(product=args.product, allow_live=False)
+    if not args.product:
+        logger.error("search 需指定 --product")
+        return 2
+    r = catalog.get_apis(product=args.product)
     apis = r.data
     if apis is None:
-        logger.error("本地 apis_docs 缺失，search 需先运行 api-refresh docs 拉取")
+        logger.error("产品 %s 接口列表不可用（远端拉取失败）", args.product)
         return 2
     kw = args.keyword.lower()
     hits = [a for a in apis
@@ -207,10 +207,9 @@ def cmd_search(args: argparse.Namespace) -> int:
     rows = [{"product": a.get("product_short"), "name": a.get("name"),
              "method": a.get("method"), "summary": a.get("summary"),
              "tags": a.get("tags")} for a in hits]
-    out = {"keyword": args.keyword, "source": "local",
+    out = {"keyword": args.keyword, "source": r.source,
            "total": len(rows), "results": rows}
-    if args.product:
-        out["product"] = args.product
+    out["product"] = args.product
     out["_table"] = {"columns": ["product", "name", "method", "summary", "tags"], "rows": rows}
     emit(out, args.fmt)
     return 0
@@ -254,9 +253,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("api", help="接口名（operationId）")
     sp.set_defaults(func=cmd_api)
 
-    sp = sub.add_parser("search", parents=[common], help="全局搜索接口")
+    sp = sub.add_parser("search", parents=[common], help="按产品搜索接口")
     sp.add_argument("keyword")
-    sp.add_argument("--product", help="收窄到指定产品")
+    sp.add_argument("--product", required=True, help="收窄到指定产品")
     sp.add_argument("--limit", type=int, default=20)
     sp.set_defaults(func=cmd_search)
 

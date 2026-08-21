@@ -24,8 +24,8 @@
 │     manager.py  session registry（空闲超时 / LRU 上限）
 │     config.py   DiscoverConfig
 ├─ APIE 元数据层（参考 ../apis 项目重新实现，管道设计保持一致）
-│     console.huaweicloud.com/apiexplorer 抓取 → OpenAPI 2.0 文档目录
-│     data/openapi/{Product}/{Tag}.json  ★ 元数据产物（可重建，不入库）
+│     console.huaweicloud.com/apiexplorer 远端 API Explorer 为唯一数据源
+│     ★ 不落盘，纯内存缓存 + 远端实时回退
 ├─ 执行层
 │     signer/  自实现 SDK-HMAC-SHA256 签名（不依赖官方 SDK）
 │     auth/    凭证加载（AK/SK 环境变量，project_id 自动获取）
@@ -43,7 +43,7 @@
 核心原则：
 
 - **渐进式工作流**：LLM 决策驱动收窄——`list_products` 定产品 → `list_apis`（含 `tag_groups` 全量 tag 概览）定目录 → `get_api` 读文档 → `execute_api` 执行；完整指引写在 server instructions（initialize 响应）与各工具 description。
-- **实时回退**：本地元数据缺失时 MCP 工具自动通过 API Explorer 实时拉取（`apie/catalog.py` 内部决策：LocalStore 缓存命/未命中 → allow_live 时实时抓取并回写缓存）；`ServiceConfig.allow_live` 控制（默认 True，单元测试在 `_service` helper 中默认关闭以避联网）
+- **实时回退**：元数据不走本地磁盘，全部通过 API Explorer 远端实时拉取；`apie/memory_store.py` 纯内存缓存（产品列表/API 列表永驻，API 详情 LRU 上限 500）；`catalog.py` 缓存优先→远端回退。
 - **TDD**：red→green 垂直切片，一次一个接缝、一个测试、一个最小实现。测试只写在预先确认的接缝（S1–S6）上；只 mock 系统边界（外部 HTTP），不 mock 自有模块；期望值必须来自独立真值（官方签名向量、已知 mock 响应），禁止同义反复断言。写测试前如接缝清单有变，先与用户确认。
 - **APIE 管道参考 `../apis` 项目重新实现**：阶段划分、断点续传、tag 映射、Swagger 2.0 校验规则与其保持一致；本仓库为独立实现，不 import apis 代码。
 - **安全**：`execute_api` 必须先过 safety policy（阿里云式 allowlist/denylist 模式匹配）；未配置 policy 时拒绝所有执行；凭证必须是最小权限 IAM 用户的 AK/SK。
@@ -58,8 +58,8 @@
 | `raw/huawei_products.json` | 产品信息 | `api-refresh products`（curl） | 是 |
 | `raw/apis_docs.json` | 接口索引（id/name/method/summary/tags/product_short/info_version），支撑 `list_apis` | `api-refresh docs` | 是 |
 | `raw/apis_detail.json` | 全量接口详情（断点文件 `raw/apis_detail_partial.json`）；非默认 region 在 `raw/{region}/` | `api-refresh details` + `retry` | 是 |
-| `data/openapi/` | **元数据产物**：`{Product}/{Tag}.json` OpenAPI 2.0 文档（默认 region `cn-north-4` 平铺，非默认 region 在 `data/openapi/{region}/`） | `api-refresh`（split→convert→merge→organize） | 是 |
-| `src/openmcp/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端）+ `local_store.py` 本地元数据存储（惰性加载与缓存）+ `catalog.py` 功能接口（本地缓存优先→实时回退决策，隐式读 `HUAWEICLOUD_MCP_DATA_ROOT` 环境变量） | — | — |
+| `data/openapi/` | 管道产物：`{Product}/{Tag}.json` OpenAPI 2.0 文档；MCP server 不依赖此目录 | `api-refresh`（split→convert→merge→organize） | 是 |
+| `src/openmcp/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端）+ `memory_store.py` 纯内存缓存 + `catalog.py` 远端优先功能接口（缓存命中直接返回，未命中实时拉取） | — | — |
 | `src/openmcp/signer/` | SDK-HMAC-SHA256 签名 + 真实模式 HTTP 客户端（超时/429 退避/错误解析） | — | — |
 | `src/openmcp/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
 | `src/openmcp/safety/` | safety policy 解析与匹配（PolicyRule 含 kind=product/server；支持 `product:apiPattern=` 与 `server:serverId[:toolPattern]=` 两种规则前缀） | — | — |
@@ -73,7 +73,7 @@
 | `tests/` | TDD 测试（见「测试」章节） | — | — |
 | `benchmarks/` | LLM Agent 级工作流 benchmark（cases/ 用例、stub_server、scorer/report 纯函数、runner；`results/` 运行产物不入库，`baseline-*.json` 除外） | — | — |
 
-数据流（端到端 openapi 模式）：`APIE 管道 → data/openapi/ + raw/apis_docs.json → 元数据工具（get_api 等）→ execute_api → safety 检查 → 签名 → 华为云 API（或 mock 端点）`。元数据缺失时 MCP 工具自动通过 API Explorer 实时拉取（catalog live 回退）。
+数据流（端到端 openapi 模式）：`API Explorer 远端 → 内存缓存（MemoryStore）→ 元数据工具（get_api 等）→ execute_api → safety 检查 → 签名 → 华为云 API（或 mock 端点）`。缓存未命中时自动从 API Explorer 实时拉取并缓存。
 
 数据流（end-to-end discover 模式）：`configs/mcp-server-catalog.example.json → list_mcp_servers/get_mcp_server → connect_mcp_server → safety 检查 → Streamable HTTP client（mcp SDK）→ 云端 MCP server → list_server_tools/get_server_tool → call_server_tool → safety 检查 → 代发调用`。
 
@@ -82,7 +82,7 @@
 - **产品名**：以 `raw/apis_detail.json` 的驼峰 `product_short` 为准（如 `ECS`）；与 apis 项目的大小写去重映射保持一致。
 - **tag 文件名**：英文 PascalCase，中文→英文映射维护在 `configs/tag_translations.json`；`sanitize_tag` 用 `_` 替换空格与 `/`。
 - **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api`）；discover 模式工具（`list_mcp_servers`/`get_mcp_server`/`connect_mcp_server`/`list_server_tools`/`get_server_tool`/`call_server_tool`/`disconnect_mcp_server`）。
-- **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`、`HUAWEICLOUD_MCP_DATA_ROOT` 项目根路径覆盖）。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
+- **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`）。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
 - **region**：默认 `cn-north-4` 平铺，非默认 region 带 `{region}` 目录/后缀（沿用 apis 的 region 目录规则）。
 
 ## 构建与运行命令
@@ -146,7 +146,7 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | S2 | `safety.evaluate(policy, product, api) → allow/deny` | 纯函数单测 | 手写策略文件 + 预期字面量 |
 | S3 | 6 个工具业务函数 `tools.*` | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/） |
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + 单元层 urllib 打桩注入错误（429/4xx/5xx） | mock 端点返回（HTTP 恒 200；`status_code` 非 200 返回空 body） |
-| S5 | APIE 管道各阶段转换 + `apie.local_store` 数据访问层（加载、`find_api_in_doc` 匹配、缓存/负缓存/clear）+ `apie.catalog` 功能接口（本地缓存优先→实时回退决策，monkeypatch `apie.http.fetch_json` 边界） | 纯函数单测 + 迷你样本集成 + `@pytest.mark.e2e` 全量 | Swagger 2.0 schema 校验；mini fixture + 文件系统状态变化（删除文件后仍缓存命中）；monkeypatch 注入 HTTP 响应控制实时回退路径 |
+| S5 | APIE 管道各阶段转换 + `apie.memory_store` 内存缓存层（set/get/clear/LRU）+ `apie.catalog` 功能接口（内存缓存优先→远端回退决策，monkeypatch `apie.http.fetch_json` 边界） | 纯函数单测 + 迷你样本集成 + `@pytest.mark.e2e` 全量 | Swagger 2.0 schema 校验；monkeypatch 注入 HTTP 响应控制远端回退路径 |
 | S6 | benchmark 纯函数（`benchmarks/cases.py` 加载校验、`scorer.py` 分层评分、`report.py` 统计/基线对比、`trace.py` export/NDJSON 提取、`opencode_db.py` token 读取、`stub_server.py` 本地回环） | 纯函数单测（trace 用 spike 实测格式的迷你 fixture；DB 用临时 sqlite；stub 用回环 HTTP） | 手写字面量 + 独立构造的样例调用序列 |
 | S7a | `mcpdiscover/catalog.py` 目录加载/搜索/缓存/clear | 纯函数单测，迷你目录 fixture + 注入 CatalogSource | 文件系统状态变化（删除文件后仍缓存命中） |
 | S7b | `safety.evaluate_server(policy, server, tool) → allow/deny` | 纯函数单测，手写字面量矩阵（含向后兼容 product 规则） | 手写策略文件 + 预期字面量 |
@@ -156,9 +156,9 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 
 分层与纪律：
 
-- **单元测试**（`tests/test_signer.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`、`tests/test_bench_*.py`、`tests/test_mcpdiscover_*.py`）：纯函数，不联网、不碰真实数据；service 层用数据根路径注入 + 客户端工厂注入。
+- **单元测试**（`tests/test_signer.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`、`tests/test_bench_*.py`、`tests/test_mcpdiscover_*.py`）：纯函数，不联网、不碰真实数据；service 层用 monkeypatch HTTP 注入 + 客户端工厂注入。
 - **集成测试**（`tests/test_execute_mock.py`：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名；`tests/test_execute_mcp_mock.py`：真 mcp SDK client → 本地 MCP stub 回环 HTTP，覆盖 Streamable HTTP 协议全链路）。
-- **E2E 测试**（`tests/test_e2e.py`：真实 AK/SK 只读调用；`tests/test_workflow_e2e.py`：openapi 渐进式工作流全链，mock 模式 + 真实 data/openapi 产物；`tests/test_workflow_discover_e2e.py`：discover 渐进式工作流全链，mock 模式 + 本地 MCP stub 回环，无外网依赖）：标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。
+- **E2E 测试**（`tests/test_e2e.py`：真实 AK/SK 只读调用；`tests/test_workflow_e2e.py`：openapi 渐进式工作流全链，真实 API Explorer 远端数据；`tests/test_workflow_discover_e2e.py`：discover 渐进式工作流全链，mock 模式 + 本地 MCP stub 回环，无外网依赖）：标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。
 - red→green 垂直切片，禁止先写全部测试再写实现；禁止 mock 自有模块；期望值禁止用被测代码同法重算。
 
 ## 校验规则（必须满足）
