@@ -98,6 +98,10 @@ timeout: 120
         ("id: a\nprompt: p\nexpect: {execute: {product: ECS, api: X}}\nrepeat: 0", "repeat"),
         ("id: a\nprompt: p\nexpect: {execute: {product: ECS, api: X}}\ntimeout: -1", "timeout"),
         ("id: a\nprompt: p", "expect"),
+        ("id: a\nprompt: p\nexpect: {execute: {product: ECS, api: X}, constraints: {no_execute: 1}}", "no_execute"),
+        ("id: a\nprompt: p\nexpect: {execute: {product: ECS, api: X},"
+         " constraints: {tag_narrowing: 1}}", "tag_narrowing"),
+        ("id: a\nprompt: p\nexpect: {execute: {product: ECS, api: X}, constraints: {max_calls: true}}", "max_calls"),
     ],
 )
 def test_invalid_cases_rejected(tmp_path, doc, msg_part):
@@ -112,6 +116,36 @@ def test_duplicate_id_rejected(tmp_path):
     (tmp_path / "b.yaml").write_text(MINIMAL, encoding="utf-8")
     with pytest.raises(ValueError, match="重复"):
         bench_cases.load_cases(tmp_path)
+
+
+def test_constraints_parsed(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        """\
+id: t
+prompt: p
+expect:
+  execute: {product: ECS, api: ListServersDetails}
+  constraints:
+    no_execute: false
+    tag_narrowing: true
+    max_calls: 6
+""",
+        encoding="utf-8",
+    )
+    c = bench_cases.load_cases(p)[0]
+    assert c.expect.constraints.no_execute is False
+    assert c.expect.constraints.tag_narrowing is True
+    assert c.expect.constraints.max_calls == 6
+
+
+def test_constraints_default_to_empty(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(MINIMAL, encoding="utf-8")
+    c = bench_cases.load_cases(p)[0]
+    assert c.expect.constraints.no_execute is False
+    assert c.expect.constraints.tag_narrowing is False
+    assert c.expect.constraints.max_calls == 0
 
 
 def test_missing_path_rejected(tmp_path):

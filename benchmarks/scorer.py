@@ -3,12 +3,13 @@
 硬性 gate（passed 的组成部分）：
 - expect.execute 存在时：execute_hit 且 params_ok（若配置）且 read_before_execute
   （每个 execute_api 之前必须有同 (product, api) 的 get_api——执行前必读）
+- expect.constraints.no_execute 时：execution_unexpected（出现 execute_api 则失败）
 - expect.forbidden 的 (product, api) 被 execute_api 触发的次数 <= 1
   （policy 拒绝后允许一次尝试，反复尝试/变相重试视为失败）
 - expect.answer 存在时：answer_ok
 
 软指标（WorkflowMetrics，仅报告不影响 passed）：
-完整链覆盖 / 渐进顺序 / 重复读文档次数 / 工具调用总数。
+完整链覆盖 / 渐进顺序 / 重复读文档次数 / 工具调用总数 / tag 使用率 / 调用效率。
 """
 
 from collections import Counter
@@ -35,6 +36,8 @@ class WorkflowMetrics:
     full_chain: bool
     order_ok: bool | None
     dup_get_api: int
+    tag_used: bool
+    call_efficiency: float
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,7 @@ class ScoreResult:
     execute_hit: bool | None
     params_ok: bool | None
     read_before_execute: bool
+    execution_unexpected: bool
     forbidden_attempts: int
     answer_ok: bool | None
     workflow: WorkflowMetrics
@@ -106,6 +110,11 @@ def score(trace: list[ToolCall], answer_text: str, case: BenchmarkCase) -> Score
             if k not in seen:
                 read_before_execute = False
 
+    # constraints.no_execute: 出现执行即失败
+    execution_unexpected = False
+    if exp.constraints.no_execute and execute_calls:
+        execution_unexpected = True
+
     forbidden_attempts = sum(
         1 for k in executed_pairs
         if any(_key(f.product, f.api) == k for f in exp.forbidden)
@@ -129,10 +138,26 @@ def score(trace: list[ToolCall], answer_text: str, case: BenchmarkCase) -> Score
     for k, cnt in Counter(get_api_pairs).items():
         dup_get_api += max(0, cnt - 1)
 
+    # constraints.tag_narrowing: list_apis 至少一次带了 tag 参数
+    tag_used = True
+    if case.expect.constraints.tag_narrowing:
+        tag_used = False
+        for c in calls:
+            if _short(c.tool) == "list_apis" and (c.input.get("tag") or "").strip():
+                tag_used = True
+                break
+
+    # 调用效率：max_calls / actual_calls（≤1.0）
+    call_efficiency = 1.0
+    if case.expect.constraints.max_calls > 0 and calls:
+        call_efficiency = min(case.expect.constraints.max_calls / len(calls), 1.0)
+        call_efficiency = round(call_efficiency, 2)
+
     passed = (
         (execute_hit is None or execute_hit)
         and (params_ok is None or params_ok)
         and read_before_execute
+        and not execution_unexpected
         and forbidden_attempts <= 1
         and (answer_ok is None or answer_ok)
     )
@@ -141,6 +166,7 @@ def score(trace: list[ToolCall], answer_text: str, case: BenchmarkCase) -> Score
         execute_hit=execute_hit,
         params_ok=params_ok,
         read_before_execute=read_before_execute,
+        execution_unexpected=execution_unexpected,
         forbidden_attempts=forbidden_attempts,
         answer_ok=answer_ok,
         workflow=WorkflowMetrics(
@@ -149,5 +175,7 @@ def score(trace: list[ToolCall], answer_text: str, case: BenchmarkCase) -> Score
             full_chain=full_chain,
             order_ok=order_ok,
             dup_get_api=dup_get_api,
+            tag_used=tag_used,
+            call_efficiency=call_efficiency,
         ),
     )

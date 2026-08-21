@@ -5,3 +5,6 @@ expect:
     product: VPC
     api: ListVpcs
   answer: VPC
+  constraints:
+    tag_narrowing: true
+    max_calls: 8

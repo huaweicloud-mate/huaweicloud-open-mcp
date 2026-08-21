@@ -197,3 +197,108 @@ def test_execute_hit_none_when_no_execute_expect():
     r = score([], "x 列表", case)
     assert r.execute_hit is None
     assert r.passed is True
+
+
+def test_no_execute_constraint_fails_when_execute_called():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  answer: x\n  constraints:\n    no_execute: true\n"
+    )
+    trace = [tc("list_apis"), tc("execute_api", product="ECS", api="Foo")]
+    r = score(trace, "x 结果", case)
+    assert r.execution_unexpected is True
+    assert r.passed is False
+
+
+def test_no_execute_constraint_passes_when_no_execute():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  answer: ListServersDetails\n  constraints:\n    no_execute: true\n"
+    )
+    trace = [tc("list_products"), tc("list_apis"), tc("get_api", product="ECS", api="X")]
+    r = score(trace, "接口有 ListServersDetails", case)
+    assert r.execution_unexpected is False
+    assert r.passed is True
+
+
+def test_tag_used_when_tag_narrowing_set():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  execute: {product: ECS, api: ListServersDetails}\n"
+        "  constraints:\n    tag_narrowing: true\n"
+    )
+    trace = [tc("list_apis", product="ECS", tag="生命周期管理"),
+             tc("get_api", product="ECS", api="ListServersDetails"),
+             tc("execute_api", product="ECS", api="ListServersDetails")]
+    r = score(trace, "结果", case)
+    assert r.workflow.tag_used is True
+    assert r.passed is True
+
+
+def test_tag_not_used_when_tag_narrowing_set():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  execute: {product: ECS, api: ListServersDetails}\n"
+        "  constraints:\n    tag_narrowing: true\n"
+    )
+    trace = [tc("list_apis", product="ECS"),  # no tag
+             tc("get_api", product="ECS", api="ListServersDetails"),
+             tc("execute_api", product="ECS", api="ListServersDetails")]
+    r = score(trace, "结果", case)
+    assert r.workflow.tag_used is False
+    assert r.passed is True  # 软指标不影响 pass
+
+
+def test_tag_used_defaults_true_when_not_required():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  execute: {product: ECS, api: ListServersDetails}\n"
+    )
+    trace = [tc("list_apis", product="ECS")]
+    r = score(trace, "结果", case)
+    assert r.workflow.tag_used is True
+
+
+def test_call_efficiency_within_max():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  execute: {product: ECS, api: ListServersDetails}\n"
+        "  constraints:\n    max_calls: 6\n"
+    )
+    trace = [tc("list_products"), tc("list_apis"), tc("get_api", product="ECS", api="ListServersDetails"),
+             tc("execute_api", product="ECS", api="ListServersDetails")]
+    r = score(trace, "结果", case)
+    assert r.workflow.call_efficiency == 1.0
+
+
+def test_call_efficiency_exceeds_max():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  execute: {product: ECS, api: ListServersDetails}\n"
+        "  constraints:\n    max_calls: 4\n"
+    )
+    trace = [tc("list_products"), tc("list_apis"), tc("list_apis"), tc("list_apis"),
+             tc("get_api", product="ECS", api="ListServersDetails"),
+             tc("execute_api", product="ECS", api="ListServersDetails")]
+    r = score(trace, "结果", case)
+    # 6 calls > 4 max → efficiency = 4/6 = 0.67
+    assert r.workflow.call_efficiency == 0.67
+    assert r.passed is True  # 软指标不影响 pass
+
+
+def test_call_efficiency_no_constraint():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  execute: {product: ECS, api: ListServersDetails}\n"
+    )
+    r = score(HAPPY_TRACE, "bench-server", case)
+    assert r.workflow.call_efficiency == 1.0
+
+
+def test_call_efficiency_empty_trace():
+    case = make_case(
+        "id: t\nprompt: p\nexpect:\n"
+        "  answer: x\n  constraints:\n    max_calls: 4\n"
+    )
+    r = score([], "x", case)
+    assert r.workflow.call_efficiency == 1.0

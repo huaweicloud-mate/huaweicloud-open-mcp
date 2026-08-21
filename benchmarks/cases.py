@@ -1,7 +1,7 @@
 """benchmark 用例定义、加载与校验（S6 纯函数，不碰磁盘以外系统边界）。
 
 用例 YAML 约定：每文件一个 case（顶层 mapping）。expect 至少含
-execute / forbidden / answer 之一。
+execute / forbidden / answer 之一；constraints 可选。
 """
 
 from dataclasses import dataclass, field
@@ -21,11 +21,23 @@ class ExecuteExpect:
 
 
 @dataclass(frozen=True)
+class Constraints:
+    no_execute: bool = False
+    tag_narrowing: bool = False
+    max_calls: int = 0
+
+    @classmethod
+    def empty(cls) -> "Constraints":
+        return cls()
+
+
+@dataclass(frozen=True)
 class Expect:
     executes: tuple[ExecuteExpect, ...] = field(default_factory=tuple)
     params: dict[str, Any] | None = None
     answer: str | None = None
     forbidden: tuple[ExecuteExpect, ...] = field(default_factory=tuple)
+    constraints: Constraints = field(default_factory=Constraints.empty)
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,23 @@ def _expect_forbidden(data: Any, source: str) -> tuple[ExecuteExpect, ...]:
     return tuple(out)
 
 
+def _parse_constraints(data: Any, source: str) -> Constraints:
+    if data is None:
+        return Constraints.empty()
+    if not isinstance(data, dict):
+        raise ValueError(f"{source}: expect.constraints 必须是 mapping")
+    no_execute = data.get("no_execute", False)
+    tag_narrowing = data.get("tag_narrowing", False)
+    max_calls = data.get("max_calls", 0)
+    if not isinstance(no_execute, bool):
+        raise ValueError(f"{source}: constraints.no_execute 必须是 bool")
+    if not isinstance(tag_narrowing, bool):
+        raise ValueError(f"{source}: constraints.tag_narrowing 必须是 bool")
+    if not isinstance(max_calls, int) or isinstance(max_calls, bool):
+        raise ValueError(f"{source}: constraints.max_calls 必须是整数")
+    return Constraints(no_execute=no_execute, tag_narrowing=tag_narrowing, max_calls=max_calls)
+
+
 def parse_case(data: Any, source: str = "") -> BenchmarkCase:
     if not isinstance(data, dict):
         raise ValueError(f"{source}: 用例必须是 mapping")
@@ -94,6 +123,7 @@ def parse_case(data: Any, source: str = "") -> BenchmarkCase:
         raise ValueError(f"{source}: expect.answer 必须是字符串")
     executes = _expect_executes(execute_raw, source)
     forbidden = _expect_forbidden(expect_raw.get("forbidden"), source)
+    constraints = _parse_constraints(expect_raw.get("constraints"), source)
     if not executes and not forbidden and answer is None:
         raise ValueError(f"{source}: expect 至少需含 execute/forbidden/answer 之一")
 
@@ -107,7 +137,8 @@ def parse_case(data: Any, source: str = "") -> BenchmarkCase:
     return BenchmarkCase(
         id=case_id,
         prompt=prompt,
-        expect=Expect(executes=executes, params=params, answer=answer, forbidden=forbidden),
+        expect=Expect(executes=executes, params=params, answer=answer,
+                      forbidden=forbidden, constraints=constraints),
         repeat=repeat,
         timeout=timeout,
         source=source,

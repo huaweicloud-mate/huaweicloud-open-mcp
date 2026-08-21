@@ -5,3 +5,6 @@ expect:
     - {product: ECS, api: ListServersDetails}
     - {product: ECS, api: ListCloudServers}
   answer: 服务器
+  constraints:
+    tag_narrowing: true
+    max_calls: 8

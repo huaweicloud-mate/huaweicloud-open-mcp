@@ -19,10 +19,12 @@ def run(case_id, repeat, elapsed, passed, *, error=None, tokens=None, cost=0.0,
         execute_hit=passed,
         params_ok=None,
         read_before_execute=passed,
+        execution_unexpected=False,
         forbidden_attempts=0,
         answer_ok=None,
         workflow=WorkflowMetrics(total_calls=4, steps={"get_api": 1, "execute_api": 1},
-                                 full_chain=full_chain, order_ok=order_ok, dup_get_api=0),
+                                 full_chain=full_chain, order_ok=order_ok, dup_get_api=0,
+                                 tag_used=True, call_efficiency=1.0),
     )
     return RunResult(
         case_id=case_id, backend="stub", repeat=repeat,

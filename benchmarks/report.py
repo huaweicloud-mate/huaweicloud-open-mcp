@@ -43,6 +43,8 @@ class CaseStats:
     full_chain_rate: float | None
     order_ok_rate: float | None
     dup_get_api_mean: float | None
+    tag_used_rate: float | None
+    call_efficiency_mean: float | None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {}
@@ -83,6 +85,8 @@ def aggregate(results: list[RunResult]) -> list[CaseStats]:
         chains = [s.workflow.full_chain for s in scores]
         orders = [s.workflow.order_ok is True for s in scores]
         dups = [s.workflow.dup_get_api for s in scores]
+        tag_used = [s.workflow.tag_used for s in scores]
+        call_effs = [s.workflow.call_efficiency for s in scores]
         passed_cnt = sum(1 for s in scores if s.passed)
         out.append(CaseStats(
             case_id=case_id,
@@ -103,6 +107,8 @@ def aggregate(results: list[RunResult]) -> list[CaseStats]:
             full_chain_rate=sum(chains) / len(chains) if chains else None,
             order_ok_rate=sum(orders) / len(orders) if orders else None,
             dup_get_api_mean=sum(dups) / len(dups) if dups else None,
+            tag_used_rate=sum(tag_used) / len(tag_used) if tag_used else None,
+            call_efficiency_mean=sum(call_effs) / len(call_effs) if call_effs else None,
         ))
     return out
 
@@ -125,11 +131,13 @@ def render_markdown(stats: list[CaseStats], *, baseline: dict[str, Any] | None,
         _fmt(s.tokens_in_mean, 0), _fmt(s.tokens_out_mean, 0), _fmt(s.tokens_cache_read_mean, 0),
         _fmt(s.cost_sum, 4), _fmt(s.tool_calls_mean), _fmt_pct(s.full_chain_rate),
         _fmt_pct(s.order_ok_rate), _fmt(s.dup_get_api_mean),
+        _fmt_pct(s.tag_used_rate), _fmt(s.call_efficiency_mean, 2),
     ] for s in stats]
     table = tabulate(
         rows,
         headers=["case", "pass", "pass率", "错误", "耗时均值(s)", "p50", "p95",
-                 "token入", "token出", "cache读", "成本", "工具调用", "全链率", "顺序率", "重复get_api"],
+                 "token入", "token出", "cache读", "成本", "工具调用", "全链率", "顺序率", "重复get_api",
+                 "tag使用率", "效率"],
         tablefmt="github",
     )
     out = [f"# benchmark 结果（backend={backend} model={model}）", "", table, ""]
