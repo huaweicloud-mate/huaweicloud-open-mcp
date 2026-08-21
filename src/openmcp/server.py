@@ -7,7 +7,6 @@
 """
 
 import argparse
-import json
 import logging
 import os
 from typing import Any, Literal, cast
@@ -17,11 +16,9 @@ from mcp.server.mcpserver import MCPServer
 from .apie import mock as apie_mock
 from .auth import credentials as cred_mod
 from .logconf import configure_logging
-from .mcpdiscover import catalog as discover_catalog
 from .mcpdiscover.config import DiscoverConfig
-from .mcpdiscover.manager import SessionManager
-from .mcpdiscover.sdk import SdkSessionClient
 from .safety import policy as safety
+from .tools.discover import DiscoverService
 from .tools.service import ServiceConfig, ToolService
 from .types import (
     ApiDetailResult,
@@ -31,7 +28,6 @@ from .types import (
     McpCallResult,
     McpConnectResult,
     McpDisconnectResult,
-    McpServerItem,
     McpServerListResult,
     McpServerResult,
     ProductListResult,
@@ -213,79 +209,9 @@ def build_discover_config(args: argparse.Namespace) -> DiscoverConfig:
     )
 
 
-def _to_mcp_server_item(entry: dict) -> McpServerItem:
-    return McpServerItem(
-        server=entry["id"],
-        name=entry["name"],
-        display_name=entry["display_name"],
-        category=entry["category"],
-        description=entry["description"],
-        auth=entry["auth"],
-        version=entry["version"],
-        endpoint=entry["endpoint"],
-    )
-
-
-def _discover_list_servers(source: discover_catalog.CatalogSource, *,
-                           category: str | None = None,
-                           keyword: str | None = None) -> McpServerListResult:
-    entries = discover_catalog.list_servers(source, category=category, keyword=keyword)
-    items = [_to_mcp_server_item(e) for e in entries]
-    return {"ok": True, "total": len(items), "servers": items}
-
-
-def _discover_get_server(source: discover_catalog.CatalogSource,
-                         server_id: str) -> McpServerResult | ToolError:
-    entry = discover_catalog.get_server(source, server_id)
-    if entry is None:
-        return {"ok": False, "reason": f"MCP server {server_id} 未找到"}
-    return {
-        "ok": True,
-        "server": entry["id"],
-        "name": entry["name"],
-        "display_name": entry["display_name"],
-        "category": entry["category"],
-        "description": entry["description"],
-        "auth": entry["auth"],
-        "version": entry["version"],
-        "endpoint": entry["endpoint"],
-    }
-
-
-SCHEMA_TRUNCATE = 16384  # ~16KB
-
-
-def _tool_summary(tool: dict[str, Any]) -> dict[str, Any]:
-    """提取工具摘要：name + 首行 description + required 参数名列表。"""
-    desc = tool.get("description", "") or ""
-    first_line = desc.split("\n")[0]
-    schema = tool.get("inputSchema") or {}
-    required: list[str] = list(schema.get("required", [])) if isinstance(schema, dict) else []
-    return {"name": tool["name"], "description": first_line, "required": required}
-
-
-def _search_tools(tools: list[dict[str, Any]], keyword: str) -> list[dict[str, Any]]:
-    kw = keyword.lower()
-    return [t for t in tools
-            if kw in t["name"].lower() or kw in (t.get("description", "") or "").lower()]
-
-
-def _safe_serialize(obj: Any) -> str:
-    try:
-        return json.dumps(obj, ensure_ascii=False)
-    except Exception:
-        return repr(obj)
-
-
 def build_discover_app(config: DiscoverConfig, *,
                        log_level: LogLevel = "INFO") -> MCPServer:
-    catalog_source = discover_catalog.LocalCatalogSource(config.catalog_path)
-
-    manager = SessionManager(
-        client_factory=lambda: SdkSessionClient(),
-        idle_timeout=config.session_idle_timeout,
-        max_sessions=config.max_sessions,
-    )
+    ds = DiscoverService(config)
 
     server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
                        instructions=INSTRUCTIONS_DISCOVER, log_level=log_level)
@@ -299,7 +225,7 @@ def build_discover_app(config: DiscoverConfig, *,
         不确定时先不加过滤全量浏览。
         """
         logger.info("list_mcp_servers category=%s keyword=%s", category or "-", keyword or "-")
-        return _discover_list_servers(catalog_source, category=category, keyword=keyword)
+        return ds.list_servers(category=category, keyword=keyword)
 
     @server.tool()
     def get_mcp_server(server: str) -> McpServerResult | ToolError:
@@ -308,7 +234,7 @@ def build_discover_app(config: DiscoverConfig, *,
         选定后调用 connect_mcp_server 建立连接。
         """
         logger.info("get_mcp_server server=%s", server)
-        return _discover_get_server(catalog_source, server)
+        return ds.get_server(server)
 
     @server.tool()
     async def connect_mcp_server(server: str) -> McpConnectResult | ToolError:
@@ -318,34 +244,7 @@ def build_discover_app(config: DiscoverConfig, *,
         真实模式 endpoint 严格取自目录；mock 模式指向 --mock-base。
         """
         logger.info("connect_mcp_server server=%s", server)
-        entry = discover_catalog.get_server(catalog_source, server)
-        if entry is None:
-            return {"ok": False, "reason": f"MCP server {server} 未找到"}
-
-        err = safety.check_server(config.policy_rules, server)
-        if err:
-            logger.warning("connect %s policy=deny", server)
-            return {"ok": False, "reason": err}
-
-        endpoint = entry["endpoint"]
-        if config.mock and config.mock_base:
-            endpoint = config.mock_base
-        elif config.mock:
-            endpoint = "http://127.0.0.1:8000/mcp"
-
-        try:
-            info = await manager.connect(server, endpoint)
-        except Exception as exc:
-            logger.warning("connect %s failed: %s", server, exc)
-            return {"ok": False, "reason": f"连接失败: {exc}"}
-
-        return {
-            "ok": True,
-            "server": server,
-            "endpoint": endpoint,
-            "protocol_version": info.protocol_version,
-            "server_info": info.server_info,
-        }
+        return await ds.connect(server)
 
     @server.tool()
     async def list_server_tools(server: str, search: str | None = None,
@@ -358,27 +257,7 @@ def build_discover_app(config: DiscoverConfig, *,
         """
         logger.info("list_server_tools server=%s search=%s limit=%d offset=%d",
                     server, search or "-", limit, offset)
-        if not manager.is_connected(server):
-            return {"ok": False, "reason": f"server {server} 未连接，请先调用 connect_mcp_server"}
-
-        try:
-            raw_tools = await manager.list_tools(server)
-        except Exception as exc:
-            logger.warning("list_server_tools %s failed: %s", server, exc)
-            return {"ok": False, "reason": f"获取工具列表失败: {exc}"}
-
-        summaries = [_tool_summary(t) for t in raw_tools]
-        if search:
-            summaries = _search_tools(raw_tools, search)
-            summaries = [_tool_summary(t) for t in summaries]
-
-        total = len(summaries)
-        summaries = summaries[offset:offset + limit]
-        return {
-            "ok": True, "server": server,
-            "total": total, "offset": offset, "limit": limit,
-            "tools": cast(list[Any], summaries),
-        }
+        return await ds.list_tools(server, search=search, limit=limit, offset=offset)
 
     @server.tool()
     async def get_server_tool(server: str, tool: str) -> ServerToolResult | ToolError:
@@ -387,34 +266,7 @@ def build_discover_app(config: DiscoverConfig, *,
         仅取调用目标一个工具，防上下文暴涨；超 16KB 自动截断。
         """
         logger.info("get_server_tool server=%s tool=%s", server, tool)
-        if not manager.is_connected(server):
-            return {"ok": False, "reason": f"server {server} 未连接，请先调用 connect_mcp_server"}
-
-        try:
-            raw_tools = await manager.list_tools(server)
-        except Exception as exc:
-            return {"ok": False, "reason": f"获取工具信息失败: {exc}"}
-
-        hit: dict[str, Any] | None = None
-        for t in raw_tools:
-            if t.get("name", "").lower() == tool.lower():
-                hit = t
-                break
-        if hit is None:
-            return {"ok": False, "reason": f"工具 {tool} 未找到（server {server}）"}
-
-        schema = hit.get("inputSchema", {})
-        serialized = _safe_serialize(schema)
-        truncated = len(serialized.encode("utf-8")) > SCHEMA_TRUNCATE
-        if truncated:
-            schema = {"_truncated": True, "_summary": hit.get("description", ""),
-                      "_original_size_bytes": len(serialized.encode("utf-8"))}
-        return {
-            "ok": True, "server": server, "tool": hit.get("name", tool),
-            "description": hit.get("description"),
-            "inputSchema": schema,
-            "truncated": truncated,
-        }
+        return await ds.get_tool(server, tool)
 
     @server.tool()
     async def call_server_tool(server: str, tool: str,
@@ -425,30 +277,7 @@ def build_discover_app(config: DiscoverConfig, *,
         arguments 为工具参数 dict；policy 匹配 server:serverId:toolPattern=allow|deny。
         """
         logger.info("call_server_tool server=%s tool=%s", server, tool)
-        if not manager.is_connected(server):
-            return {"ok": False, "reason": f"server {server} 未连接，请先调用 connect_mcp_server"}
-
-        err = safety.check_server(config.policy_rules, server, tool)
-        if err:
-            logger.warning("call_server_tool %s:%s policy=deny", server, tool)
-            return {"ok": False, "reason": err}
-
-        try:
-            result = await manager.call_tool(server, tool, arguments or {})
-        except Exception as exc:
-            logger.warning("call_server_tool %s:%s failed: %s", server, tool, exc)
-            return {"ok": False, "reason": str(exc), "server": server, "tool": tool}
-
-        serialized = _safe_serialize(result)
-        is_truncated = len(serialized.encode("utf-8")) > 65536
-        if is_truncated:
-            result = {"_truncated": True, "_text": serialized[:65536]}
-
-        return {
-            "ok": True, "server": server, "tool": tool,
-            "result": result,
-            "truncated": is_truncated,
-        }
+        return await ds.call_tool(server, tool, arguments=arguments)
 
     @server.tool()
     async def disconnect_mcp_server(server: str) -> McpDisconnectResult:
@@ -457,8 +286,7 @@ def build_discover_app(config: DiscoverConfig, *,
         建议任务完成后显式调用释放资源。
         """
         logger.info("disconnect_mcp_server server=%s", server)
-        released = await manager.disconnect(server)
-        return {"ok": True, "server": server, "released": released}
+        return await ds.disconnect(server)
 
     return server
 

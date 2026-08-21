@@ -90,31 +90,23 @@ def test_normalize_response_truncates_oversized():
 
 # ---------- execute_api ----------
 
-def test_execute_refuses_without_policy(mini_detail):
+def test_execute_missing_doc_host_returns_error(mini_detail):
     doc, path, method, op = _get_op(mini_detail)
+    doc.pop("host", None)
     client = StubClient()
+    cred = Credentials(ak="AK", sk="SK", project_id="proj123")
     out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                              {"limit": 1}, policy_rules=None, client=client, credentials=CRED)
+                              {"limit": 1}, client=client, credentials=cred)
     assert out["ok"] is False
-    assert client.calls == []
-
-
-def test_execute_deny_by_policy(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    client = StubClient()
-    rules = _policy("ECS:*Show*=allow", "*=deny")
-    out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                              {"limit": 1}, policy_rules=rules, client=client, credentials=CRED)
-    assert out["ok"] is False
-    assert client.calls == []
+    assert "host" in out["reason"]
 
 
 def test_execute_allow_calls_client(mini_detail):
     doc, path, method, op = _get_op(mini_detail)
     client = StubClient([{"status": 200, "headers": {}, "body": {"count": 0}}])
-    rules = _policy("ECS:*=allow")
     out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                              {"limit": 1}, policy_rules=rules, client=client, credentials=CRED)
+                              {"limit": 1}, client=client,
+                              credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
     assert out["ok"] is True
     assert out["status"] == 200
     assert client.calls[0][0] == "GET"

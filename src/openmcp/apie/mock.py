@@ -5,13 +5,12 @@
 """
 
 import logging
-import time
-import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 from ..types import ClientResponse
-from .http import parse_body
+from .http import _retry, parse_body
 
 logger = logging.getLogger("openmcp.apie.mock")
 
@@ -33,29 +32,16 @@ class MockApiClient:
         url = (f"{self.base_url}{MOCK_PATH}/{product}/{api_name}"
                f"?{urllib.parse.urlencode(params)}")
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
-                                                   "Accept": "application/json"})
-        last_err: Exception | None = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    return {"status": resp.status,
-                            "headers": dict(resp.headers),
-                            "body": parse_body(resp.read())}
-            except urllib.error.HTTPError as e:
-                last_err = e
-                if e.code == 429 and attempt < self.max_retries:
-                    sleep_s = self.retry_backoff * (2 ** attempt)
-                    logger.warning("mock 429 rate limited, retry %d/%d after %.1fs",
-                                   attempt + 1, self.max_retries, sleep_s)
-                    time.sleep(sleep_s)
-                    continue
-                return {"status": e.code, "headers": dict(e.headers), "body": parse_body(e.read())}
-            except Exception as e:
-                last_err = e
-                if attempt < self.max_retries:
-                    time.sleep(self.retry_backoff * (2 ** attempt))
-                    continue
-                raise
-        if last_err is None:
-            raise RuntimeError("mock request failed without exception")
-        raise last_err
+                                                    "Accept": "application/json"})
+
+        def _do() -> tuple[int, dict[str, str], Any]:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.status, dict(resp.headers), parse_body(resp.read())
+
+        try:
+            status, headers, body = _retry(_do, max_retries=self.max_retries,
+                                           backoff=self.retry_backoff,
+                                           logger_name="openmcp.apie.mock")
+            return {"status": status, "headers": headers, "body": body}
+        except urllib.error.HTTPError as e:
+            return {"status": e.code, "headers": dict(e.headers), "body": parse_body(e.read())}

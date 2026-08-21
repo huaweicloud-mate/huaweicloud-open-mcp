@@ -7,35 +7,50 @@ mock 端点行为（实测确认）：
 - status_code 为其它值时返回空 body。
 """
 
-from openmcp.apie import catalog
+from openmcp.apie.memory_store import MemoryStore
 from openmcp.apie.mock import MockApiClient
 from openmcp.safety import policy
 from openmcp.tools.service import ServiceConfig, ToolService
 
 RULES_ALLOW_ECS = policy.parse_policy(["ECS:*=allow", "*=deny"])
 
-_RAW_DETAIL = {
-    "api_name": "ListServersDetails",
-    "api_product_short": "ECS",
+FULL_DOC = {
+    "swagger": "2.0",
     "host": "ecs.cn-north-4.myhuaweicloud.com",
+    "basePath": "/",
     "paths": {
         "/v1/{project_id}/cloudservers/detail": {
-            "get": {"operationId": "ListServersDetails", "parameters": [],
-                    "responses": {"200": {"description": "OK"}}},
+            "get": {
+                "operationId": "ListServersDetails",
+                "parameters": [
+                    {"name": "project_id", "in": "path", "type": "string", "required": True},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            }
         },
         "/v1/{project_id}/cloudservers": {
-            "post": {"operationId": "CreateServers",
-                     "parameters": [{"name": "project_id", "in": "path", "type": "string"}],
-                     "responses": {"200": {"description": "OK"}}},
+            "post": {
+                "operationId": "CreateServers",
+                "parameters": [
+                    {"name": "project_id", "in": "path", "type": "string"},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            },
         },
     },
+    "definitions": {},
 }
 
 
-def _service(monkeypatch, rules):
-    catalog._reset_store()
-    monkeypatch.setattr(catalog.http, "fetch_json", lambda url, **kw: dict(_RAW_DETAIL))
-    return ToolService(ServiceConfig(mock=True, policy_rules=rules))
+def _service(rules):
+    store = MemoryStore()
+    store.set_api_cache(
+        ("ecs", "ListServersDetails", "cn-north-4"),
+        (FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
+         FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
+    )
+    return ToolService(store=store,
+                       config=ServiceConfig(mock=True, policy_rules=rules))
 
 
 def test_mock_list_servers_details():
@@ -59,16 +74,16 @@ def test_mock_status_code_non_200_empty_body():
     assert resp["body"] is None
 
 
-def test_service_execute_mock_end_to_end(monkeypatch):
-    service = _service(monkeypatch, RULES_ALLOW_ECS)
+def test_service_execute_mock_end_to_end():
+    service = _service(RULES_ALLOW_ECS)
     out = service.execute_api("ECS", "ListServersDetails")
     assert out["ok"] is True
     assert out["status"] == 200
     assert "servers" in out["body"]
 
 
-def test_service_execute_mock_denied(monkeypatch):
-    service = _service(monkeypatch, policy.parse_policy(["ECS:*Show*=allow", "*=deny"]))
+def test_service_execute_mock_denied():
+    service = _service(policy.parse_policy(["ECS:*Show*=allow", "*=deny"]))
     out = service.execute_api("ECS", "ListServersDetails")
     assert out["ok"] is False
     assert "policy" in out["reason"]

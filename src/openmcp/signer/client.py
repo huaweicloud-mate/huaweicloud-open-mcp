@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from ..apie.http import parse_body
+from ..apie.http import _retry, parse_body
 from ..auth.credentials import Credentials
 from ..types import ClientResponse
 from . import sign
@@ -29,34 +29,19 @@ class HttpClient:
         self.retry_backoff = retry_backoff
 
     def _open(self, url: str, method: str, headers: dict[str, str],
-              body_bytes: bytes | None) -> tuple[int, dict[str, str], bytes]:
+               body_bytes: bytes | None) -> tuple[int, dict[str, str], bytes]:
         req = urllib.request.Request(url, data=body_bytes, method=method, headers=headers)
-        last_err: Exception | None = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    return resp.status, dict(resp.headers), resp.read()
-            except urllib.error.HTTPError as e:
-                last_err = e
-                if e.code == 429 and attempt < self.max_retries:
-                    sleep_s = self.retry_backoff * (2 ** attempt)
-                    logger.warning("429 rate limited, retry %d/%d after %.1fs",
-                                   attempt + 1, self.max_retries, sleep_s)
-                    time.sleep(sleep_s)
-                    continue
-                return e.code, dict(e.headers), e.read()
-            except Exception as e:
-                last_err = e
-                if attempt < self.max_retries:
-                    sleep_s = self.retry_backoff * (2 ** attempt)
-                    logger.warning("http error: %s, retry %d/%d after %.1fs",
-                                   e, attempt + 1, self.max_retries, sleep_s)
-                    time.sleep(sleep_s)
-                    continue
-                raise
-        if last_err is None:
-            raise RuntimeError("request failed without exception")
-        raise last_err
+
+        def _do() -> tuple[int, dict[str, str], bytes]:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.status, dict(resp.headers), resp.read()
+
+        try:
+            return _retry(_do, max_retries=self.max_retries,
+                          backoff=self.retry_backoff,
+                          logger_name="openmcp.signer.client")
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers), e.read()
 
     def request(self, method: str, host: str, path: str, *,
                 query: dict[str, Any] | None = None, body: dict[str, Any] | None = None,

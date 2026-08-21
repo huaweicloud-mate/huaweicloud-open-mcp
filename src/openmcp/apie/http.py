@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, cast
+from typing import Any, Callable, TypeVar, cast
 
 logger = logging.getLogger("openmcp.http")
 
@@ -14,9 +14,41 @@ HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 HttpError = urllib.error.HTTPError
 
+T = TypeVar("T")
+
 
 class ApieHttpError(Exception):
     """APIE 请求最终失败（重试耗尽后的非 HTTP 错误）。"""
+
+
+def _retry(fn: Callable[[], T], *, max_retries: int, backoff: float,
+           logger_name: str = "openmcp.http") -> T:
+    """通用 HTTP 重试：429 指数退避，其他网络异常线性退避。"""
+    last_err: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code == 429 and attempt < max_retries:
+                sleep_s = backoff * (2 ** attempt)
+                logging.getLogger(logger_name).warning(
+                    "429 rate limited, retry %d/%d after %.1fs",
+                    attempt + 1, max_retries, sleep_s)
+                time.sleep(sleep_s)
+                continue
+            raise
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries:
+                sleep_s = backoff * (2 ** attempt)
+                logging.getLogger(logger_name).warning(
+                    "http error: %s, retry %d/%d after %.1fs",
+                    e, attempt + 1, max_retries, sleep_s)
+                time.sleep(sleep_s)
+                continue
+            raise
+    raise last_err  # type: ignore[misc]
 
 
 def open_url(url: str, *, timeout: int = 30) -> tuple[dict[str, Any], HttpError | None]:
@@ -33,33 +65,34 @@ def open_url(url: str, *, timeout: int = 30) -> tuple[dict[str, Any], HttpError 
         return body, e
 
 
-def fetch_json(url: str, *, retries: int = 5, backoff: float = 2.0, timeout: int = 30) -> dict[str, Any]:
-    """网络异常重试的 JSON 拉取（HTTP 错误直接透出）。重试耗尽后抛 ApieHttpError。"""
-    last_err: Exception | None = None
-    for attempt in range(retries):
-        try:
-            return open_url(url, timeout=timeout)[0]
-        except Exception as e:
-            last_err = e
-            if attempt < retries - 1:
-                logger.debug("fetch retry %d/%d after error: %s", attempt + 1, retries - 1, e)
-                time.sleep(backoff * (attempt + 1))
-    raise ApieHttpError(f"fetch failed after {retries} retries: {last_err}") from last_err
+def fetch_json(url: str, *, retries: int = 5, backoff: float = 2.0,
+               timeout: int = 30) -> dict[str, Any]:
+    """网络异常重试的 JSON 拉取。重试耗尽后抛 ApieHttpError。"""
+
+    def _do() -> dict[str, Any]:
+        return open_url(url, timeout=timeout)[0]
+
+    try:
+        return _retry(_do, max_retries=retries - 1, backoff=backoff)
+    except urllib.error.HTTPError:
+        raise
+    except Exception as e:
+        raise ApieHttpError(f"fetch failed after {retries} retries: {e}") from e
 
 
 def fetch_json_retry(url: str, *, retries: int = 6, backoff: float = 2.0,
-                   timeout: int = 30) -> tuple[dict[str, Any], HttpError | None]:
+                     timeout: int = 30) -> tuple[dict[str, Any], HttpError | None]:
     """网络异常重试；HTTP 错误（含 429）原样返回。返回 (body, err)。"""
-    last_err: Exception | None = None
-    for attempt in range(retries):
-        try:
-            return open_url(url, timeout=timeout)
-        except Exception as e:
-            last_err = e
-            if attempt < retries - 1:
-                logger.debug("fetch retry %d/%d after error: %s", attempt + 1, retries - 1, e)
-                time.sleep(backoff * (attempt + 1))
-    raise ApieHttpError(f"fetch failed after {retries} retries: {last_err}") from last_err
+
+    def _do() -> tuple[dict[str, Any], HttpError | None]:
+        return open_url(url, timeout=timeout)
+
+    try:
+        return _retry(_do, max_retries=retries - 1, backoff=backoff)
+    except urllib.error.HTTPError as e:
+        return {}, e
+    except Exception as e:
+        raise ApieHttpError(f"fetch failed after {retries} retries: {e}") from e
 
 
 def fetch_json_429(url: str, *, retries: int = 10, backoff_429: float = 20.0,

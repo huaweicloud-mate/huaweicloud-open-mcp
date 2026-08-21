@@ -1,30 +1,22 @@
 """apie 元数据功能接口：内存缓存优先 + 远端 API Explorer 回退。
 
 service 与 api-docs CLI 的共用元数据入口；不依赖本地文件。
+store 由调用方注入（ToolService 或 api-docs CLI）。
 """
 
 import logging
 import urllib.parse
-from dataclasses import dataclass
 from typing import Any, cast
 
 from . import http
 from .live_fallback import LiveFallback
-from .memory_store import MemoryStore
+from .memory_store import ApiHit, MemoryStore
 
 logger = logging.getLogger("openmcp.apie.catalog")
 
 BASE_PRODUCTS = "https://console.huaweicloud.com/apiexplorer/new/v5/products"
 BASE_APIS = "https://console.huaweicloud.com/apiexplorer/new/v3/apis"
 PAGE_SIZE = 100
-
-_store = MemoryStore()
-
-
-def _reset_store() -> None:
-    """重置 MemoryStore（测试隔离用）。"""
-    global _store
-    _store = MemoryStore()
 
 
 # ---------- 实时抓取 ----------
@@ -53,44 +45,34 @@ def _fetch_apis(product_short: str) -> list[dict[str, Any]]:
 
 # ---------- 公共接口 ----------
 
-@dataclass
-class CatalogResult:
-    """元数据查询结果：data + 数据来源（memory/remote/miss）。"""
-    data: Any | None
-    source: str
-
-
-def get_products() -> CatalogResult:
-    store = _store
+def get_products(store: MemoryStore) -> list[dict[str, Any]] | None:
     products = store.products()
     if products is not None:
-        return CatalogResult(data=products, source="memory")
+        return products
     try:
         live_products = _fetch_products()
         store.set_products(live_products)
-        return CatalogResult(data=live_products, source="remote")
+        return live_products
     except Exception:
         logger.warning("get_products remote fetch failed", exc_info=True)
-        return CatalogResult(data=None, source="miss")
+        return None
 
 
-def get_apis(product: str) -> CatalogResult:
-    store = _store
+def get_apis(store: MemoryStore, product: str) -> list[dict[str, Any]] | None:
     cached = store.apis(product)
     if cached is not None:
-        return CatalogResult(data=cached, source="memory")
+        return cached
     try:
         live_apis = _fetch_apis(product)
         store.set_apis(product, live_apis)
-        return CatalogResult(data=live_apis, source="remote")
+        return live_apis
     except Exception:
         logger.warning("get_apis remote fetch failed for %s", product, exc_info=True)
-        return CatalogResult(data=None, source="miss")
+        return None
 
 
-def get_api_counts() -> dict[str, int]:
-    """从内存中已缓存的 API 列表计算接口计数表。"""
-    store = _store
+def get_api_counts(store: MemoryStore) -> dict[str, int]:
+    """从已缓存的产品列表计算接口计数表。"""
     products = store.products()
     if products is None:
         return {}
@@ -103,22 +85,22 @@ def get_api_counts() -> dict[str, int]:
     return counts
 
 
-def find_api_doc(product: str, api: str, region: str) -> CatalogResult:
-    """查找接口 OpenAPI 文档。内存缓存命中返回 memory；
-    未命中时远端拉取并缓存；失败返回 miss。
-    返回 data 为 (doc, path, method, op) 或 None。
+def find_api_doc(store: MemoryStore, product: str, api: str,
+                 region: str) -> ApiHit | None:
+    """查找接口 OpenAPI 文档。内存缓存命中直接返回；
+    未命中时远端拉取并缓存；失败返回 None。
+    返回 (doc, path, method, op) 或 None。
     """
-    store = _store
     hit = store.find_api(product, api, region)
     if hit is not None:
-        return CatalogResult(data=hit, source="memory")
+        return hit
     try:
         fallback = LiveFallback(store)
         result = fallback.fetch(product, api, region)
         if result is not None:
-            return CatalogResult(data=result, source="remote")
-        return CatalogResult(data=None, source="miss")
+            return result
+        return None
     except Exception:
         logger.warning("find_api_doc remote fetch failed for %s:%s region=%s",
                        product, api, region, exc_info=True)
-        return CatalogResult(data=None, source="miss")
+        return None

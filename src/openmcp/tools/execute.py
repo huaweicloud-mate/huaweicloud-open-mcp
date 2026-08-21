@@ -1,12 +1,13 @@
-"""execute_api 业务函数：safety 检查 → 请求构建 → 调用 → 响应规范化（真实模式）。"""
+"""execute_api 业务函数：请求构建 → 调用 → 响应规范化（真实模式）。
+safety policy 检查已由 ToolService.execute_api 在上层完成。
+"""
 
 import json
 import logging
 import re
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 from ..auth.credentials import Credentials
-from ..safety import policy as safety_policy
 from ..types import ClientResponse, ExecuteResult
 
 logger = logging.getLogger("openmcp.tools.execute")
@@ -108,16 +109,10 @@ def normalize_response(resp: ClientResponse) -> ExecuteResult:
 
 def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
                 product: str, api_name: str, region: str, params: dict[str, Any],
-                *, policy_rules: Sequence[safety_policy.PolicyRule] | None,
-                client: ApiExecutor, credentials: Credentials | None = None) -> ExecuteResult:
-    """执行真实 API：safety policy → 请求构建 → 调用 → 规范化。"""
-    err = safety_policy.check(policy_rules, product, api_name)
-    if err:
-        logger.warning("execute %s:%s region=%s mode=real policy=%s",
-                       product, api_name, region,
-                       "unconfigured" if policy_rules is None else "deny")
-        return _refuse(err)
-    logger.info("execute %s:%s region=%s mode=real policy=allow",
+                *, client: ApiExecutor,
+                credentials: Credentials | None = None) -> ExecuteResult:
+    """执行真实 API：请求构建 → 调用 → 规范化（safety 已由 ToolService 完成）。"""
+    logger.info("execute %s:%s region=%s mode=real",
                 product, api_name, region)
 
     filled, query, body, headers, err = build_request(op, path, params, credentials)
