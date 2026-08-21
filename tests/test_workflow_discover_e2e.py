@@ -127,8 +127,7 @@ def session(tmp_path_factory):
     env["HUAWEICLOUD_MCP_SERVER_CATALOG"] = str(cat)
     env["HUAWEICLOUD_MCP_LOG_LEVEL"] = "DEBUG"
     args = [
-        sys.executable, "-m", "openmcp.server",
-        "--mode", "discover", "--mock",
+        sys.executable, "-m", "main", "--mode", "discover", "--mock",
         "--mock-base", stub.endpoint,
         "--policy", str(policy),
         "--log-file", str(log),

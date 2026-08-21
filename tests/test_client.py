@@ -2,8 +2,8 @@
 
 import urllib.error
 
-from openmcp.auth.credentials import Credentials
-from openmcp.signer.client import HttpClient
+from common.auth import Credentials
+from mcp_openapi.signer.client import HttpClient
 
 CRED = Credentials(ak="AK", sk="SK", project_id="pid")
 
@@ -121,7 +121,7 @@ def test_request_logs_never_contain_credentials(monkeypatch, caplog):
     import logging
     _install(monkeypatch, [FakeResponse(200, b"{}")])
     client = HttpClient(credentials=CRED)
-    with caplog.at_level(logging.INFO, logger="openmcp"):
+    with caplog.at_level(logging.INFO, logger="mcp_openapi.signer.client"):
         client.request("GET", "h.example.com", "/p")
     text = caplog.text
     assert "Authorization" not in text
@@ -134,7 +134,7 @@ def test_request_logs_status_and_path(monkeypatch, caplog):
     import logging
     _install(monkeypatch, [FakeResponse(200, b"{}")])
     client = HttpClient(credentials=CRED)
-    with caplog.at_level(logging.INFO, logger="openmcp"):
+    with caplog.at_level(logging.INFO, logger="mcp_openapi.signer.client"):
         client.request("GET", "h.example.com", "/p", query={"limit": 1})
     assert "GET" in caplog.text
     assert "h.example.com/p" in caplog.text
@@ -142,7 +142,7 @@ def test_request_logs_status_and_path(monkeypatch, caplog):
 
 
 def test_mock_api_client_url(monkeypatch):
-    from openmcp.apie.mock import MockApiClient
+    from apie.mock import MockApiClient
     calls = _install(monkeypatch, [FakeResponse(200, b'{"servers": []}')])
     client = MockApiClient()
     resp = client.mock_request("ECS", "ListServersDetails", "cn-north-4", status_code=200, number=2)

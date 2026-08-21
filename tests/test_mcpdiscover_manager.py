@@ -2,7 +2,7 @@
 
 import asyncio
 
-from openmcp.mcpdiscover.manager import SessionManager
+from mcp_discover.manager import SessionManager
 
 # ------------------------------------------------------------------ fake client
 

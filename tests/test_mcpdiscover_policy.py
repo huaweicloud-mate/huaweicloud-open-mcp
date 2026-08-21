@@ -2,7 +2,7 @@
 
 import pytest
 
-from openmcp.safety import policy
+from safety import policy
 
 # ------------------------------------------------------------------ 解析
 

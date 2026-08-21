@@ -3,7 +3,7 @@
 import asyncio
 from typing import Any
 
-from openmcp.mcpdiscover.sdk import SessionClient
+from mcp_discover.sdk import SessionClient
 
 
 class FakeSessionClient:

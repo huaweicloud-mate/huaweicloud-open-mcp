@@ -1,6 +1,6 @@
 """凭证加载单元测试。"""
 
-from openmcp.auth import credentials
+from common.auth import credentials
 
 
 def test_load_from_env_full(monkeypatch):

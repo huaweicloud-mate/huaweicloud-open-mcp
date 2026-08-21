@@ -1,9 +1,9 @@
 """ToolService 单元测试（store 注入，不联网、不碰磁盘）。"""
 
-from openmcp.apie.memory_store import MemoryStore
-from openmcp.auth.credentials import Credentials
-from openmcp.safety import policy
-from openmcp.tools.service import ServiceConfig, ToolService
+from apie.memory_store import MemoryStore
+from common.auth import Credentials
+from mcp_openapi.service import ServiceConfig, ToolService
+from safety import policy
 
 FIXTURE_GROUPS = [
     {"name": "计算", "products": [
@@ -119,7 +119,7 @@ def test_metadata_tools_are_logged(caplog):
     import logging
     store = _prep_store()
     service = ToolService(store=store)
-    with caplog.at_level(logging.INFO, logger="openmcp.tools.service"):
+    with caplog.at_level(logging.INFO, logger="mcp_openapi.service"):
         service.list_products(keyword="云")
         service.get_product("ECS")
         service.list_apis("ECS", tag="生命周期管理", limit=5, offset=1)
@@ -137,7 +137,7 @@ def test_metadata_not_found_is_logged(caplog):
     import logging
     store = _prep_store()
     service = ToolService(store=store)
-    with caplog.at_level(logging.WARNING, logger="openmcp.tools.service"):
+    with caplog.at_level(logging.WARNING, logger="mcp_openapi.service"):
         service.get_product("NOPE")
         service.get_api("ECS", "Nope")
     assert "get_product product=NOPE result=not_found" in caplog.text
@@ -233,7 +233,7 @@ def test_execute_audit_logs_policy_decision(caplog):
     service = ToolService(store=store, config=ServiceConfig(
         policy_rules=_policy("ECS:*=allow"),
         credentials=cred, http_client_factory=lambda: http_client))
-    with caplog.at_level(logging.INFO, logger="openmcp.tools.service"):
+    with caplog.at_level(logging.INFO, logger="mcp_openapi.service"):
         service.execute_api("ECS", "ListServersDetails", params={"limit": 1})
     assert "ECS:ListServersDetails" in caplog.text
     assert "policy=allow" in caplog.text
@@ -245,6 +245,6 @@ def test_execute_deny_is_logged(caplog):
     service = ToolService(store=store, config=ServiceConfig(
         policy_rules=_policy("ECS:*Show*=allow", "*=deny"),
         http_client_factory=lambda: StubHttpClient()))
-    with caplog.at_level(logging.INFO, logger="openmcp.tools.service"):
+    with caplog.at_level(logging.INFO, logger="mcp_openapi.service"):
         service.execute_api("ECS", "ListServersDetails")
     assert "policy=deny" in caplog.text

@@ -1,8 +1,8 @@
 """execute 工具纯函数单元测试（stub client）。"""
 
-from openmcp.auth.credentials import Credentials
-from openmcp.tools import execute
-from openmcp.types import ClientResponse
+from common.auth import Credentials
+from common.types import ClientResponse
+from mcp_openapi import execute
 
 
 class StubClient:
@@ -16,15 +16,15 @@ class StubClient:
 
 
 def _get_op(mini_detail, key="ECS::ListServers"):
-    from openmcp.apie import convert_openapi2 as conv
-    from openmcp.apie.live_fallback import _find_api_in_doc
+    from apie import convert_openapi2 as conv
+    from apie.live_fallback import _find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"][key])
     path, method, op = _find_api_in_doc(doc, key.split("::")[-1])
     return doc, path, method, op
 
 
 def _policy(*lines):
-    from openmcp.safety import policy
+    from safety import policy
     return policy.parse_policy(list(lines))
 
 

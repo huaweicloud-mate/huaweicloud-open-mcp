@@ -1,6 +1,6 @@
 """organize 命名与合并逻辑单元测试。"""
 
-from openmcp.apie import organize
+from apie import organize
 
 
 def test_sanitize_tag_slash():

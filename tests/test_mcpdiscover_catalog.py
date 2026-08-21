@@ -2,7 +2,7 @@
 
 import json
 
-from openmcp.mcpdiscover import catalog
+from mcp_discover import catalog
 
 SAMPLE_ENTRIES = [
     {"id": "@huaweicloud/ecs", "name": "ECS", "display_name": "弹性云服务器",

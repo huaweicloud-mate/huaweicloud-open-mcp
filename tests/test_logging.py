@@ -2,7 +2,7 @@
 
 import logging
 
-from openmcp import logconf
+from common import logconf
 
 
 def test_configure_returns_file_path(tmp_path):

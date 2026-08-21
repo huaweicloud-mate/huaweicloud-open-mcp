@@ -10,8 +10,8 @@
 
 import pytest
 
-from openmcp.auth.credentials import Credentials, load_from_env
-from openmcp.signer.client import HttpClient
+from common.auth import Credentials, load_from_env
+from mcp_openapi.signer.client import HttpClient
 
 pytestmark = pytest.mark.e2e
 

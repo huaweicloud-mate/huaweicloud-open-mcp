@@ -1,6 +1,6 @@
 """apie.memory_store 单元测试：内存缓存语义（不联网）。"""
 
-from openmcp.apie.memory_store import MemoryStore
+from apie.memory_store import MemoryStore
 
 
 def test_products_cache_and_negative_cache():

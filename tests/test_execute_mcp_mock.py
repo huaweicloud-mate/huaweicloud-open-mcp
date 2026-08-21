@@ -4,7 +4,7 @@ import asyncio
 
 import httpx2
 
-from openmcp.mcpdiscover.sdk import SdkSessionClient
+from mcp_discover.sdk import SdkSessionClient
 from tests.fixtures.mcp_stub import StubMcpServer
 
 

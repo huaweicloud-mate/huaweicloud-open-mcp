@@ -1,7 +1,7 @@
 """apie.catalog 单元测试：store 注入 + 远端回退（monkeypatch HTTP，不联网）。"""
 
-from openmcp.apie import catalog
-from openmcp.apie.memory_store import MemoryStore
+from apie import catalog
+from apie.memory_store import MemoryStore
 
 FIXTURE_GROUPS = [
     {"name": "计算", "products": [

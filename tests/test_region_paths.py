@@ -1,6 +1,6 @@
 """region_paths 路径计算单元测试。"""
 
-from openmcp.apie import region_paths
+from apie import region_paths
 
 
 def test_default_region_paths(monkeypatch):

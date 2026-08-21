@@ -22,12 +22,12 @@ flowchart TB
     end
 
     subgraph Server["huaweicloud-open-mcp（本地 stdio）"]
-        GW["MCP 网关层（server.py）<br/>6 工具注册 + instructions"]
-        SV["ToolService 编排层<br/>加载/配置/客户端工厂注入"]
-        MT["纯函数层<br/>metadata / execute"]
-        SF["safety policy 匹配"]
-        SG["signer：SDK-HMAC-SHA256"]
-        MC["MockApiClient"]
+        GW["MCP 网关层（mcp_openapi/server.py + mcp_discover/server.py）<br/>6+7 工具注册 + instructions"]
+        SV["ToolService 编排层<br/>mcp_openapi/service.py 加载/配置/客户端工厂注入"]
+        MT["纯函数层<br/>apie/metadata.py + mcp_openapi/execute.py"]
+        SF["safety/policy.py 匹配"]
+        SG["mcp_openapi/signer/：SDK-HMAC-SHA256"]
+        MC["apie/mock.py MockApiClient"]
     end
 
     subgraph Offline["离线管道（api-refresh CLI）"]
@@ -57,11 +57,11 @@ flowchart TB
 
 | 层 | 模块 | 职责 | 依赖方向 |
 | --- | --- | --- | --- |
-| 网关 | `server.py` | 只做 MCP 协议装配（stdio、工具 schema、instructions） | → service |
-| 编排 | `tools/service.py` | 数据加载、配置（region/mock/policy/凭证）、客户端工厂注入 | → 纯函数层 / apie / signer |
-| 纯函数 | `tools/metadata.py` `tools/execute.py` | 元数据处理与请求构建/响应规范化，不碰磁盘、不碰 MCP 协议 | → types |
+| 网关 | `main.py` / `mcp_openapi/server.py` / `mcp_discover/server.py` | CLI 入口汇聚 + MCP 协议装配（stdio、工具 schema、instructions） | → service |
+| 编排 | `mcp_openapi/service.py` / `mcp_discover/service.py` | 数据加载、配置（region/mock/policy/凭证）、客户端工厂注入 | → 纯函数层 / apie / signer |
+| 纯函数 | `apie/metadata.py` `mcp_openapi/execute.py` | 元数据处理与请求构建/响应规范化，不碰磁盘、不碰 MCP 协议 | → types |
 | 安全 | `safety/policy.py` | policy 解析与匹配（PolicyRule dataclass） | 无依赖 |
-| 执行 | `signer/` `apie/mock.py` | 签名直连 / mock 端点 | → types / auth |
+| 执行 | `mcp_openapi/signer/` `apie/mock.py` | 签名直连 / mock 端点 | → types / auth |
 | 元数据 | `apie/` | APIE 管道（可独立运行）+ 内存缓存（`memory_store.py`）+ 远端回退（`catalog.py`/`live_fallback.py`） | → http |
 
 ## 3. APIE 元数据管道
@@ -225,18 +225,23 @@ flowchart LR
 
 ```mermaid
 graph LR
-    subgraph src["src/openmcp/"]
-        T["types.py<br/>TypedDict 词表"]
-        P["paths.py<br/>project_root"]
-        SRV["server.py"]
-        subgraph TL["tools/"]
-            MT["metadata.py（纯函数）"]
+    subgraph src["src/"]
+        T["common/types.py<br/>TypedDict 词表"]
+        P["common/paths.py<br/>project_root"]
+        subgraph MPO["mcp_openapi/"]
+            SRV["server.py（MCP 装配）"]
             EX["execute.py（纯函数）"]
             SV["service.py（编排）"]
+            subgraph SG["signer/"]
+                SN["sign.py"]
+                CL["client.py"]
+            end
         end
-        subgraph SG["signer/"]
-            SN["sign.py"]
-            CL["client.py"]
+        subgraph MPD["mcp_discover/"]
+            DS["server.py（MCP 装配）"]
+            DE["service.py（编排）"]
+            DG["catalog.py / config.py"]
+            DL["manager.py / sdk.py"]
         end
         subgraph AP["apie/"]
             PIPE["fetch/split/convert/merge/<br/>organize/validate/refresh/api_docs"]
@@ -244,9 +249,13 @@ graph LR
             MK["mock.py"]
             MS["memory_store.py（纯内存缓存）"]
         end
-        SF["safety/policy.py"]
-        AU["auth/credentials.py"]
-        LG["logconf.py"]
+        subgraph ST["safety/"]
+            SF["policy.py"]
+        end
+        subgraph CM["common/"]
+            AU["auth/credentials.py"]
+            LG["logconf.py"]
+        end
     end
     subgraph BNM["benchmarks/（LLM Agent 级评估，S6）"]
         BC["cases/（YAML 用例）"]
@@ -254,18 +263,17 @@ graph LR
         BR["runner / stub_server<br/>（opencode run 驱动）"]
     end
 
-    SRV --> SV --> MT
-    SV --> EX --> SN --> CL
+    SRV --> SV --> EX --> SN --> CL
     SV --> SF
     SV --> AU
-    SRV --> LG
-    SRV --> T
-    MT --> T
-    EX --> T
+    SV --> MS
+    SRV --> CM
+    DS --> DE --> DL --> DG
+    DE --> SF
+    DS --> CM
     AP --> H
     AP --> MK
     AP --> MS
-    SV --> MS
     SV --> MK
     BR -.opencode run（benchdir 配置 MCP）.-> SRV
     BR --> BC --> BSC
@@ -273,7 +281,7 @@ graph LR
 
 ### 类型设计（结果信封）
 
-- 共享 TypedDict 词表（`types.py`）：`ClientResponse` / `ExecuteResult` / `ToolError` + 六工具结果信封（均含 `ok: Literal[True]`）
+- 共享 TypedDict 词表（`common/types.py`）：`ClientResponse` / `ExecuteResult` / `ToolError` + 六工具结果信封（均含 `ok: Literal[True]`）
 - 纯函数直接产出完整信封；失败态 `ToolError(ok: Literal[False], reason)` 由编排层构造——服务方法返回 `X | ToolError` 联合
 - `ApiDetailResult` 用函数式 TypedDict 承载非标识符键 `x-constraint`
 - mypy 全量检查：`disallow_untyped_defs`，38 个源文件 0 错误
@@ -300,7 +308,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["logger: openmcp.*"] --> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
+    A["logger: mcp_openapi.* / apie.* / mcp_discover.* / common.*"] --> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
     A --> C["StreamHandler(stderr)<br/>WARNING+ 兜底"]
     D["stdout（JSON-RPC 通道）"] -. "禁止日志" .-> A
 

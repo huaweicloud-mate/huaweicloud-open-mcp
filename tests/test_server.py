@@ -2,10 +2,10 @@
 
 import argparse
 
-from openmcp.apie import mock as apie_mock
-from openmcp.safety import policy
-from openmcp.server import build_app, build_config
-from openmcp.tools.service import ServiceConfig, ToolService
+from apie import mock as apie_mock
+from mcp_openapi.server import build_app, build_config
+from mcp_openapi.service import ServiceConfig, ToolService
+from safety import policy
 
 EXPECTED_TOOLS = {
     "list_products", "get_product", "list_apis", "get_api",
@@ -76,8 +76,8 @@ EXPECTED_DISCOVER_TOOLS = {
 
 
 def test_discover_mode_tools_registered():
-    from openmcp.mcpdiscover.config import DiscoverConfig
-    from openmcp.server import build_discover_app
+    from mcp_discover.config import DiscoverConfig
+    from mcp_discover.server import build_discover_app
     app = build_discover_app(DiscoverConfig())
     assert _tool_names(app) == EXPECTED_DISCOVER_TOOLS
 
@@ -91,8 +91,8 @@ def test_openapi_mode_tools_exclude_discover():
 
 def test_discover_mode_tools_exclude_openapi():
     """discover 模式下不应注册 openapi 工具。"""
-    from openmcp.mcpdiscover.config import DiscoverConfig
-    from openmcp.server import build_discover_app
+    from mcp_discover.config import DiscoverConfig
+    from mcp_discover.server import build_discover_app
     app = build_discover_app(DiscoverConfig())
     for tool in EXPECTED_TOOLS:
         assert tool not in _tool_names(app)

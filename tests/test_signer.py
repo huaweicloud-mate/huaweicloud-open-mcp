@@ -4,7 +4,7 @@
 与官方签名算法实现的公开测试向量，非自行推导。
 """
 
-from openmcp.signer import sign
+from mcp_openapi.signer import sign
 
 AK = "AccessKey"
 SK = "SecretKey"

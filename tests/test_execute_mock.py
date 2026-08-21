@@ -7,10 +7,10 @@ mock 端点行为（实测确认）：
 - status_code 为其它值时返回空 body。
 """
 
-from openmcp.apie.memory_store import MemoryStore
-from openmcp.apie.mock import MockApiClient
-from openmcp.safety import policy
-from openmcp.tools.service import ServiceConfig, ToolService
+from apie.memory_store import MemoryStore
+from apie.mock import MockApiClient
+from mcp_openapi.service import ServiceConfig, ToolService
+from safety import policy
 
 RULES_ALLOW_ECS = policy.parse_policy(["ECS:*=allow", "*=deny"])
 

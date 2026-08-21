@@ -1,0 +1,156 @@
+"""discover 模式 server 装配（MCP 协议层）。"""
+
+import argparse
+import logging
+import os
+from typing import Any
+
+from mcp.server.mcpserver import MCPServer
+
+from common.types import (
+    McpCallResult,
+    McpConnectResult,
+    McpDisconnectResult,
+    McpServerListResult,
+    McpServerResult,
+    ServerToolResult,
+    ServerToolsResult,
+    ToolError,
+)
+from safety import policy as safety
+
+from .config import DiscoverConfig
+from .service import DiscoverService
+
+logger = logging.getLogger("mcp_discover.server")
+
+INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现连接模式）
+
+## 推荐工作流（渐进收窄，LLM 决策）
+
+1. `list_mcp_servers`：列出华为云 MCP server 目录（含中文名/分类/认证模型），
+   根据用户任务语义用 keyword 搜索匹配候选 server；
+2. `get_mcp_server`：确认 server 详情（endpoint/传输层/认证方式/描述）；
+3. `connect_mcp_server`：建立连接（过 safety policy；真实模式 endpoint 严格取自目录）；
+4. `list_server_tools`：已连接 server 的工具摘要（工具名+首行描述+必填参数名），
+   用 `search`/`limit`/`offset` 收窄，**禁止无过滤全量拉取**；
+5. `get_server_tool`：选定候选后读**单个工具完整 schema**（参数类型/枚举/约束），
+   仅取调用目标一个，防止上下文暴涨；
+6. `call_server_tool`：代发调用（过 safety policy）；
+7. `disconnect_mcp_server`：释放连接（空闲 5 分钟自动回收，可选显式断开）。
+
+## 执行安全
+
+- `connect_mcp_server` 和 `call_server_tool` 执行前强制过 safety policy；
+- 未配置 policy 时所有连接与调用被拒绝；
+- 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的 server/tool 或询问用户。
+
+## 其它
+
+- endpoint 在真实模式下严格取自目录，不可覆盖（防目录外投毒）；
+- 目标 server 工具清单为实时拉取，不落目录以免过期；
+- 若目标 server 不存在或连接失败，检查 server id 是否匹配目录条目。
+"""
+
+
+def build_discover_config(args: argparse.Namespace) -> DiscoverConfig:
+    mock = (args.mock if args.mock is not None
+            else os.environ.get("HUAWEICLOUD_MCP_MOCK", "") in ("1", "true", "yes"))
+    policy_file = args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")
+    catalog_path = os.environ.get("HUAWEICLOUD_MCP_SERVER_CATALOG") or DiscoverConfig.catalog_path
+    mock_base = args.mock_base or os.environ.get("HUAWEICLOUD_MCP_MOCK_BASE") or None
+    idle_timeout = int(os.environ.get("HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT",
+                                      str(DiscoverConfig.session_idle_timeout)))
+    max_sessions = int(os.environ.get("HUAWEICLOUD_MCP_MAX_SESSIONS",
+                                      str(DiscoverConfig.max_sessions)))
+    return DiscoverConfig(
+        catalog_path=catalog_path,
+        mock=mock,
+        mock_base=mock_base,
+        policy_rules=safety.load_policy_file(policy_file) if policy_file else None,
+        session_idle_timeout=idle_timeout,
+        max_sessions=max_sessions,
+    )
+
+
+def build_discover_app(config: DiscoverConfig, *,
+                       log_level: str = "INFO") -> MCPServer:
+    ds = DiscoverService(config)
+
+    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
+                       instructions=INSTRUCTIONS_DISCOVER,
+                       log_level=log_level)  # type: ignore[arg-type]
+
+    @server.tool()
+    def list_mcp_servers(category: str | None = None,
+                         keyword: str | None = None) -> McpServerListResult | ToolError:
+        """第一步：列出华为云 MCP server 目录（含中文名/分类/认证模型）。
+
+        根据用户任务语义用 keyword 按 server 名/中文名/描述搜索；
+        不确定时先不加过滤全量浏览。
+        """
+        logger.info("list_mcp_servers category=%s keyword=%s", category or "-", keyword or "-")
+        return ds.list_servers(category=category, keyword=keyword)
+
+    @server.tool()
+    def get_mcp_server(server: str) -> McpServerResult | ToolError:
+        """第二步：确认单个 MCP server 详情（endpoint/传输层/认证方式/描述）。
+
+        选定后调用 connect_mcp_server 建立连接。
+        """
+        logger.info("get_mcp_server server=%s", server)
+        return ds.get_server(server)
+
+    @server.tool()
+    async def connect_mcp_server(server: str) -> McpConnectResult | ToolError:
+        """第三步：连接指定 MCP server（过 safety policy）。
+
+        policy 匹配 server 连接规则：server:serverId=allow|deny；
+        真实模式 endpoint 严格取自目录；mock 模式指向 --mock-base。
+        """
+        logger.info("connect_mcp_server server=%s", server)
+        return await ds.connect(server)
+
+    @server.tool()
+    async def list_server_tools(server: str, search: str | None = None,
+                                limit: int = 20, offset: int = 0
+                                ) -> ServerToolsResult | ToolError:
+        """第四步：已连接 MCP server 的工具摘要列表（两级读取第一步）。
+
+        返回工具名+首行描述+必填参数名；用 search/limit/offset 收窄；
+        禁止无过滤全量拉取。选定后用 get_server_tool 读完整 schema。
+        """
+        logger.info("list_server_tools server=%s search=%s limit=%d offset=%d",
+                    server, search or "-", limit, offset)
+        return await ds.list_tools(server, search=search, limit=limit, offset=offset)
+
+    @server.tool()
+    async def get_server_tool(server: str, tool: str) -> ServerToolResult | ToolError:
+        """第五步：获取单个工具的完整 schema（两级读取第二步）。
+
+        仅取调用目标一个工具，防上下文暴涨；超 16KB 自动截断。
+        """
+        logger.info("get_server_tool server=%s tool=%s", server, tool)
+        return await ds.get_tool(server, tool)
+
+    @server.tool()
+    async def call_server_tool(server: str, tool: str,
+                               arguments: dict[str, Any] | None = None
+                               ) -> McpCallResult:
+        """第六步：调用已连接 server 的指定工具（过 safety policy）。
+
+        arguments 为工具参数 dict；policy 匹配 server:serverId:toolPattern=allow|deny。
+        """
+        logger.info("call_server_tool server=%s tool=%s", server, tool)
+        return await ds.call_tool(server, tool, arguments=arguments)
+
+    @server.tool()
+    async def disconnect_mcp_server(server: str) -> McpDisconnectResult:
+        """第七步：断开指定 MCP server 连接（空闲超时自动回收）。
+
+        建议任务完成后显式调用释放资源。
+        """
+        logger.info("disconnect_mcp_server server=%s", server)
+        return await ds.disconnect(server)
+
+    return server
