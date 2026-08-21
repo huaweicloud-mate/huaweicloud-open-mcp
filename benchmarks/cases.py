@@ -115,12 +115,13 @@ def parse_case(data: Any, source: str = "") -> BenchmarkCase:
 
 
 def load_cases(path: Path) -> list[BenchmarkCase]:
-    """加载 path（目录或单文件）下的用例；目录时按文件名排序，仅 *.yaml/*.yml。"""
+    """加载 path 下的用例；递归查找子目录中 *.yaml/*.yml，按文件名排序。"""
     if not path.exists():
         raise ValueError(f"用例路径不存在: {path}")
-    files = sorted(path.glob("*.yaml")) + sorted(path.glob("*.yml")) if path.is_dir() else [path]
-    if path.is_dir():
-        files = sorted(set(files))
+    if path.is_file():
+        files = [path]
+    else:
+        files = sorted(set(list(path.rglob("*.yaml")) + list(path.rglob("*.yml"))))
     if not files:
         raise ValueError(f"用例路径下没有 .yaml/.yml 文件: {path}")
     cases: list[BenchmarkCase] = []

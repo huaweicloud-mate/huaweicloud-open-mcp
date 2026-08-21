@@ -3,7 +3,7 @@
 import json
 import urllib.request
 
-from benchmarks.stub_server import StubServer
+from benchmarks.openapi.stub_server import StubServer
 
 
 def _get(url):

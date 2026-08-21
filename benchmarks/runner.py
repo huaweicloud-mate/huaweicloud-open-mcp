@@ -20,10 +20,10 @@ from datetime import datetime
 from pathlib import Path
 
 from .cases import BenchmarkCase, load_cases
+from .openapi.stub_server import StubServer
 from .opencode_db import default_db_path, get_session_usage
 from .report import CaseStats, RunResult, aggregate, dump_baseline, render_markdown
 from .scorer import ToolCall, score
-from .stub_server import StubServer
 from .trace import extract_trace, parse_run_output
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -159,7 +159,7 @@ def save_runs(results: list[RunResult], run_dir: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="benchmarks.runner",
                                      description="LLM Agent 级渐进式工作流 benchmark")
-    parser.add_argument("--cases", default=str(PROJECT_ROOT / "benchmarks" / "cases"))
+    parser.add_argument("--cases", default=str(PROJECT_ROOT / "benchmarks" / "openapi" / "cases"))
     parser.add_argument("--case", default=None, help="只跑指定 case id")
     parser.add_argument("--repeat", type=int, default=None, help="覆盖 case 默认 repeat")
     parser.add_argument("--model", default=DEFAULT_MODEL)
