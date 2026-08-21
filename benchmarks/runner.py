@@ -66,6 +66,11 @@ def export_session(opencode_bin: str, session_id: str, retries: int = 3) -> dict
                 data = json.loads(proc.stdout)
                 if isinstance(data, dict) and data.get("messages") is not None:
                     return data
+        except json.JSONDecodeError:
+            # JSON 截断/格式异常 → 重试或返回 None，不抛异常
+            if attempt < retries - 1:
+                continue
+            return None
         except Exception as e:  # noqa: BLE001
             last_err = e
     if last_err is not None:
@@ -103,6 +108,8 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
             export_error = f"export 失败: {e}"
         if export_raw is not None:
             trace, answer = extract_trace(export_raw)
+        elif export_error is None:
+            export_error = "export 失败: JSON 解析异常或结果为空"
     if not session_id:
         error = f"opencode run 失败 exit={proc.returncode}"
     elif export_error:
