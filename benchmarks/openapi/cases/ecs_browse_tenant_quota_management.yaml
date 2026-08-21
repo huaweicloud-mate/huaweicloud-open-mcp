@@ -1,0 +1,7 @@
+id: ecs_browse_tenant_quota_management
+prompt: ECS 配额管理有哪些接口？告诉我接口名
+expect:
+  answer: ShowServerLimits
+  constraints:
+    no_execute: true
+repeat: 2

@@ -1,0 +1,7 @@
+id: ecs_browse_tag_management
+prompt: ECS 标签管理有哪些接口？告诉我接口名
+expect:
+  answer: ListServerTags
+  constraints:
+    no_execute: true
+repeat: 2

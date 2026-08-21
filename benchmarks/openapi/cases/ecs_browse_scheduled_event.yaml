@@ -1,0 +1,7 @@
+id: ecs_browse_scheduled_event
+prompt: ECS 计划事件有哪些接口？告诉我接口名
+expect:
+  answer: ListScheduledEvents
+  constraints:
+    no_execute: true
+repeat: 2

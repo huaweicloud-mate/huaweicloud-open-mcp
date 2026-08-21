@@ -1,0 +1,7 @@
+id: ecs_browse_security_group_management
+prompt: ECS 安全组管理有哪些接口？告诉我接口名
+expect:
+  answer: NovaListServerSecurityGroups
+  constraints:
+    no_execute: true
+repeat: 2

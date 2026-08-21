@@ -1,0 +1,10 @@
+id: ecs_list_versions
+prompt: 查询ECS API版本信息
+expect:
+  execute:
+    - {product: ECS, api: NovaListVersions}
+  answer: version
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

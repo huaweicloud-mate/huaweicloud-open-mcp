@@ -1,0 +1,7 @@
+id: ecs_browse_recycle_bin
+prompt: ECS 回收站有哪些接口？告诉我接口名
+expect:
+  answer: ListRecycleBinServers
+  constraints:
+    no_execute: true
+repeat: 2

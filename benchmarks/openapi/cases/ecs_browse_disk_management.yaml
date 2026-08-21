@@ -1,0 +1,7 @@
+id: ecs_browse_disk_management
+prompt: ECS 磁盘管理有哪些接口？告诉我接口名
+expect:
+  answer: ListServerBlockDevices
+  constraints:
+    no_execute: true
+repeat: 2

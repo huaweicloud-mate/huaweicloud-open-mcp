@@ -1,0 +1,10 @@
+id: ecs_show_quota
+prompt: 查询我的ECS配额
+expect:
+  execute:
+    - {product: ECS, api: ShowServerLimits}
+  answer: limit
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

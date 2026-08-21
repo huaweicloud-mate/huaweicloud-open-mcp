@@ -1,0 +1,7 @@
+id: ecs_browse_metadata_configuration_management
+prompt: ECS 元数据配置有哪些接口？告诉我接口名
+expect:
+  answer: ShowMetadataOptions
+  constraints:
+    no_execute: true
+repeat: 2

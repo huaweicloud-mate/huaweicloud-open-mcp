@@ -1,0 +1,10 @@
+id: ecs_list_tags
+prompt: 查询项目中的云服务器标签列表
+expect:
+  execute:
+    - {product: ECS, api: ListServerTags}
+  answer: tag
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

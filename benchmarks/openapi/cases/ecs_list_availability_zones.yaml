@@ -1,0 +1,11 @@
+id: ecs_list_availability_zones
+prompt: 列出所有可用区
+expect:
+  execute:
+    - {product: ECS, api: ListServerAzInfo}
+    - {product: ECS, api: NovaListAvailabilityZones}
+  answer: zone
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

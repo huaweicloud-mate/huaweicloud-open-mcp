@@ -1,0 +1,11 @@
+id: ecs_list_cloud_servers
+prompt: 查询我账号下所有的云服务器
+expect:
+  execute:
+    - {product: ECS, api: ListCloudServers}
+    - {product: ECS, api: NovaListServers}
+  answer: 服务器
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

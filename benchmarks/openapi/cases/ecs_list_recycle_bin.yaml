@@ -1,0 +1,10 @@
+id: ecs_list_recycle_bin
+prompt: 查询回收站中的云服务器列表
+expect:
+  execute:
+    - {product: ECS, api: ListRecycleBinServers}
+  answer: recycle
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

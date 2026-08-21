@@ -1,0 +1,7 @@
+id: ecs_browse_specification_management
+prompt: ECS 规格管理有哪些接口？告诉我接口名
+expect:
+  answer: NovaListFlavors
+  constraints:
+    no_execute: true
+repeat: 2

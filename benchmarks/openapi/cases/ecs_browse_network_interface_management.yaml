@@ -1,0 +1,7 @@
+id: ecs_browse_network_interface_management
+prompt: ECS 网卡管理有哪些接口？告诉我接口名
+expect:
+  answer: ListServerInterfaces
+  constraints:
+    no_execute: true
+repeat: 2

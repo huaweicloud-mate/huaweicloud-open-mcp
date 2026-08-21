@@ -1,0 +1,11 @@
+id: ecs_list_server_groups
+prompt: 查询云服务器组列表
+expect:
+  execute:
+    - {product: ECS, api: ListServerGroups}
+    - {product: ECS, api: NovaListServerGroups}
+  answer: server_group
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

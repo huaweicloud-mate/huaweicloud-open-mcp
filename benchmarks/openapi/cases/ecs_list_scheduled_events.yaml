@@ -1,0 +1,10 @@
+id: ecs_list_scheduled_events
+prompt: 查询计划事件列表
+expect:
+  execute:
+    - {product: ECS, api: ListScheduledEvents}
+  answer: event
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

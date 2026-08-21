@@ -1,0 +1,7 @@
+id: ecs_browse_status_management
+prompt: ECS 状态管理有哪些接口？告诉我接口名
+expect:
+  answer: ResizeServer
+  constraints:
+    no_execute: true
+repeat: 2

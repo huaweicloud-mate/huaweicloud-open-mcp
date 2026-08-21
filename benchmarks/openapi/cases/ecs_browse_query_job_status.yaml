@@ -1,0 +1,7 @@
+id: ecs_browse_query_job_status
+prompt: ECS job查询有哪些接口？告诉我接口名
+expect:
+  answer: ShowJob
+  constraints:
+    no_execute: true
+repeat: 2

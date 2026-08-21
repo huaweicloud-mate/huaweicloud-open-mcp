@@ -1,0 +1,7 @@
+id: ecs_browse_server_group_management
+prompt: ECS 云服务器组管理有哪些接口？告诉我接口名
+expect:
+  answer: ListServerGroups
+  constraints:
+    no_execute: true
+repeat: 2

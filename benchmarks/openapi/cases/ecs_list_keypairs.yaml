@@ -1,0 +1,10 @@
+id: ecs_list_keypairs
+prompt: 查询 SSH 密钥列表
+expect:
+  execute:
+    - {product: ECS, api: NovaListKeypairs}
+  answer: keypair
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

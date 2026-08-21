@@ -1,0 +1,10 @@
+id: ecs_list_templates
+prompt: 查询ECS模板列表
+expect:
+  execute:
+    - {product: ECS, api: ListTemplates}
+  answer: template
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

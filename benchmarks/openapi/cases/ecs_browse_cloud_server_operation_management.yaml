@@ -1,0 +1,7 @@
+id: ecs_browse_cloud_server_operation_management
+prompt: ECS 操作行为管理有哪些接口？告诉我接口名
+expect:
+  answer: NovaListServerActions
+  constraints:
+    no_execute: true
+repeat: 2

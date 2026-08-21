@@ -1,0 +1,7 @@
+id: ecs_browse_query_api_version_info
+prompt: ECS API版本查询有哪些接口？告诉我接口名
+expect:
+  answer: NovaListVersions
+  constraints:
+    no_execute: true
+repeat: 2

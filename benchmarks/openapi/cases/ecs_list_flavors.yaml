@@ -1,0 +1,12 @@
+id: ecs_list_flavors
+prompt: 查询可用的云服务器规格列表
+expect:
+  execute:
+    - {product: ECS, api: ListFlavors}
+    - {product: ECS, api: NovaListFlavors}
+    - {product: ECS, api: NovaListFlavorsDetails}
+  answer: flavor
+  constraints:
+    tag_narrowing: true
+    max_calls: 8
+repeat: 2

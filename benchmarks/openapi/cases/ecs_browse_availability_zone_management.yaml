@@ -1,0 +1,7 @@
+id: ecs_browse_availability_zone_management
+prompt: ECS 可用区管理有哪些接口？告诉我接口名
+expect:
+  answer: ListServerAzInfo
+  constraints:
+    no_execute: true
+repeat: 2

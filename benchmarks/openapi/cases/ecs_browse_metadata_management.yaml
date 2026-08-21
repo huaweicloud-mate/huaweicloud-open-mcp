@@ -1,0 +1,7 @@
+id: ecs_browse_metadata_management
+prompt: ECS 元数据管理有哪些接口？告诉我接口名
+expect:
+  answer: NovaShowServerMetadata
+  constraints:
+    no_execute: true
+repeat: 2
