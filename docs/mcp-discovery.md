@@ -108,11 +108,12 @@ server:serverId:toolPattern=allow|deny  # 控制 call_server_tool（toolPattern 
 
 ```
 新增:
-  src/openmcp/mcpdiscover/__init__.py
-  src/openmcp/mcpdiscover/catalog.py     # CatalogSource 协议 + LocalCatalogSource
-  src/openmcp/mcpdiscover/config.py      # DiscoverConfig
-  src/openmcp/mcpdiscover/sdk.py         # SessionClient 协议 + 薄适配器
-  src/openmcp/mcpdiscover/manager.py     # session registry（空闲超时/LRU/上限）
+  src/mcp_discover/catalog.py     # CatalogSource 协议 + LocalCatalogSource
+  src/mcp_discover/config.py      # DiscoverConfig
+  src/mcp_discover/sdk.py         # SessionClient 协议 + 薄适配器
+  src/mcp_discover/manager.py     # session registry（空闲超时/LRU/上限）
+  src/mcp_discover/service.py     # DiscoverService 编排层
+  src/mcp_discover/server.py      # discover mode server 装配
   tests/test_mcpdiscover_catalog.py      # S7a
   tests/test_mcpdiscover_policy.py       # S7b
   tests/test_mcpdiscover_manager.py      # S7c
@@ -121,10 +122,10 @@ server:serverId:toolPattern=allow|deny  # 控制 call_server_tool（toolPattern 
   configs/mcp-server-catalog.example.json
 
 修改:
-  src/openmcp/types.py                   # 新 TypedDict 信封
-  src/openmcp/safety/policy.py           # PolicyRule.kind + evaluate_server/check_server
-  src/openmcp/server.py                  # --mode + build_discover_app + INSTRUCTIONS
-  configs/safety-policy.example.json     # 追加 server 规则示例
+  src/common/types.py               # 新 TypedDict 信封
+  src/safety/policy.py              # PolicyRule.kind + evaluate_server/check_server
+  main.py                           # --mode + build_discover_app + INSTRUCTIONS
+  configs/safety-policy.example.json
   AGENTS.md
 ```
 
