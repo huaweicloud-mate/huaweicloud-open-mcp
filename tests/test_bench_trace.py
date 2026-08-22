@@ -1,6 +1,6 @@
 """S6：benchmark trace 提取（export JSON/NDJSON）单测。"""
 
-from benchmarks.trace import extract_trace, extract_usage, parse_run_output
+from benchmarks.trace import extract_trace, extract_trace_from_raw, extract_usage, parse_run_output
 
 EXPORT = {
     "info": {
@@ -124,3 +124,35 @@ def test_parse_run_output_multiple_steps_keeps_last_finish():
 def test_parse_run_output_empty():
     out = parse_run_output("")
     assert out == {"session_id": None, "answer": "", "finish_reason": None, "is_error": None}
+
+
+def test_extract_trace_from_raw_truncated_json():
+    """output 截断时从 raw 文本正则提取 tool name / input / status。"""
+    raw = ('{"messages":[{"info":{"role":"assistant"},"parts":['
+           '{"type":"tool","tool":"huaweicloud-open-mcp_list_products",'
+           '"callID":"c1","id":"p1","state":{'
+           '"status":"completed",'
+           '"input":{"keyword":"云"},'
+           '"output":"{\\"ok\\":true,\\"total\\":309,\\"products\\":[...TRUNCATED]'
+           '}]}')
+    tools = extract_trace_from_raw(raw)
+    assert len(tools) == 1
+    assert tools[0].tool == "huaweicloud-open-mcp_list_products"
+    assert tools[0].input == {"keyword": "云"}
+    assert tools[0].status == "completed"
+
+
+def test_extract_trace_from_raw_multiple_tools():
+    raw = ('{"messages":[{"info":{"role":"assistant"},"parts":['
+           '{"type":"tool","tool":"huaweicloud-open-mcp_get_api","callID":"c1","state":{'
+           '"status":"completed","input":{"product":"ECS","api":"ListServers"},"output":"ok",'
+           '"metadata":{}}},'
+           '{"type":"tool","tool":"huaweicloud-open-mcp_execute_api","callID":"c2","state":{'
+           '"status":"completed","input":{"product":"ECS","api":"ListServers","params":{"limit":1}},"output":"{}"}}]}]}')
+    tools = extract_trace_from_raw(raw)
+    assert len(tools) == 2
+    assert [t.tool for t in tools] == [
+        "huaweicloud-open-mcp_get_api",
+        "huaweicloud-open-mcp_execute_api",
+    ]
+    assert tools[1].input == {"product": "ECS", "api": "ListServers", "params": {"limit": 1}}

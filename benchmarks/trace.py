@@ -65,6 +65,57 @@ def _build_usage(tokens: dict[str, Any], cost: Any) -> dict[str, int | float]:
     }
 
 
+def extract_trace_from_raw(raw: str) -> list[ToolCall]:
+    """从原始 JSON 文本正则提取工具调用序列（output 截断时用）。
+
+    不解析完整 JSON 文档——仅定位 "type": "tool" 区块，独立提取
+    tool 名、input（括号配对）、status；跳过 output 字段。
+    """
+    tools: list[ToolCall] = []
+    pos = 0
+    while True:
+        m = re.search(r'"type"\s*:\s*"tool"', raw[pos:])
+        if not m:
+            break
+        abs_pos = pos + m.start()
+        window = raw[abs_pos:abs_pos + 5000]
+
+        tn = re.search(r'"tool"\s*:\s*"([^"]*)"', window)
+        if not tn:
+            pos = abs_pos + m.end()
+            continue
+
+        ts = re.search(r'"status"\s*:\s*"([^"]*)"', window)
+
+        input_obj = {}
+        im = re.search(r'"input"\s*:\s*\{', window)
+        if im:
+            src = window[im.end() - 1:]
+            depth = 0
+            input_slice = None
+            for i, ch in enumerate(src):
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        input_slice = src[:i + 1]
+                        break
+            if input_slice:
+                try:
+                    input_obj = json.loads(input_slice)
+                except json.JSONDecodeError:
+                    pass
+
+        tools.append(ToolCall(
+            tool=tn.group(1),
+            input=input_obj,
+            status=ts.group(1) if ts else "",
+        ))
+        pos = abs_pos + m.end()
+    return tools
+
+
 def extract_trace(export: dict[str, Any]) -> tuple[list[ToolCall], str]:
     """opencode export JSON → (工具调用序列, assistant 文本回答)。
 

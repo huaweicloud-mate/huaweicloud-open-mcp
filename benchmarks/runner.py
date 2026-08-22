@@ -23,10 +23,10 @@ from .cases import BenchmarkCase, load_cases
 from .openapi.stub_server import StubServer
 from .report import CaseStats, RunResult, aggregate, dump_baseline, render_markdown
 from .scorer import ToolCall, score
-from .trace import extract_trace, extract_usage, parse_run_output
+from .trace import extract_trace, extract_trace_from_raw, extract_usage, parse_run_output
 
 _RAW_USAGE_KEY = "__raw_usage__"
-
+_RAW_TOOLS_KEY = "__raw_tools__"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = "maas/glm-5.2"
 DEFAULT_POLICY = "configs/safety-policy.example.json"
@@ -69,12 +69,16 @@ def export_session(opencode_bin: str, session_id: str, retries: int = 3) -> dict
                 if isinstance(data, dict) and data.get("messages") is not None:
                     return data
         except json.JSONDecodeError:
-            # JSON 截断/格式异常 → 重试或从 raw 文本提取 token
+            # JSON 截断/格式异常 → 重试或从 raw 文本提取
             if attempt < retries - 1:
                 continue
             usage = extract_usage(proc.stdout)
             if usage:
-                return {_RAW_USAGE_KEY: usage}
+                result: dict = {_RAW_USAGE_KEY: usage}
+                tools = extract_trace_from_raw(proc.stdout)
+                if tools:
+                    result[_RAW_TOOLS_KEY] = tools
+                return result
             return None
         except Exception as e:  # noqa: BLE001
             last_err = e
@@ -114,8 +118,11 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
             export_error = f"export 失败: {e}"
         if isinstance(export_raw, dict) and _RAW_USAGE_KEY in export_raw:
             raw_usage = export_raw[_RAW_USAGE_KEY]
+            raw_tools = export_raw.get(_RAW_TOOLS_KEY, [])
+            if raw_tools:
+                trace = raw_tools
             export_raw = None
-            export_error = "export JSON 解析异常，token 从 raw 文本提取"
+            export_error = "export JSON 解析异常，token/trace 从 raw 文本提取"
         elif export_raw is not None:
             trace, answer = extract_trace(export_raw)
         elif export_error is None:
@@ -128,7 +135,7 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
         error = f"opencode 会话出错 finish={parsed['finish_reason']}"
     else:
         error = None
-    sc = score(trace, answer, case) if (session_id and export_raw is not None) else None
+    sc = score(trace, answer, case) if session_id else None
     tokens: dict[str, int | float | None] = {"cost": None, "input": None, "output": None,
                                              "reasoning": None, "cache_read": None,
                                              "cache_write": None}
