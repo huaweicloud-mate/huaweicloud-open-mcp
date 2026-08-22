@@ -82,6 +82,22 @@ def test_extract_usage_no_tokens():
     assert extract_usage({"info": {"id": "x"}}) is None
 
 
+def test_extract_usage_from_raw_truncated_json():
+    """完整 JSON 解析失败时，从 raw 文本正则提取 tokens。"""
+    raw = ('{"info":{"id":"s","cost":0.0234,'
+           '"tokens":{"input":200,"output":50,"reasoning":10,'
+           '"cache":{"read":100,"write":5}}},'
+           '"messages":{"info":{"role":"assistant"},'
+           '"parts":[{"type":"tool","state":{"output":"{\\"broken"}]}}')
+    u = extract_usage(raw)
+    assert u == {"cost": 0.0234, "input": 200, "output": 50,
+                 "reasoning": 10, "cache_read": 100, "cache_write": 5}
+
+
+def test_extract_usage_from_raw_no_tokens_block():
+    assert extract_usage('{"info":{"id":"x"},"messages":[]}') is None
+
+
 def test_parse_run_output():
     ndjson = "\n".join([
         '{"type": "step_start", "sessionID": "ses_1", "part": {}}',

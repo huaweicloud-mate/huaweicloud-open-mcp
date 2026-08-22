@@ -25,6 +25,8 @@ from .report import CaseStats, RunResult, aggregate, dump_baseline, render_markd
 from .scorer import ToolCall, score
 from .trace import extract_trace, extract_usage, parse_run_output
 
+_RAW_USAGE_KEY = "__raw_usage__"
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = "maas/glm-5.2"
 DEFAULT_POLICY = "configs/safety-policy.example.json"
@@ -67,9 +69,12 @@ def export_session(opencode_bin: str, session_id: str, retries: int = 3) -> dict
                 if isinstance(data, dict) and data.get("messages") is not None:
                     return data
         except json.JSONDecodeError:
-            # JSON 截断/格式异常 → 重试或返回 None，不抛异常
+            # JSON 截断/格式异常 → 重试或从 raw 文本提取 token
             if attempt < retries - 1:
                 continue
+            usage = extract_usage(proc.stdout)
+            if usage:
+                return {_RAW_USAGE_KEY: usage}
             return None
         except Exception as e:  # noqa: BLE001
             last_err = e
@@ -101,12 +106,17 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
     answer: str = parsed["answer"]
     export_raw: dict | None = None
     export_error: str | None = None
+    raw_usage: dict[str, int | float] | None = None
     if session_id:
         try:
             export_raw = export_session(opencode_bin, session_id)
         except Exception as e:  # noqa: BLE001
             export_error = f"export 失败: {e}"
-        if export_raw is not None:
+        if isinstance(export_raw, dict) and _RAW_USAGE_KEY in export_raw:
+            raw_usage = export_raw[_RAW_USAGE_KEY]
+            export_raw = None
+            export_error = "export JSON 解析异常，token 从 raw 文本提取"
+        elif export_raw is not None:
             trace, answer = extract_trace(export_raw)
         elif export_error is None:
             export_error = "export 失败: JSON 解析异常或结果为空"
@@ -122,7 +132,9 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
     tokens: dict[str, int | float | None] = {"cost": None, "input": None, "output": None,
                                              "reasoning": None, "cache_read": None,
                                              "cache_write": None}
-    if export_raw is not None:
+    if raw_usage:
+        tokens.update(raw_usage)
+    elif export_raw is not None:
         usage = extract_usage(export_raw)
         if usage:
             tokens.update(usage)
