@@ -153,6 +153,26 @@ def score(trace: list[ToolCall], answer_text: str, case: BenchmarkCase) -> Score
         call_efficiency = min(case.expect.constraints.max_calls / len(calls), 1.0)
         call_efficiency = round(call_efficiency, 2)
 
+    # 追踪信息：实际调用的 execute_api 参数
+    actual_execute_calls = []
+    for c in execute_calls:
+        actual_execute_calls.append({
+            "product": c.input.get("product", ""),
+            "api": c.input.get("api", ""),
+            "params": c.input.get("params"),
+        })
+    actual_get_api_calls = []
+    for c in calls:
+        if _short(c.tool) == "get_api":
+            actual_get_api_calls.append({
+                "product": c.input.get("product", ""),
+                "api": c.input.get("api", ""),
+            })
+    checks = {
+        "execute_calls": actual_execute_calls,
+        "get_api_calls": actual_get_api_calls,
+    }
+
     passed = (
         (execute_hit is None or execute_hit)
         and (params_ok is None or params_ok)
@@ -169,6 +189,7 @@ def score(trace: list[ToolCall], answer_text: str, case: BenchmarkCase) -> Score
         execution_unexpected=execution_unexpected,
         forbidden_attempts=forbidden_attempts,
         answer_ok=answer_ok,
+        checks=checks,
         workflow=WorkflowMetrics(
             total_calls=len(calls),
             steps=dict(steps),

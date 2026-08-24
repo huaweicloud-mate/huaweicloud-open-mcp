@@ -167,8 +167,13 @@ def run_backend(cases: list[BenchmarkCase], backend: str, args: argparse.Namespa
             r = run_once(case, backend, i, args.model, args.opencode, args.policy,
                          mock_base, case.timeout)
             suffix = "PASS" if (r.score and r.score.passed) else ("ERR" if r.error else "FAIL")
+            extra = ""
+            if r.score and r.score.checks:
+                execs = r.score.checks.get("execute_calls", [])
+                if execs:
+                    extra = " params=" + json.dumps(execs, ensure_ascii=False)[:300]
             print(f"  -> {suffix} {r.elapsed_s:.1f}s "
-                  f"tok_in={r.tokens.get('input')} err={r.error}", flush=True)
+                  f"tok_in={r.tokens.get('input')} err={r.error}{extra}", flush=True)
             results.append(r)
     return results
 
