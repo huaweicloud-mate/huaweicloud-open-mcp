@@ -1,5 +1,5 @@
 id: ecs_register_monitor
-prompt: 为云服务器 srv-001 注册监控
+prompt: 在 ECS 的状态管理中为云服务器 srv-001 注册监控
 expect:
   execute:
     - {product: ECS, api: RegisterServerMonitor}
