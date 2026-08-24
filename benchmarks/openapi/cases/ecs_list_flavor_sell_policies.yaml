@@ -1,5 +1,5 @@
 id: ecs_list_flavor_sell_policies
-prompt: 查询规格销售策略列表
+prompt: 查询 ECS 规格销售策略列表
 expect:
   execute:
     - {product: ECS, api: ListFlavorSellPolicies}
