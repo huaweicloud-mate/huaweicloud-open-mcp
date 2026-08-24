@@ -1,0 +1,10 @@
+id: ecs_create_metadata
+prompt: 给云服务器 srv-001 设置标签 key 为 env 值为 prod
+expect:
+  execute:
+    - {product: ECS, api: NovaCreateServerMetadata}
+  answer: 元数据
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

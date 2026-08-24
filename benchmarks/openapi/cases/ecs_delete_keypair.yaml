@@ -1,0 +1,10 @@
+id: ecs_delete_keypair
+prompt: 删除 SSH 密钥 my-key
+expect:
+  execute:
+    - {product: ECS, api: NovaDeleteKeypair}
+  answer: 删除
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

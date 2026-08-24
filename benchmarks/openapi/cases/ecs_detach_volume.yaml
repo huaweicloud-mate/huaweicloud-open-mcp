@@ -1,0 +1,11 @@
+id: ecs_detach_volume
+prompt: 从云服务器 srv-001 卸载磁盘 vol-001
+expect:
+  execute:
+    - {product: ECS, api: DetachServerVolume}
+    - {product: ECS, api: NovaDetachVolume}
+  answer: 卸载
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

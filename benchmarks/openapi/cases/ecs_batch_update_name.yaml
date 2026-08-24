@@ -1,0 +1,10 @@
+id: ecs_batch_update_name
+prompt: 批量修改云服务器名称为 production
+expect:
+  execute:
+    - {product: ECS, api: BatchUpdateServersName}
+  answer: 名称
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

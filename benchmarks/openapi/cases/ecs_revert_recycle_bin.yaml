@@ -1,0 +1,10 @@
+id: ecs_revert_recycle_bin
+prompt: 从回收站中恢复虚拟机 srv-001
+expect:
+  execute:
+    - {product: ECS, api: RevertRecycleBinServer}
+  answer: 恢复
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

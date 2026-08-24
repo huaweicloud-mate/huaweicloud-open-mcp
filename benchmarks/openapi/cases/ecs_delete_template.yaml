@@ -1,0 +1,10 @@
+id: ecs_delete_template
+prompt: 删除 ECS 启动模板 tmpl-001
+expect:
+  execute:
+    - {product: ECS, api: DeleteLaunchTemplates}
+  answer: 删除
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

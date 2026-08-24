@@ -1,0 +1,11 @@
+id: ecs_update_server
+prompt: 修改云服务器 srv-001 的名称为 web-server
+expect:
+  execute:
+    - {product: ECS, api: UpdateServer}
+    - {product: ECS, api: NovaUpdateServer}
+  answer: 修改
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

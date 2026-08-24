@@ -1,0 +1,10 @@
+id: ecs_batch_resize
+prompt: 批量变更云服务器规格至 s6.large.2
+expect:
+  execute:
+    - {product: ECS, api: BatchResizeServers}
+  answer: 规格
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

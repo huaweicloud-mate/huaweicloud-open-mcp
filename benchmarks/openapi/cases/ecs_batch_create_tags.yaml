@@ -1,0 +1,10 @@
+id: ecs_batch_create_tags
+prompt: 给云服务器 srv-001 添加标签 env=prod 和 team=ops
+expect:
+  execute:
+    - {product: ECS, api: BatchCreateServerTags}
+  answer: 标签
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

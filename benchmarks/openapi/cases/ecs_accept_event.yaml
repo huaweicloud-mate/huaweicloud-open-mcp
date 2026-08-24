@@ -1,0 +1,10 @@
+id: ecs_accept_event
+prompt: 接受计划事件 evt-001
+expect:
+  execute:
+    - {product: ECS, api: AcceptScheduledEvent}
+  answer: 接受
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

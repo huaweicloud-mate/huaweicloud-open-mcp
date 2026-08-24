@@ -1,0 +1,10 @@
+id: ecs_create_keypair
+prompt: 创建一个名为 my-key 的 SSH 密钥对
+expect:
+  execute:
+    - {product: ECS, api: NovaCreateKeypair}
+  answer: 密钥
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

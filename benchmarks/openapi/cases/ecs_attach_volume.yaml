@@ -1,0 +1,11 @@
+id: ecs_attach_volume
+prompt: 给云服务器 srv-001 挂载磁盘 vol-001
+expect:
+  execute:
+    - {product: ECS, api: AttachServerVolume}
+    - {product: ECS, api: NovaAttachVolume}
+  answer: 挂载
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2
