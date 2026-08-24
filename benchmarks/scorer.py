@@ -27,6 +27,7 @@ class ToolCall:
     tool: str
     input: dict[str, Any]
     status: str
+    output: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,26 @@ def _norm(s: Any) -> str:
 
 def _key(product: Any, api: Any) -> tuple[str, str]:
     return (_norm(product), _norm(api))
+
+
+def _extract_schema_params(doc: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """从 get_api 返回的 OpenAPI 2.0 文档中提取参数名和类型。"""
+    if not isinstance(doc, dict) or not doc.get("paths"):
+        return None
+    result: list[dict[str, Any]] = []
+    for path, methods in doc["paths"].items():
+        for method, op in methods.items():
+            if not isinstance(op, dict):
+                continue
+            for p in op.get("parameters") or []:
+                if not isinstance(p, dict):
+                    continue
+                result.append({
+                    "name": p.get("name", "?"),
+                    "in": p.get("in", "?"),
+                    "required": p.get("required", False),
+                })
+    return result if result else None
 
 
 def score(trace: list[ToolCall], answer_text: str, case: BenchmarkCase) -> ScoreResult:
@@ -164,11 +185,13 @@ def score(trace: list[ToolCall], answer_text: str, case: BenchmarkCase) -> Score
     actual_get_api_calls = []
     for c in calls:
         if _short(c.tool) == "get_api":
+            schema_params = _extract_schema_params(c.output) if c.output else None
             actual_get_api_calls.append({
                 "product": c.input.get("product", ""),
                 "api": c.input.get("api", ""),
+                "schema_params": schema_params,
             })
-    checks = {
+    checks: dict[str, Any] = {
         "execute_calls": actual_execute_calls,
         "get_api_calls": actual_get_api_calls,
     }

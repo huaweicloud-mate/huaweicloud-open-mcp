@@ -169,9 +169,35 @@ def run_backend(cases: list[BenchmarkCase], backend: str, args: argparse.Namespa
             suffix = "PASS" if (r.score and r.score.passed) else ("ERR" if r.error else "FAIL")
             extra = ""
             if r.score and r.score.checks:
+                parts = []
                 execs = r.score.checks.get("execute_calls", [])
                 if execs:
-                    extra = " params=" + json.dumps(execs, ensure_ascii=False)[:300]
+                    parts.append("exec=" + json.dumps(execs, ensure_ascii=False)[:200])
+                else:
+                    # Even without execute calls, show what was attempted
+                    gels = r.score.checks.get("get_api_calls", [])
+                    gel_names = []
+                    for g in gels:
+                        s = g.get("schema_params")
+                        n = g.get("api", "")
+                        if s:
+                            reqs = [p["name"] for p in s if p.get("required")]
+                            n += "(%s)" % ",".join(reqs[:5]) if reqs else "(no req)"
+                        gel_names.append(n)
+                    if gel_names:
+                        parts.append("get=" + "|".join(gel_names))
+                schemas = r.score.checks.get("get_api_calls", [])
+                schema_info = []
+                for s in schemas:
+                    sp = s.get("schema_params")
+                    if sp:
+                        names = [p["name"] for p in sp if p.get("required")]
+                        if names:
+                            schema_info.append(f"{s.get('api','')}(req:{','.join(names)})")
+                if schema_info:
+                    parts.append("schema=" + "|".join(schema_info))
+                if parts:
+                    extra = " " + " ".join(parts)
             print(f"  -> {suffix} {r.elapsed_s:.1f}s "
                   f"tok_in={r.tokens.get('input')} err={r.error}{extra}", flush=True)
             results.append(r)

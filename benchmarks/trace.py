@@ -2,7 +2,7 @@
 
 import json
 import re
-from typing import Any
+from typing import Any, cast
 
 from .scorer import ToolCall
 
@@ -65,6 +65,18 @@ def _build_usage(tokens: dict[str, Any], cost: Any) -> dict[str, int | float]:
     }
 
 
+def _parse_output(raw_output: Any) -> dict[str, Any] | None:
+    """解析工具调用的 output 字段。已是 dict 则返回，是 JSON 字符串则解析。"""
+    if isinstance(raw_output, dict):
+        return raw_output
+    if isinstance(raw_output, str) and raw_output.strip():
+        try:
+            return cast(dict[str, Any], json.loads(raw_output))
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
 def extract_trace_from_raw(raw: str) -> list[ToolCall]:
     """从原始 JSON 文本正则提取工具调用序列（output 截断时用）。
 
@@ -107,9 +119,32 @@ def extract_trace_from_raw(raw: str) -> list[ToolCall]:
                 except json.JSONDecodeError:
                     pass
 
+        output_obj = None
+        om = re.search(r'"output"\s*:\s*"', window)
+        if om:
+            out_start = om.end()
+            out_raw = []
+            escaped = False
+            for i in range(out_start, min(out_start + 5000, len(window))):
+                ch = window[i]
+                if escaped:
+                    out_raw.append(ch)
+                    escaped = False
+                elif ch == '\\':
+                    out_raw.append(ch)
+                    escaped = True
+                elif ch == '"':
+                    break
+                else:
+                    out_raw.append(ch)
+            output_str = ''.join(out_raw)
+            if output_str:
+                output_obj = _parse_output(output_str)
+
         tools.append(ToolCall(
             tool=tn.group(1),
             input=input_obj,
+            output=output_obj,
             status=ts.group(1) if ts else "",
         ))
         pos = abs_pos + m.end()
@@ -135,6 +170,7 @@ def extract_trace(export: dict[str, Any]) -> tuple[list[ToolCall], str]:
                 tools.append(ToolCall(
                     tool=p.get("tool") or "",
                     input=st.get("input") or {},
+                    output=_parse_output(st.get("output")),
                     status=st.get("status") or "",
                 ))
             elif p.get("type") == "text":
