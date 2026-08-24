@@ -39,7 +39,7 @@ def build_benchdir_config(policy: str, mock_base: str | None) -> str:
     if mock_base:
         cmd += ["--mock-base", mock_base]
     config = {
-        "tool_output": {"max_lines": 5000, "max_bytes": 204800},
+        "tool_output": {"max_lines": 50000, "max_bytes": 10485760},
         "$schema": "https://opencode.ai/config.json",
         "mcp": {
             "huaweicloud-open-mcp": {
