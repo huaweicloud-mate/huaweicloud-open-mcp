@@ -63,20 +63,21 @@ def export_session(opencode_bin: str, session_id: str, retries: int = 3) -> dict
         try:
             proc = subprocess.run(
                 [opencode_bin, "export", session_id],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, timeout=60,
             )
-            if proc.stdout.strip():
-                data = json.loads(proc.stdout)
+            raw_text = proc.stdout.decode("utf-8", errors="replace")
+            if raw_text.strip():
+                data = json.loads(raw_text)
                 if isinstance(data, dict) and data.get("messages") is not None:
                     return data
         except json.JSONDecodeError:
             # JSON 截断/格式异常 → 重试或从 raw 文本提取
             if attempt < retries - 1:
                 continue
-            usage = extract_usage(proc.stdout)
+            usage = extract_usage(raw_text)
             if usage:
                 result: dict = {_RAW_USAGE_KEY: usage}
-                tools = extract_trace_from_raw(proc.stdout)
+                tools = extract_trace_from_raw(raw_text)
                 if tools:
                     result[_RAW_TOOLS_KEY] = tools
                 return result
