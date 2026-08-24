@@ -1,0 +1,10 @@
+id: ecs_update_recycle_bin
+prompt: 修改 ECS 回收站配置，设置保留天数为 7 天
+expect:
+  execute:
+    - {product: ECS, api: UpdateRecycleBin}
+  answer: 保留
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

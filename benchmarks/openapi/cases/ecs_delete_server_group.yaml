@@ -1,0 +1,11 @@
+id: ecs_delete_server_group
+prompt: 删除云服务器组 ecs-group
+expect:
+  execute:
+    - {product: ECS, api: DeleteServerGroup}
+    - {product: ECS, api: NovaDeleteServerGroup}
+  answer: 删除
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

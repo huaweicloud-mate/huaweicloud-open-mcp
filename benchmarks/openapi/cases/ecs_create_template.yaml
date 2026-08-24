@@ -1,0 +1,10 @@
+id: ecs_create_template
+prompt: 创建一个 ECS 启动模板，名称为 my-template
+expect:
+  execute:
+    - {product: ECS, api: CreateLaunchTemplate}
+  answer: 创建
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2

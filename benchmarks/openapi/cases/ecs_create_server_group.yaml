@@ -1,0 +1,11 @@
+id: ecs_create_server_group
+prompt: 创建一个名为 test-group 的反亲和云服务器组
+expect:
+  execute:
+    - {product: ECS, api: CreateServerGroup}
+    - {product: ECS, api: NovaCreateServerGroup}
+  answer: 创建
+  constraints:
+    tag_narrowing: true
+    max_calls: 10
+repeat: 2
