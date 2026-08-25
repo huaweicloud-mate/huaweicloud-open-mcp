@@ -77,6 +77,47 @@
 
 数据流（end-to-end discover 模式）：`configs/mcp-server-catalog.example.json → list_mcp_servers/get_mcp_server → connect_mcp_server → safety 检查 → Streamable HTTP client（mcp SDK）→ 云端 MCP server → list_server_tools/get_server_tool → call_server_tool → safety 检查 → 代发调用`。
 
+## 模块依赖关系
+
+依赖严格单向、无环，自底向上四层：
+
+```text
+第4层  src/main.py          入口，按 --mode 延迟 import 对应 server（避免同时装载两套）
+           │
+第3层  src/mcp_openapi/       src/mcp_discover/
+         ├ service            ├ service
+         ├ execute            ├ catalog
+         ├ server             ├ config
+         └ signer/sign+client ├ manager → sdk
+                              └ server
+           │                        │
+第2层  src/safety/policy       src/apie/
+         （纯函数，零依赖）        ├ catalog → live_fallback → convert_openapi2
+                              ├ memory_store（纯内存缓存，零内部依赖）
+                              ├ metadata / mock / api_docs(CLI)
+                              └ 管道文件（fetch/split/merge/organize/validate/refresh/retry）
+           │                        │
+第1层  src/common/            （types / http / paths / logconf / auth/credentials，均零内部依赖）
+```
+
+| 模块 | 依赖 |
+| --- | --- |
+| `common/` | 无内部依赖（纯基础设施）；仅 `auth/__init__` re-export `auth.credentials` |
+| `safety/policy` | 无依赖（纯函数） |
+| `apie/` | → `common`（http/types/paths/logconf）；`catalog`→`live_fallback`→`convert_openapi2` 链、`memory_store`；`mock`→common.http/types |
+| `mcp_openapi/` | → `apie`（catalog/metadata/mock/memory_store）+ `safety` + `common`；`service`→`execute`+`signer.client`；`signer.client`→`signer.sign` |
+| `mcp_discover/` | → `safety` + `common`（**不依赖 apie**）；`service`→`catalog/config/manager/sdk`；`manager`→`sdk` |
+| `main.py` | → `common.logconf` + 延迟 import `mcp_openapi.server/service`、`mcp_discover.server` |
+| `benchmarks/` | 与 `src/` 零耦合：经子进程 spawn console script `huaweicloud-open-mcp` 驱动，不 import src 任何包 |
+
+关键设计结论：
+
+- **`apie` 是 `mcp_openapi` 独享依赖**：APIE 元数据层只服务 openapi 直连模式；`mcp_discover` 只依赖 `safety` + `common`，两模式互不 import。
+- **`safety` + `common` 是两模式公共底座**，二者本身零内部依赖，为最底层可独立复用模块。
+- **`metadata.py` 归入 `apie`**：避免 `apie ↔ mcp_openapi` 循环依赖——`api_docs` CLI（apie 内）与 `mcp_openapi/service` 共用同一套 `metadata` 纯函数。
+- **`convert_openapi2` 在 apie 顶层**（非管道子目录）：同时被 `live_fallback`（运行时远端回退）与管道文件（离线 refresh）使用。
+- **`main.py` 延迟导入**：`mcp_openapi.server` / `mcp_discover.server` 在 `main()` 体内按 mode 分支导入。
+
 ## 命名约定
 
 - **产品名**：以 `raw/apis_detail.json` 的驼峰 `product_short` 为准（如 `ECS`）；与 apis 项目的大小写去重映射保持一致。
