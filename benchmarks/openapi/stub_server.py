@@ -28,7 +28,23 @@ CANNED: dict[tuple[str, str], dict[str, Any]] = {
     },
     ("vpc", "listvpcs"): {
         "vpcs": [{"id": "stub-vpc-1", "name": "bench-vpc", "cidr": "192.168.0.0/16",
-                  "status": "ACTIVE"}],
+                   "status": "ACTIVE"}],
+    },
+    # 「先查后写」写操作的前置查询：返回非空列表，ID 对齐 prompt（mock 不校验值，字段名对齐真实 schema）
+    ("ecs", "listrecyclebinservers"): {
+        "servers": [{"id": "srv-001", "name": "bench-server", "status": "ACTIVE"}],
+    },
+    ("ecs", "showrecyclebin"): {
+        "project_id": "proj123", "switch": "on",
+        "policy": {"recycle_threshold_day": 1, "retention_hour": 7},
+    },
+    ("ecs", "listservergroups"): {
+        "server_groups": [{"id": "ecs-group", "name": "ecs-group",
+                           "policies": ["anti-affinity"], "members": [], "metadata": {}}],
+    },
+    ("ecs", "listscheduledevents"): {
+        "events": [{"id": "evt-001", "type": "instance-rebuild", "state": "waiting"}],
+        "page_info": {},
     },
 }
 

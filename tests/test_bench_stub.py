@@ -40,3 +40,32 @@ def test_stub_unknown_api_default_body():
     with StubServer() as s:
         _, body = _get(f"{s.base_url}/v1/mock/ECS/SomeUnknownApi")
         assert json.loads(body) == {"ok": True, "stub": True}
+
+
+def test_stub_recycle_bin_servers_nonempty():
+    with StubServer() as s:
+        _, body = _get(f"{s.base_url}/v1/mock/ECS/ListRecycleBinServers?status_code=200")
+        data = json.loads(body)
+        assert data["servers"][0]["id"] == "srv-001"
+
+
+def test_stub_show_recycle_bin():
+    with StubServer() as s:
+        _, body = _get(f"{s.base_url}/v1/mock/ECS/ShowRecycleBin?status_code=200")
+        data = json.loads(body)
+        assert data["switch"] == "on"
+        assert data["policy"]["retention_hour"] == 7
+
+
+def test_stub_server_groups_nonempty():
+    with StubServer() as s:
+        _, body = _get(f"{s.base_url}/v1/mock/ECS/ListServerGroups?status_code=200")
+        data = json.loads(body)
+        assert data["server_groups"][0]["id"] == "ecs-group"
+
+
+def test_stub_scheduled_events_nonempty():
+    with StubServer() as s:
+        _, body = _get(f"{s.base_url}/v1/mock/ECS/ListScheduledEvents?status_code=200")
+        data = json.loads(body)
+        assert data["events"][0]["id"] == "evt-001"
