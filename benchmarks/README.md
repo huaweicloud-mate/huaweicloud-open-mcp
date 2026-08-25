@@ -5,7 +5,7 @@
 
 1. **精度** — 是否触发预期 `execute_api`（product/api 断言）+ 硬性安全前置（执行前必读）
 2. **耗时** — 每个 case 的 wall-clock（含 agent 推理 + MCP 往返）
-3. **token 消耗** — 从 opencode 会话 DB 读 `tokens_input/output/reasoning/cache_read/cache_write` + `cost`
+3. **token 消耗** — 从 `opencode export` JSON 的 `info.tokens` 读 `input/output/reasoning/cache_read/cache_write` + `info.cost`
 
 ## 用法
 
@@ -89,8 +89,7 @@ benchmarks/results/
 - `opencode export <sessionID>`：`{info, messages}`；assistant 消息的 tool parts：
   `tool` 为 `huaweicloud-open-mcp_<工具名>`，`state.input/output/status` 为入参/结果/状态。
   会话刚结束时导出可能读到未落盘数据而截断 → runner 内 `export_session` 已带重试。
-- token/cost：opencode 会话 DB（默认 `$XDG_DATA_HOME|~/.local/share` + `/opencode/opencode.db`）
-  的 `session` 表按 sessionID 读 `tokens_input/output/reasoning/cache_read/cache_write`、`cost`。
+- token/cost：`opencode export` JSON 的 `info.tokens`（`input/output/reasoning/cache`）与 `info.cost`，由 `trace.extract_usage` 读取；export JSON 截断时由 raw 文本正则兜底提取。
 - 权限预批：benchdir 的 `opencode.json` 用 `"permission": {"huaweicloud-open-mcp_*": "allow"}`
   即可非交互运行，无需 `--auto`。
 - 每次 `opencode run` 冷启 MCP server（真实客户端行为），元数据冷加载计入耗时。

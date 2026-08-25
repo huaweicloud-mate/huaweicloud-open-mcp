@@ -1,0 +1,17 @@
+# CONTEXT.md — domain glossary
+
+Complement to `AGENTS.md`. Terms named during architecture design; empty terms are intentional omissions, not gaps.
+
+> **Status**: the terms below are *decided but not yet implemented*. They describe the target after the execute-seam deepening (candidate A), the export-seam deepening (B), the metadata value type (C), and the transport seam (D). Until those land, `ApiExecutor` below means the *new* operation-context seam, and the name collides with the *existing* `mcp_openapi/execute.py:ApiExecutor` (a `request(method, host, path, …)` Protocol) that it is planned to replace — see the `ApiExecutor` entry.
+
+**ApiExecutor** _(new, planned)_ — the seam between `ToolService` and *how an operation reaches Huawei Cloud*. Two adapters: `RealApiExecutor` (SDK-HMAC-SHA256 signs + builds the request from the OpenAPI operation) and `MockApiExecutor` (derives the API Explorer mock URL from `product`/`api`/`region`, peeling `_status_code`/`_number`). `execute.py` calls it, then normalizes + wraps the envelope. Replaces the *existing* `execute.py:ApiExecutor` (`request(...)` Protocol) + `_execute_mock` split.
+
+**RequestRefusal** _(planned)_ — the typed exception a real executor raises for the two real-only refusals (missing required `{project_id}` path param, missing `doc["host"]`). `execute.py` catches it and returns `{ok: false, reason: ...}`. The mock executor never raises it.
+
+**ExportResult** _(planned)_ — the single typed shape `parse_export` returns (`usage` + `trace` tool-calls), regardless of whether the opencode export parsed fully or had to be recovered from truncated raw JSON. Hides the regex recovery inside `trace.py`; `runner` never sees the old `__raw_usage__`/`__raw_tools__` sentinel keys.
+
+**answer** _(planned)_ — the canonical assistant text for scoring; sourced *only* from the live `opencode run --format json` NDJSON stream (`parse_run_output`), never from the export. Export supplies usage + trace only.
+
+**ApiLocation** _(planned)_ — a frozen value type `(doc, path, method, op)` naming "one operation inside a converted OpenAPI doc". Owns the operationId lookup (exact + case-insensitive) so `find_api_doc`, `LiveFallback`, `format_api_detail`, and the `ApiExecutor` all pass/receive one named value instead of a bare 4-tuple.
+
+**open_with_retry** _(planned)_ — the single public transport seam in `common.http`: opens a URL with timeout/retry/backoff, catching `HTTPError`, returning `(status, headers, body_bytes)`. Both the real and mock `ApiExecutor` call it; the old `_retry`/`parse_body` stay private behind it. Replaces the per-caller `_do`-closure duplicates.

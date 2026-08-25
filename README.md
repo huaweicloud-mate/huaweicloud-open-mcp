@@ -73,7 +73,7 @@ server:@huaweicloud/ecs:list*=allow     # tool 级
 - MCP server：`huaweicloud-open-mcp`
 - 工作流 benchmark：`uv run python -m benchmarks.runner`（见 `benchmarks/README.md`）
 
-详细设计见 `AGENTS.md`、[docs/design.md](docs/design.md)、[designs/mcp-discovery.md](designs/mcp-discovery.md)。
+详细设计见 `AGENTS.md`、[docs/architecture.md](docs/architecture.md)（总体）、[docs/mcp-openapi.md](docs/mcp-openapi.md)（openapi 模式）、[docs/mcp-discovery.md](docs/mcp-discovery.md)（discover 模式）。
 
 ## 前置依赖
 
