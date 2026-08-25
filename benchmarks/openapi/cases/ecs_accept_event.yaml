@@ -1,5 +1,5 @@
 id: ecs_accept_event
-prompt: 接受计划事件 evt-001
+prompt: 通过 ECS 的计划事件接口接受事件 evt-001
 expect:
   execute:
     - {product: ECS, api: AcceptScheduledEvent}
