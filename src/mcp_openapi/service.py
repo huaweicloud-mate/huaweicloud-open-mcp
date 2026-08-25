@@ -24,6 +24,7 @@ from common.types import (
 from safety import policy as safety_policy
 
 from . import execute
+from .gate import Gate
 from .signer.client import HttpClient
 
 logger = logging.getLogger("mcp_openapi.service")
@@ -40,6 +41,7 @@ class ServiceConfig:
     mock_base: str = apie_mock.MOCK_BASE
     http_client_factory: Callable[[], execute.ApiExecutor] | None = None
     mock_client_factory: Callable[[], apie_mock.MockApiClient] | None = None
+    gate: Gate = Gate.unrestricted()
 
 
 class ToolService:
@@ -71,6 +73,12 @@ class ToolService:
         """检查 safety policy，返回错误描述或 None（放行）。"""
         return safety_policy.check(self.config.policy_rules, product, api)
 
+    def _check_gate(self, product: str) -> str | None:
+        """检查产品门栓，返回错误描述或 None（放行）。"""
+        if self.config.gate.allows(product):
+            return None
+        return f"产品 {product} 不在 openapi mcp 授权范围内"
+
     # ---------- 元数据工具 ----------
 
     def list_products(self, category: str | None = None,
@@ -80,11 +88,16 @@ class ToolService:
         if groups is None:
             logger.warning("list_products metadata=missing")
             return {"ok": False, "reason": "产品列表不可用（远端拉取失败）"}
+        groups = self.config.gate.filter_products(groups)
         return metadata.list_products(groups, counts=catalog.get_api_counts(self.store),
                                       category=category, keyword=keyword)
 
     def get_product(self, product: str) -> ProductResult | ToolError:
         logger.info("get_product product=%s", product)
+        gated = self._check_gate(product)
+        if gated:
+            logger.warning("get_product product=%s result=gated", product)
+            return {"ok": False, "reason": gated}
         groups = catalog.get_products(self.store)
         if groups is None:
             logger.warning("get_product product=%s metadata=missing", product)
@@ -99,6 +112,10 @@ class ToolService:
                   limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
         logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d",
                     product, tag or "-", search or "-", limit, offset)
+        gated = self._check_gate(product)
+        if gated:
+            logger.warning("list_apis product=%s result=gated", product)
+            return {"ok": False, "reason": gated}
         apis = catalog.get_apis(self.store, product)
         if apis is None:
             logger.warning("list_apis product=%s metadata=missing", product)
@@ -108,6 +125,10 @@ class ToolService:
     def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
         region = region or self.config.region
         logger.info("get_api %s:%s region=%s", product, api, region)
+        gated = self._check_gate(product)
+        if gated:
+            logger.warning("get_api %s:%s region=%s result=gated", product, api, region)
+            return {"ok": False, "reason": gated}
         hit = self.load_api_doc(product, api, region)
         if hit is None:
             logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
@@ -119,6 +140,10 @@ class ToolService:
                          region: str | None = None) -> ExamplesResult | ToolError:
         region = region or self.config.region
         logger.info("get_api_examples %s:%s region=%s", product, api, region)
+        gated = self._check_gate(product)
+        if gated:
+            logger.warning("get_api_examples %s:%s region=%s result=gated", product, api, region)
+            return {"ok": False, "reason": gated}
         hit = self.load_api_doc(product, api, region)
         if hit is None:
             logger.warning("get_api_examples %s:%s region=%s result=not_found",
@@ -132,8 +157,14 @@ class ToolService:
 
     def execute_api(self, product: str, api: str, region: str | None = None,
                     params: dict[str, Any] | None = None) -> ExecuteResult:
-        """执行 API。safety policy 在此做唯一检查，mock/real 分支共享。"""
+        """执行 API。产品门栓先粗滤，safety policy 再细检，mock/real 分支共享。"""
         region = region or self.config.region
+        gated = self._check_gate(product)
+        if gated:
+            logger.warning("execute %s:%s region=%s mode=%s policy=gated",
+                           product, api, region,
+                           "mock" if self.config.mock else "real")
+            return {"ok": False, "reason": gated}
         policy_err = self._check_policy(product, api)
         if policy_err:
             logger.warning("execute %s:%s region=%s mode=%s policy=%s",

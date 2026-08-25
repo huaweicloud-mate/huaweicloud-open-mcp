@@ -2,6 +2,7 @@
 
 from apie.memory_store import MemoryStore
 from common.auth import Credentials
+from mcp_openapi.gate import parse_gate
 from mcp_openapi.service import ServiceConfig, ToolService
 from safety import policy
 
@@ -248,3 +249,58 @@ def test_execute_deny_is_logged(caplog):
     with caplog.at_level(logging.INFO, logger="mcp_openapi.service"):
         service.execute_api("ECS", "ListServersDetails")
     assert "policy=deny" in caplog.text
+
+
+# ---------- 产品门栓（gate） ----------
+
+def test_list_products_filters_gated():
+    store = _prep_store(detail=False)
+    svc = ToolService(store=store, config=ServiceConfig(gate=parse_gate(["ECS"])))
+    out = svc.list_products()
+    assert out["ok"] is True
+    assert [p["product"] for p in out["products"]] == ["ECS"]
+
+
+def test_get_product_gated_denied():
+    store = _prep_store(detail=False)
+    svc = ToolService(store=store, config=ServiceConfig(gate=parse_gate(["ECS"])))
+    out = svc.get_product("RabbitMQ")
+    assert out["ok"] is False
+    assert out["reason"] == "产品 RabbitMQ 不在 openapi mcp 授权范围内"
+
+
+def test_list_apis_gated_denied():
+    store = _prep_store(detail=False)
+    svc = ToolService(store=store, config=ServiceConfig(gate=parse_gate(["ECS"])))
+    out = svc.list_apis("VPC")
+    assert out["ok"] is False
+    assert "不在 openapi mcp 授权范围内" in out["reason"]
+
+
+def test_get_api_gated_denied():
+    store = _prep_store(products=False, apis=False)
+    svc = ToolService(store=store, config=ServiceConfig(gate=parse_gate(["ECS"])))
+    out = svc.get_api("VPC", "ListVpcs")
+    assert out["ok"] is False
+    assert "不在 openapi mcp 授权范围内" in out["reason"]
+
+
+def test_get_api_examples_gated_denied():
+    store = _prep_store(products=False, apis=False)
+    svc = ToolService(store=store, config=ServiceConfig(gate=parse_gate(["ECS"])))
+    out = svc.get_api_examples("VPC", "ListVpcs")
+    assert out["ok"] is False
+    assert "不在 openapi mcp 授权范围内" in out["reason"]
+
+
+def test_execute_gated_denied_even_when_policy_allows():
+    store = _prep_store(products=False, apis=False)
+    http = StubHttpClient()
+    svc = ToolService(store=store, config=ServiceConfig(
+        policy_rules=_policy("VPC:*=allow"),
+        gate=parse_gate(["ECS"]),
+        http_client_factory=lambda: http))
+    out = svc.execute_api("VPC", "ListVpcs")
+    assert out["ok"] is False
+    assert out["reason"] == "产品 VPC 不在 openapi mcp 授权范围内"
+    assert http.calls == []

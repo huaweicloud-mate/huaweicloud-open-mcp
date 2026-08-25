@@ -2,6 +2,8 @@
 
 Complement to `AGENTS.md`. Terms named during architecture design; empty terms are intentional omissions, not gaps.
 
+**Gate** — the openapi 产品准入门栓 (`src/mcp_openapi/gate.py`): a product-level allowlist controlling which products are visible/usable through openapi mode. Small interface (`allows` / `filter_products` / `describe`). Unconfigured = unrestricted (opt-in); configured = deny-by-default whitelist. Sits *in front of* the safety policy: `execute_api` passes Gate (coarse product filter) then safety policy (fine API rules). Surfaced at the prompt level via `build_instructions(gate)` + tool docstrings.
+
 > **Status**: the terms below are *decided but not yet implemented*. They describe the target after the execute-seam deepening (candidate A), the export-seam deepening (B), the metadata value type (C), and the transport seam (D). Until those land, `ApiExecutor` below means the *new* operation-context seam, and the name collides with the *existing* `mcp_openapi/execute.py:ApiExecutor` (a `request(method, host, path, …)` Protocol) that it is planned to replace — see the `ApiExecutor` entry.
 
 **ApiExecutor** _(new, planned)_ — the seam between `ToolService` and *how an operation reaches Huawei Cloud*. Two adapters: `RealApiExecutor` (SDK-HMAC-SHA256 signs + builds the request from the OpenAPI operation) and `MockApiExecutor` (derives the API Explorer mock URL from `product`/`api`/`region`, peeling `_status_code`/`_number`). `execute.py` calls it, then normalizes + wraps the envelope. Replaces the *existing* `execute.py:ApiExecutor` (`request(...)` Protocol) + `_execute_mock` split.
