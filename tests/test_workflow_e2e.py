@@ -133,11 +133,11 @@ def test_workflow_full_progressive_chain(session):
 
 
 def test_workflow_policy_denies_out_of_whitelist(session):
-    # 目录中发现但被 policy 拒绝的写接口（DeleteServers 不在白名单）
-    narrowed = session.tool("list_apis", {"product": "ECS", "tag": "生命周期管理"})
+    # 目录中发现但被 policy 拒绝的写接口（NovaRebootServer 不在白名单）
+    narrowed = session.tool("list_apis", {"product": "ECS", "tag": "状态管理"})
     names = {a["name"] for a in narrowed["apis"]}
-    assert "DeleteServers" in names  # 目录可见（读元数据不受限）
-    result = session.tool("execute_api", {"product": "ECS", "api": "DeleteServers",
+    assert "NovaRebootServer" in names  # 目录可见（读元数据不受限）
+    result = session.tool("execute_api", {"product": "ECS", "api": "NovaRebootServer",
                                           "params": {"server_id": "x"}})
     assert result["ok"] is False
     assert "policy" in result["reason"]

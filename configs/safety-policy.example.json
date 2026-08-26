@@ -13,6 +13,7 @@
   "VPC:*List*=allow",
   "VPC:*Query*=allow",
   "IAM:KeystoneList*=allow",
+  "OBS:*List*=allow",
   "",
   "# =======================================================",
   "# MCP discover 模式规则（server:serverId[:tool]=allow|deny）",

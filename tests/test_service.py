@@ -165,6 +165,37 @@ class StubHttpClient:
         return {"status": 200, "headers": {}, "body": {"real": True}}
 
 
+class StubObsClient:
+    def __init__(self):
+        self.calls = []
+
+    def request(self, method, host, *, bucket, object_key="",
+                query=None, headers=None, body=None):
+        self.calls.append((method, host, bucket, object_key, query, headers, body))
+        return {"status": 200, "headers": {}, "body": {"obs": True}}
+
+
+OBS_DOC = {
+    "swagger": "2.0",
+    "host": "obs.cn-north-4.myhuaweicloud.com",
+    "basePath": "/",
+    "paths": {
+        "/{object_key}": {
+            "get": {
+                "operationId": "GetObject",
+                "parameters": [
+                    {"name": "bucket_name", "in": "query", "type": "string"},
+                    {"name": "object_key", "in": "path", "type": "string"},
+                    {"name": "versionId", "in": "query", "type": "string"},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            }
+        }
+    },
+    "definitions": {},
+}
+
+
 def test_execute_mock_routes_with_status_code():
     store = _prep_store(products=False, apis=False)
     mock_client = StubMockClient()
@@ -214,6 +245,46 @@ def test_execute_real_routes_with_signing():
     assert "ecs" in host
     assert path == "/v1/proj123/cloudservers/detail"
     assert query == {"limit": 1}
+
+
+def _prep_obs_store():
+    store = MemoryStore()
+    store.set_products(FIXTURE_GROUPS)
+    store.set_apis("OBS", [])
+    store.set_api_cache(
+        ("obs", "GetObject", "cn-north-4"),
+        (OBS_DOC, "/{object_key}", "get",
+         OBS_DOC["paths"]["/{object_key}"]["get"]),
+    )
+    return store
+
+
+def test_execute_obs_routes_to_obs_lane():
+    store = _prep_obs_store()
+    obs_client = StubObsClient()
+    cred = Credentials(ak="AK", sk="SK")
+    service = ToolService(store=store, config=ServiceConfig(
+        policy_rules=_policy("OBS:*=allow"),
+        credentials=cred, obs_client_factory=lambda: obs_client))
+    out = service.execute_api("OBS", "GetObject",
+                              params={"bucket_name": "b", "object_key": "o.txt"})
+    assert out["ok"] is True
+    assert out["body"] == {"obs": True}
+    method, host, bucket, object_key, query, headers, body = obs_client.calls[0]
+    assert method == "GET"
+    assert host == "obs.cn-north-4.myhuaweicloud.com"
+    assert bucket == "b"
+    assert object_key == "o.txt"
+
+
+def test_execute_obs_deny_without_policy():
+    store = _prep_obs_store()
+    obs_client = StubObsClient()
+    service = ToolService(store=store, config=ServiceConfig(
+        obs_client_factory=lambda: obs_client))
+    out = service.execute_api("OBS", "GetObject")
+    assert out["ok"] is False
+    assert obs_client.calls == []
 
 
 def test_execute_real_deny_without_policy():

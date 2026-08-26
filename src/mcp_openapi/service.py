@@ -23,7 +23,8 @@ from common.types import (
 )
 from safety import policy as safety_policy
 
-from . import execute
+from . import execute, execute_obs
+from .execute_obs import ObsHttpClient
 from .gate import Gate
 from .signer.client import HttpClient
 
@@ -41,6 +42,7 @@ class ServiceConfig:
     mock_base: str = apie_mock.MOCK_BASE
     http_client_factory: Callable[[], execute.ApiExecutor] | None = None
     mock_client_factory: Callable[[], apie_mock.MockApiClient] | None = None
+    obs_client_factory: Callable[[], execute_obs.ObsClient] | None = None
     gate: Gate = Gate.unrestricted()
 
 
@@ -55,6 +57,11 @@ class ToolService:
         if self.config.http_client_factory is not None:
             return self.config.http_client_factory()
         return HttpClient(credentials=self.config.credentials)
+
+    def _make_obs_client(self) -> execute_obs.ObsClient:
+        if self.config.obs_client_factory is not None:
+            return self.config.obs_client_factory()
+        return ObsHttpClient(credentials=self.config.credentials)
 
     def _make_mock_client(self) -> apie_mock.MockApiClient:
         if self.config.mock_client_factory is not None:
@@ -185,6 +192,15 @@ class ToolService:
 
         if self.config.mock:
             return self._execute_mock(product, api, region, params)
+
+        if execute_obs.is_obs(product, doc):
+            logger.info("execute %s:%s region=%s mode=obs policy=allow",
+                        product, api, region)
+            return execute_obs.execute_obs_api(
+                doc, path, method, op, product, api, region, params,
+                client=self._make_obs_client(),
+                credentials=self.config.credentials,
+            )
 
         return execute.execute_api(
             doc, path, method, op, product, api, region, params,
