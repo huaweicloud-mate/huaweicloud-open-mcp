@@ -6,10 +6,10 @@
 
 | 模式 | 启动 | 工具数 | 能力 |
 | --- | --- | --- | --- |
-| **openapi**（默认） | `--mode openapi` | 6 | 元数据直读 → 签名直连华为云 OpenAPI |
-| **discover** | `--mode discover` | 7 | 发现目录 → 连接云端 MCP server → 代发调用 |
+| **openapi**（默认） | `--mode openapi` | 7 | 元数据直读 → 签名直连华为云 OpenAPI |
+| **discover** | `--mode discover` | 8 | 发现目录 → 连接云端 MCP server → 代发调用 |
 
-## openapi 模式（6 工具）
+## openapi 模式（7 工具）
 
 ```bash
 uv run huaweicloud-open-mcp                        # 真实模式：AK/SK 签名直连华为云
@@ -18,14 +18,14 @@ uv run huaweicloud-open-mcp --mock                 # mock 模式：execute_api �
 
 渐进式工作流：`list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`
 
-## discover 模式（7 工具）
+## discover 模式（8 工具）
 
 ```bash
 uv run huaweicloud-open-mcp --mode discover        # 发现 + 连接云端 MCP server
 uv run huaweicloud-open-mcp --mode discover --mock # mock 模式：连接指向本地 stub
 ```
 
-渐进式工作流：`list_mcp_servers → get_mcp_server → connect_mcp_server → list_server_tools → get_server_tool → call_server_tool → disconnect_mcp_server`
+渐进式工作流：`list_mcp_servers → get_mcp_server → connect_mcp_server → list_server_tools → get_server_tool → call_server_tool → disconnect_mcp_server`；`manage_policy`（两模式共有）热更新 safety policy。
 
 ### 发现连接工作流说明
 

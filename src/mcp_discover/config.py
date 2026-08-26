@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from safety.policy import PolicyRule
+from safety.policy_store import PolicyStore
 
 logger = logging.getLogger("mcp_discover.config")
 
@@ -23,5 +24,6 @@ class DiscoverConfig:
     mock: bool = False
     mock_base: str | None = None
     policy_rules: Sequence[PolicyRule] | None = None
+    policy_store: PolicyStore | None = None
     session_idle_timeout: int = DEFAULT_IDLE_TIMEOUT
     max_sessions: int = DEFAULT_MAX_SESSIONS

@@ -6,7 +6,7 @@
 
 import json
 import logging
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 from common.types import (
     McpCallResult,
@@ -78,8 +78,43 @@ class DiscoverService:
             max_sessions=config.max_sessions,
         )
 
+    def _effective_policy_rules(self) -> Sequence[safety_policy.PolicyRule] | None:
+        """当前生效规则：注入 PolicyStore 时实时热加载，否则用启动快照。"""
+        if self.config.policy_store is not None:
+            return self.config.policy_store.rules()
+        return self.config.policy_rules
+
     def _check_policy(self, server: str, tool: str | None = None) -> str | None:
-        return safety_policy.check_server(self.config.policy_rules, server, tool)
+        return safety_policy.check_server(self._effective_policy_rules(), server, tool)
+
+    def manage_policy(self, action: str,
+                      line: str | None = None) -> dict[str, Any]:
+        """管理 safety policy（list/add/remove），改动即时生效并写回策略文件。
+
+        安全约定：调用方（Agent）应先向用户确认再 add/remove；审计日志强制记录。
+        """
+        action = (action or "").strip().lower()
+        logger.info("manage_policy action=%s line=%s", action, line or "-")
+        store = self.config.policy_store
+        if store is None:
+            return {"ok": False, "reason": (
+                "未配置 safety policy 文件，manage_policy 不可用"
+                "（--policy 或环境变量 HUAWEICLOUD_MCP_POLICY_FILE）")}
+        if action == "list":
+            return {"ok": True, "action": "list", "policy": store.text()}
+        if action not in ("add", "remove"):
+            return {"ok": False, "reason": f"未知 action: {action}（可选 list/add/remove）"}
+        rule_text = (line or "").strip()
+        if not rule_text:
+            return {"ok": False, "reason": f"{action} 需要提供 line 参数（规则文本）"}
+        result = (store.add_rule(rule_text) if action == "add"
+                  else store.remove_rule(rule_text))
+        logger.info("manage_policy %s result=%s", action, "ok" if result.ok else "deny")
+        out: dict[str, Any] = {"ok": result.ok, "action": action}
+        if result.reason:
+            out["reason"] = result.reason
+        out["policy"] = store.text()
+        return out
 
     def _resolve_endpoint(self, entry: dict[str, Any]) -> str:
         if self.config.mock and self.config.mock_base:

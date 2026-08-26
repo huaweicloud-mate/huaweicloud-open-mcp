@@ -10,7 +10,7 @@ from safety import policy
 
 EXPECTED_TOOLS = {
     "list_products", "get_product", "list_apis", "get_api",
-    "get_api_examples", "execute_api",
+    "get_api_examples", "execute_api", "manage_policy",
 }
 
 
@@ -22,7 +22,7 @@ def _args(mock_base=None, policy_file=None):
     return argparse.Namespace(mock=True, policy=policy_file, region=None, mock_base=mock_base)
 
 
-def test_all_six_tools_registered():
+def test_all_seven_tools_registered():
     app = build_app()
     assert _tool_names(app) == EXPECTED_TOOLS
 
@@ -37,7 +37,7 @@ def test_policy_loaded(tmp_path):
     p.write_text('["ECS:*=allow", "*=deny"]', encoding="utf-8")
     rules = policy.load_policy_file(str(p))
     app = build_app(ToolService(ServiceConfig(policy_rules=rules)))
-    assert len(_tool_names(app)) == 6
+    assert len(_tool_names(app)) == 7
 
 
 def test_build_config_mock_base_arg():
@@ -73,6 +73,7 @@ EXPECTED_DISCOVER_TOOLS = {
     "list_mcp_servers", "get_mcp_server",
     "connect_mcp_server", "disconnect_mcp_server",
     "list_server_tools", "get_server_tool", "call_server_tool",
+    "manage_policy",
 }
 
 
@@ -91,11 +92,11 @@ def test_openapi_mode_tools_exclude_discover():
 
 
 def test_discover_mode_tools_exclude_openapi():
-    """discover 模式下不应注册 openapi 工具。"""
+    """discover 模式下不应注册 openapi 专属工具（manage_policy 两模式共有）。"""
     from mcp_discover.config import DiscoverConfig
     from mcp_discover.server import build_discover_app
     app = build_discover_app(DiscoverConfig())
-    for tool in EXPECTED_TOOLS:
+    for tool in EXPECTED_TOOLS - {"manage_policy"}:
         assert tool not in _tool_names(app)
 
 
@@ -156,5 +157,22 @@ def test_build_config_gate_default_unrestricted(monkeypatch):
 def test_tool_descriptions_note_gate():
     app = build_app()
     for name in EXPECTED_TOOLS:
+        if name == "manage_policy":     # policy 自身不属产品门栓范围
+            continue
         desc = app._tool_manager._tools[name].description
         assert "授权范围见 instructions" in desc
+
+
+def test_manage_policy_description_notes_hot_reload_and_confirm():
+    app = build_app()
+    desc = app._tool_manager._tools["manage_policy"].description
+    assert "无需重启" in desc
+    assert "向用户确认" in desc
+
+
+def test_discover_manage_policy_description_notes_confirm():
+    from mcp_discover.config import DiscoverConfig
+    from mcp_discover.server import build_discover_app
+    app = build_discover_app(DiscoverConfig())
+    desc = app._tool_manager._tools["manage_policy"].description
+    assert "向用户确认" in desc

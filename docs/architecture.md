@@ -6,7 +6,7 @@
 
 | 模式 | 工具集 | 设计文档 |
 | --- | --- | --- |
-| **openapi**（默认） | 6 工具直连华为云 OpenAPI | [mcp-openapi.md](mcp-openapi.md) |
+| **openapi**（默认） | 7 工具直连华为云 OpenAPI | [mcp-openapi.md](mcp-openapi.md) |
 | **discover** | 7 工具发现连接云端 MCP server | [mcp-discovery.md](mcp-discovery.md) |
 
 本文档覆盖跨模式共享的内容：总体架构、模块组织、日志、测试纪律、能力清单与路线。
@@ -160,7 +160,8 @@ flowchart LR
 | --- | --- | --- | --- |
 | S1 | `signer.sign(request) → Authorization 头` | 纯函数单测 | 华为云官方 Go SDK 测试向量 |
 | S2 | `safety.evaluate(policy, product, api)` | 纯函数单测 | 手写策略文件 + 预期字面量 |
-| S3 | 6 工具纯函数 | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段 |
+| S2b | `safety/policy_store.py` PolicyStore（热重载 / 文件↔内存双向同步） | 单测：tmp 文件 + 内容哈希 stat 替身 | 回读磁盘原始内容 + parse_policy 交叉验证 |
+| S3 | 各工具纯函数（含 manage_policy 编排） | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段 |
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + urllib 打桩错误注入 | mock 端点返回 |
 | S5 | APIE 管道各阶段 | 单测 + 迷你样本集成 + e2e 全量 | Swagger 2.0 schema |
 | S6 | benchmark 纯函数（case 加载校验 / 分层评分 / 统计基线 / trace 提取 / token 读取 / 本地 stub） | 单测（迷你 fixture / 回环 HTTP） | 手写字面量 + 独立构造样例调用序列 |
@@ -172,12 +173,14 @@ S1–S5 细节见 [mcp-openapi.md](mcp-openapi.md)。纪律：red→green 垂直
 ## 5. 已实现能力清单
 
 - [x] APIE 全量管道：219 产品 / 17666 接口 → 2714 OpenAPI 2.0 文档，Swagger 校验 invalid=0
-- [x] openapi 模式 6 工具：list_products / get_product / list_apis（含 tag_groups）/ get_api / get_api_examples / execute_api
-- [x] discover 模式 7 工具：list_mcp_servers / get_mcp_server / connect / list_server_tools / get_server_tool / call_server_tool / disconnect
+- [x] openapi 模式 7 工具：list_products / get_product / list_apis（含 tag_groups）/ get_api / get_api_examples / execute_api / manage_policy
+- [x] discover 模式 8 工具：list_mcp_servers / get_mcp_server / connect / list_server_tools / get_server_tool / call_server_tool / disconnect / manage_policy
 - [x] server instructions + 渐进式工作流指引
 - [x] SDK-HMAC-SHA256 签名（官方向量 + 真实云验证）
-- [x] safety policy（product + server 规则，无 policy 全拒）
+- [x] safety policy（product + server 规则，无 policy 全拒；PolicyStore 热重载，manage_policy 增删无需重启）
 - [x] openapi 产品门栓（`Gate`，产品级白名单，提示词 + 元数据层准入）
+
+以上各项均含对应测试。`manage_policy` 的安全约定：Agent 需先向用户确认再授予最小规则，临时授权用完即回收。
 - [x] mock 模式全链路（`--mock` / `--mock-base`）
 - [x] 类型系统：TypedDict 结果信封 + mypy 0 错误
 - [x] 263 单测+集成 / 15 e2e（真实凭证 3 + 渐进式工作流 12，`.env` 加载）

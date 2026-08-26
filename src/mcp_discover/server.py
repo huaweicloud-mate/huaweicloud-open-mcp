@@ -17,7 +17,7 @@ from common.types import (
     ServerToolsResult,
     ToolError,
 )
-from safety import policy as safety
+from safety.policy_store import PolicyStore
 
 from .config import DiscoverConfig
 from .service import DiscoverService
@@ -43,7 +43,10 @@ INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现
 
 - `connect_mcp_server` 和 `call_server_tool` 执行前强制过 safety policy；
 - 未配置 policy 时所有连接与调用被拒绝；
-- 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的 server/tool 或询问用户。
+- 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的 server/tool 或询问用户；
+- 被拒连接/调用确属任务必需时：先向用户确认，再调用 `manage_policy(action="add", line=...)`
+  授予最小规则（如 "server:@huaweicloud/ecs=allow"），**改动热生效、无需重启 server**；
+  临时授权建议在任务完成后用 `manage_policy(action="remove", ...)` 回收。
 
 ## 其它
 
@@ -63,11 +66,13 @@ def build_discover_config(args: argparse.Namespace) -> DiscoverConfig:
                                       str(DiscoverConfig.session_idle_timeout)))
     max_sessions = int(os.environ.get("HUAWEICLOUD_MCP_MAX_SESSIONS",
                                       str(DiscoverConfig.max_sessions)))
+    policy_store = PolicyStore(policy_file) if policy_file else None
     return DiscoverConfig(
         catalog_path=catalog_path,
         mock=mock,
         mock_base=mock_base,
-        policy_rules=safety.load_policy_file(policy_file) if policy_file else None,
+        policy_store=policy_store,
+        policy_rules=policy_store.rules() if policy_store else None,
         session_idle_timeout=idle_timeout,
         max_sessions=max_sessions,
     )
@@ -152,5 +157,16 @@ def build_discover_app(config: DiscoverConfig, *,
         """
         logger.info("disconnect_mcp_server server=%s", server)
         return await ds.disconnect(server)
+
+    @server.tool()
+    def manage_policy(action: str, line: str | None = None) -> dict[str, Any]:
+        """管理 safety policy（list/add/remove），改动热生效并写回策略文件，无需重启 server。
+
+        action=list 查看当前全部规则；action=add 新增规则（自动插到会遮蔽它的 deny
+        规则之前，如 "server:@huaweicloud/ecs=allow"）；action=remove 按语义删除首个
+        匹配规则。安全约定：add/remove 前必须向用户确认，授予最小规则；临时授权用完即回收。
+        未配置 policy 文件时本工具拒绝执行（不创建文件）。
+        """
+        return ds.manage_policy(action, line=line)
 
     return server

@@ -375,3 +375,74 @@ def test_execute_gated_denied_even_when_policy_allows():
     assert out["ok"] is False
     assert out["reason"] == "产品 VPC 不在 openapi mcp 授权范围内"
     assert http.calls == []
+
+
+# ---------- manage_policy / policy 热重载（S2b 服务层集成） ----------
+
+def _policy_file(tmp_path, entries):
+    import json
+    p = tmp_path / "policy.json"
+    p.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_manage_policy_grant_takes_effect_without_restart(tmp_path):
+    """拒 → add → 同一 service 实例立即放行；文件持久化对新 store 一致可见。"""
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    store = MemoryStore()
+    mock_client = StubMockClient()
+    svc = ToolService(store=store, config=ServiceConfig(
+        mock=True,
+        policy_store=PolicyStore(str(p)),
+        mock_client_factory=lambda: mock_client))
+
+    out = svc.execute_api("ECS", "ListServersDetails")
+    assert out["ok"] is False
+    assert "safety policy 拒绝执行" in (out.get("reason") or "")
+
+    res = svc.manage_policy("add", "ECS:*=allow")
+    assert res["ok"] is True
+    assert "policy" in res
+
+    out2 = svc.execute_api("ECS", "ListServersDetails", params={"_status_code": 200})
+    assert out2["ok"] is True                       # 无需重建 service / 重启 server
+    assert mock_client.calls == [("ECS", "ListServersDetails", "cn-north-4", 200, 1)]
+
+    other = ToolService(config=ServiceConfig(
+        mock=True, policy_store=PolicyStore(str(p))))   # 新实例读同一文件应一致
+    assert policy.evaluate(other._effective_policy_rules(), "ECS", "ShowServers")
+
+
+def test_manage_policy_remove_revokes(tmp_path):
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["ECS:*=allow"])
+    mock_client = StubMockClient()
+    svc = ToolService(config=ServiceConfig(
+        mock=True, policy_store=PolicyStore(str(p)),
+        mock_client_factory=lambda: mock_client))
+    assert svc.execute_api("ECS", "ListServersDetails")["ok"] is True
+
+    res = svc.manage_policy("remove", "ECS:*=allow")
+    assert res["ok"] is True
+    out = svc.execute_api("ECS", "ListServersDetails")
+    assert out["ok"] is False
+    assert "safety policy 拒绝执行" in (out.get("reason") or "")
+
+
+def test_manage_policy_list_and_errors(tmp_path):
+    from safety.policy_store import PolicyStore
+
+    svc_none = ToolService(ServiceConfig())
+    out = svc_none.manage_policy("list")
+    assert out["ok"] is False and "--policy" in out["reason"]
+
+    path = tmp_path / "p.json"
+    path.write_text('["ECS:*List*=allow"]', encoding="utf-8")
+    svc = ToolService(ServiceConfig(policy_store=PolicyStore(str(path))))
+    listed = svc.manage_policy("list")
+    assert listed["ok"] is True and "ECS:*List*=allow" in listed["policy"]
+    assert svc.manage_policy("grant", line="ECS:*=allow")["ok"] is False   # 未知 action
+    assert svc.manage_policy("add")["ok"] is False                         # 缺 line

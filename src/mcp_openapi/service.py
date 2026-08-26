@@ -22,6 +22,7 @@ from common.types import (
     ToolError,
 )
 from safety import policy as safety_policy
+from safety.policy_store import PolicyStore
 
 from . import execute, execute_obs
 from .execute_obs import ObsHttpClient
@@ -38,6 +39,7 @@ class ServiceConfig:
     region: str = DEFAULT_REGION
     mock: bool = False
     policy_rules: Sequence[safety_policy.PolicyRule] | None = None
+    policy_store: PolicyStore | None = None
     credentials: Credentials | None = None
     mock_base: str = apie_mock.MOCK_BASE
     http_client_factory: Callable[[], execute.ApiExecutor] | None = None
@@ -76,9 +78,44 @@ class ToolService:
         return catalog.find_api_doc(self.store, product, api_name,
                                     region or self.config.region)
 
+    def _effective_policy_rules(self) -> Sequence[safety_policy.PolicyRule] | None:
+        """当前生效规则：注入 PolicyStore 时实时热加载，否则用启动快照。"""
+        if self.config.policy_store is not None:
+            return self.config.policy_store.rules()
+        return self.config.policy_rules
+
     def _check_policy(self, product: str, api: str) -> str | None:
         """检查 safety policy，返回错误描述或 None（放行）。"""
-        return safety_policy.check(self.config.policy_rules, product, api)
+        return safety_policy.check(self._effective_policy_rules(), product, api)
+
+    def manage_policy(self, action: str,
+                      line: str | None = None) -> dict[str, Any]:
+        """管理 safety policy（list/add/remove），改动即时生效并写回策略文件。
+
+        安全约定：调用方（Agent）应先向用户确认再 add/remove；审计日志强制记录。
+        """
+        action = (action or "").strip().lower()
+        logger.info("manage_policy action=%s line=%s", action, line or "-")
+        store = self.config.policy_store
+        if store is None:
+            return {"ok": False, "reason": (
+                "未配置 safety policy 文件，manage_policy 不可用"
+                "（--policy 或环境变量 HUAWEICLOUD_MCP_POLICY_FILE）")}
+        if action == "list":
+            return {"ok": True, "action": "list", "policy": store.text()}
+        if action not in ("add", "remove"):
+            return {"ok": False, "reason": f"未知 action: {action}（可选 list/add/remove）"}
+        rule_text = (line or "").strip()
+        if not rule_text:
+            return {"ok": False, "reason": f"{action} 需要提供 line 参数（规则文本）"}
+        result = (store.add_rule(rule_text) if action == "add"
+                  else store.remove_rule(rule_text))
+        logger.info("manage_policy %s result=%s", action, "ok" if result.ok else "deny")
+        out: dict[str, Any] = {"ok": result.ok, "action": action}
+        if result.reason:
+            out["reason"] = result.reason
+        out["policy"] = store.text()
+        return out
 
     def _check_gate(self, product: str) -> str | None:
         """检查产品门栓，返回错误描述或 None（放行）。"""
@@ -177,7 +214,7 @@ class ToolService:
             logger.warning("execute %s:%s region=%s mode=%s policy=%s",
                            product, api, region,
                            "mock" if self.config.mock else "real",
-                           "unconfigured" if self.config.policy_rules is None else "deny")
+                           "unconfigured" if self._effective_policy_rules() is None else "deny")
             return {"ok": False, "reason": policy_err}
 
         hit = self.load_api_doc(product, api, region)

@@ -2,22 +2,22 @@
 
 ## 项目上下文
 
-本项目实现华为云 Open MCP server：本地 stdio 形态的通用网关（Core 模式），用 6 个核心工具编排触达华为云全量 OpenAPI，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用华为云服务。同类产品参考阿里云 OpenAPI MCP Server（Core 模式）与 AWS Labs MCP。
+本项目实现华为云 Open MCP server：本地 stdio 形态的通用网关（Core 模式），openapi 模式用 7 个核心工具、discover 模式用 8 个发现连接工具，触达华为云全量 OpenAPI / 云端 MCP server，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用华为云服务。同类产品参考阿里云 OpenAPI MCP Server（Core 模式）与 AWS Labs MCP。
 
 支持两种运行模式（`--mode` 二选一，工具集互斥）：
-- **openapi**（默认）：6 工具直连华为云 OpenAPI
-- **discover**：7 工具发现连接云端华为云 MCP server，Agent 决策连接目标、gateway 代发调用
+- **openapi**（默认）：7 工具直连华为云 OpenAPI
+- **discover**：8 工具发现连接云端华为云 MCP server，Agent 决策连接目标、gateway 代发调用
 
 三层架构（两模式共用，discover 模式多一层代理连接）：
 
 ```text
 ┌─ MCP 网关层  src/mcp_openapi/ + src/mcp_discover/
 │     [openapi]   list_products / get_product / list_apis / get_api /
-│                 get_api_examples / execute_api
+│                 get_api_examples / execute_api / manage_policy
 │     [discover]  list_mcp_servers / get_mcp_server / connect_mcp_server /
 │                 list_server_tools / get_server_tool / call_server_tool /
-│                 disconnect_mcp_server
-│        ↓ execute/call 前强制过 safety policy
+│                 disconnect_mcp_server / manage_policy
+│        ↓ execute/call 前强制过 safety policy（manage_policy 热更新策略）
 ├─ 连接代理层（discover 模式）  src/mcp_discover/
 │     catalog.py  目录源（本地文件起步，预留官方端点）
 │     sdk.py      SessionClient 协议 + mcp SDK 适配器
@@ -66,7 +66,7 @@
 | `src/mcp_openapi/signer/obs.py` | OBS Header 签名（HMAC-SHA1）：`Authorization: OBS AK:Signature`，CanonicalizedResource/子资源白名单/对象名编码，对齐官方 Go SDK | — | — |
 | `src/mcp_openapi/execute_obs.py` | OBS 执行 lane：`is_obs` 路由谓词 + 桶寻址（带桶 virtual-hosted/无桶端点根）+ consumes 三态 body 分流（json/xml/octet-stream）+ 开关型子资源自动补全 + `Content-MD5` 自动计算 + dict→XML 序列化（根元素经转换管线 `x-xml-root` 保留）+ XML `<Error>` 解析 + 二进制响应占位 + `ObsHttpClient` 适配器 + 编排 | — | — |
 | `src/common/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
-| `src/safety/` | safety policy 解析与匹配（PolicyRule 含 kind=product/server；支持 `product:apiPattern=` 与 `server:serverId[:toolPattern]=` 两种规则前缀） | — | — |
+| `src/safety/` | safety policy 解析与匹配（PolicyRule 含 kind=product/server；支持 `product:apiPattern=` 与 `server:serverId[:toolPattern]=` 两种规则前缀）+ `policy_store.py` PolicyStore（策略状态层：文件↔内存双向同步、mtime 热重载、原子落盘，供 manage_policy 与运行时热更新共用） | — | — |
 | `src/mcp_openapi/` | openapi 模式（metadata/execute 纯函数 + `gate.py` 产品门栓 + service 编排层 + server 装配；配置/客户端工厂注入；元数据加载委托 apie.catalog） | — | — |
 | `src/mcp_discover/` | discover 模式（catalog.py 目录源 + config.py + sdk.py SessionClient 协议 + manager.py session 注册表 + service.py + server.py） | — | — |
 | `src/common/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封 + MCP discover 结果信封（McpServerItem/*Result） | — | — |
@@ -96,7 +96,9 @@
                               └ server
            │                        │
 第2层  src/safety/policy       src/apie/
-         （纯函数，零依赖）        ├ catalog → live_fallback → convert_openapi2
+         + policy_store
+          （纯函数零依赖；        ├ catalog → live_fallback → convert_openapi2
+            store 仅依赖 policy）
                               ├ memory_store（纯内存缓存，零内部依赖）
                               ├ metadata / mock / api_docs(CLI)
                               └ 管道文件（fetch/split/merge/organize/validate/refresh/retry）
@@ -107,7 +109,7 @@
 | 模块 | 依赖 |
 | --- | --- |
 | `common/` | 无内部依赖（纯基础设施）；仅 `auth/__init__` re-export `auth.credentials` |
-| `safety/policy` | 无依赖（纯函数） |
+| `safety/policy` | 无依赖（纯函数）；`safety/policy_store` 仅依赖 `safety/policy` |
 | `apie/` | → `common`（http/types/paths/logconf）；`catalog`→`live_fallback`→`convert_openapi2` 链、`memory_store`；`mock`→common.http/types |
 | `mcp_openapi/` | → `apie`（catalog/metadata/mock/memory_store）+ `safety` + `common`；`service`→`execute`+`execute_obs`+`signer.client`+`signer.obs`；`signer.client`→`signer.sign`；`execute_obs`→`execute`+`signer.obs`+`common` |
 | `mcp_discover/` | → `safety` + `common`（**不依赖 apie**）；`service`→`catalog/config/manager/sdk`；`manager`→`sdk` |
@@ -126,7 +128,7 @@
 
 - **产品名**：以 `raw/apis_detail.json` 的驼峰 `product_short` 为准（如 `ECS`）；与 apis 项目的大小写去重映射保持一致。
 - **tag 文件名**：英文 PascalCase，中文→英文映射维护在 `configs/tag_translations.json`；`sanitize_tag` 用 `_` 替换空格与 `/`。
-- **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api`）；discover 模式工具（`list_mcp_servers`/`get_mcp_server`/`connect_mcp_server`/`list_server_tools`/`get_server_tool`/`call_server_tool`/`disconnect_mcp_server`）。
+- **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api`/`manage_policy`）；discover 模式工具（`list_mcp_servers`/`get_mcp_server`/`connect_mcp_server`/`list_server_tools`/`get_server_tool`/`call_server_tool`/`disconnect_mcp_server`/`manage_policy`）。
 - **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`、`HUAWEICLOUD_MCP_OPENAPI_GATE`）。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
 - **region**：默认 `cn-north-4` 平铺，非默认 region 带 `{region}` 目录/后缀（沿用 apis 的 region 目录规则）。
 
@@ -189,7 +191,8 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | --- | --- | --- | --- |
 | S1 | `signer.sign(request) → Authorization 头` | 纯函数单测 | 华为云官方签名文档示例向量（先收集，不自行推导） |
 | S2 | `safety.evaluate(policy, product, api) → allow/deny` | 纯函数单测 | 手写策略文件 + 预期字面量 |
-| S3 | 6 个工具业务函数 `mcp_openapi.service` / `apie.metadata` | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/） |
+| S2b | `safety/policy_store.py` PolicyStore（rules 热重载 / add_rule / remove_rule / text，文件↔内存双向同步） | 单测：tmp 文件注入 + 内容哈希 stat 替身；服务层「拒→add→同实例立即放行」 | 直接回读磁盘原始内容 + `parse_policy` 交叉验证 |
+| S3 | 各工具业务函数 `mcp_openapi.service` / `apie.metadata`（含 manage_policy 编排） | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/） |
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + 单元层 urllib 打桩注入错误（429/4xx/5xx） | mock 端点返回（HTTP 恒 200；`status_code` 非 200 返回空 body） |
 | S5 | APIE 管道各阶段转换 + `apie.memory_store` 内存缓存层（set/get/clear/LRU）+ `apie.catalog` 功能接口（内存缓存优先→远端回退决策，monkeypatch `apie.http.fetch_json` 边界） | 纯函数单测 + 迷你样本集成 + `@pytest.mark.e2e` 全量 | Swagger 2.0 schema 校验；monkeypatch 注入 HTTP 响应控制远端回退路径 |
 | S6 | benchmark 纯函数（`benchmarks/cases.py` 加载校验、`scorer.py` 分层评分、`report.py` 统计/基线对比、`trace.py` export/NDJSON 提取 + export JSON info 的 token 读取、`stub_server.py` 本地回环） | 纯函数单测（trace 用 spike 实测格式的迷你 fixture；stub 用回环 HTTP） | 手写字面量 + 独立构造的样例调用序列 |
@@ -197,7 +200,7 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | S7b | `safety.evaluate_server(policy, server, tool) → allow/deny` | 纯函数单测，手写字面量矩阵（含向后兼容 product 规则） | 手写策略文件 + 预期字面量 |
 | S7c | `mcp_discover/manager.py` session 注册表 + idle 回收 + LRU | 纯函数单测，注入时钟 | 手写字面量 |
 | S7d | `mcp_discover/sdk.py` MCP client 适配层 | fake SessionClient 单测 + 真 mcp SDK + 本地 stub 回环集成 | stub 返回确定性 JSON-RPC 响应 |
-| S7e | 7 个 discover 工具业务函数 + mode 隔离注册 | 单测注入 catalog/manager/client 工厂 + server 工具注册验证 | 字面量 + 互斥工具集合断言 |
+| S7e | discover 工具业务函数 + mode 隔离注册（8 工具） | 单测注入 catalog/manager/client 工厂 + server 工具注册验证 | 字面量 + 互斥工具集合断言 |
 | S8 | `mcp_openapi/gate.py` 产品门栓（parse/allows/filter_products/describe/load）+ service 门栓过滤/拒绝 + server instructions/docstring 注入范围 | 纯函数单测 + service 注入 gate + server 装配断言 | 手写字面量 + 门栓示例配置 |
 | S9a | `mcp_openapi/signer/obs.py` OBS HMAC-SHA1 签名（StringToSign/CanonicalizedResource/CanonicalizedOBSHeaders/Signature） | 纯函数单测 | 官方文档「Header 中携带签名」StringToSign 构造示例（表4/6/7）+ openssl 按官方公式计算的签名值 |
 | S9b | dict→OBS XML 序列化（`serialize_body_xml`，含 `xml.name` 根元素、`$ref` 嵌套、数组、转义） | 纯函数单测，迷你 schema fixture | 手写期望 XML 字面量 |
@@ -219,6 +222,7 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 - OBS 执行 lane 约定：带桶 virtual-hosted、无桶端点根（URL 恒带根路径 `/`）；body 按 op consumes 分流 json/xml/octet-stream；XML 根元素经转换管线把 `xml.name` 提升为 `x-xml-root` 保留并注入官方命名空间；带 body 的写请求自动补 `Content-MD5`；元数据中 required 空值型子资源（tagging/acl/lifecycle 等开关）缺失时自动补 `""`；二进制上传走 `params["_content_b64"]`；成功响应透出白名单头（ETag/x-obs-request-id 等）。
 - `execute_api` 响应规范化：错误统一转为结构化输出（`error_code`/`error_msg`/HTTP 状态），429 退避重试，响应体积超限截断。
 - safety policy 匹配：按文件行序首个命中生效，`product:apiPattern=allow|deny`；MCP discover 扩展 `server:serverId[:toolPattern]=allow|deny`；无匹配默认 deny；无 policy 文件时 execute_api/call_server_tool 全拒。
+- safety policy 热更新（`PolicyStore` + `manage_policy`）：策略文件为唯一真值源，运行期按 stat（mtime/size/inode）热重载，外部编辑即时生效、无需重启；`manage_policy(action=list/add/remove)` 两模式同构，add/remove 先校验再 `tmp+os.replace` 原子写盘并刷新内存，静止态 memory==file；新 allow 规则自动插到首个会遮蔽它的 deny 规则之前（典型即 `*=deny` 兜底行前）；语义重复 add 幂等不改盘；文件被写坏/短暂消失时沿用最近合法版本记 WARNING，恢复后自动重新采纳；未配置 --policy 时 manage_policy 拒绝且不创建文件；启动时急切加载保留坏文件快速失败。
 - 产品门栓（`Gate`）：openapi 模式产品级白名单，未配置时不限制；配置后未列出产品默认拒；越界产品在 `list_products` 静默隐藏，其余工具返回「不在 openapi mcp 授权范围内」；`execute_api` 先过门栓再过 policy。
 
 ## 文档维护

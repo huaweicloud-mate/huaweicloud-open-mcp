@@ -1,6 +1,8 @@
 [
   "# =======================================================",
   "# OpenAPI 直连模式规则（product:apiPattern=allow|deny）",
+  "# 本文件是唯一真值源：server 运行期经 PolicyStore 热重载，外部编辑即时生效；",
+  "# 也可由 Agent 经 manage_policy(list/add/remove) 增删（原子写盘、热生效、无需重启）。",
   "# =======================================================",
   "ECS:*Show*=allow",
   "ECS:*List*=allow",
@@ -13,7 +15,6 @@
   "VPC:*List*=allow",
   "VPC:*Query*=allow",
   "IAM:KeystoneList*=allow",
-  "OBS:*List*=allow",
   "",
   "# =======================================================",
   "# MCP discover 模式规则（server:serverId[:tool]=allow|deny）",
@@ -27,5 +28,6 @@
   "# server:@huaweicloud/ecs:get*=allow",
   "# server:@huaweicloud/vpc:*=allow",
   "",
+  "OBS:ListBuckets=allow",
   "*=deny"
 ]

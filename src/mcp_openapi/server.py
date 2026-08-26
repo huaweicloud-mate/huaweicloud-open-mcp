@@ -2,6 +2,7 @@
 
 import argparse
 import os
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
@@ -16,7 +17,7 @@ from common.types import (
     ProductResult,
     ToolError,
 )
-from safety import policy as safety
+from safety.policy_store import PolicyStore
 
 from .gate import Gate, load_gate_file
 from .service import ServiceConfig, ToolService
@@ -36,7 +37,10 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 
 - `execute_api` 执行前强制过 safety policy（allowlist/denylist 白名单）；
 - 未配置 policy 时所有执行被拒绝；
-- 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口或询问用户。
+- 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口或询问用户；
+- 被拒接口确属任务必需时：先向用户确认，再调用 `manage_policy(action="add", line=...)`
+  授予最小规则（如 "OBS:GetObject=allow"），**改动热生效、无需重启 server**；
+  临时授权建议在任务完成后用 `manage_policy(action="remove", ...)` 回收。
 
 ## 其它
 
@@ -61,10 +65,12 @@ def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
     region = args.region or os.environ.get("HUAWEICLOUD_MCP_REGION") or None
     mock_base = args.mock_base or os.environ.get("HUAWEICLOUD_MCP_MOCK_BASE") or None
     gate_file = getattr(args, "gate", None) or os.environ.get("HUAWEICLOUD_MCP_OPENAPI_GATE")
+    policy_store = PolicyStore(policy_file) if policy_file else None
     return ServiceConfig(
         region=region or "cn-north-4",
         mock=mock,
-        policy_rules=safety.load_policy_file(policy_file) if policy_file else None,
+        policy_store=policy_store,
+        policy_rules=policy_store.rules() if policy_store else None,
         credentials=None if mock else cred_mod.get_credentials(),
         mock_base=mock_base or apie_mock.MOCK_BASE,
         gate=load_gate_file(gate_file) if gate_file else Gate.unrestricted(),
@@ -138,9 +144,22 @@ def build_openapi_app(service: ToolService | None = None, *,
         params 约定：路径参数/query 参数直接平铺，请求体放 params["body"]。
         mock 模式下 params["_status_code"]/params["_number"] 控制 mock 数据。
 
+        被拒时不要绕过：先向用户确认，再经 manage_policy 授予最小规则（热生效）。
+
         授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """
         return svc.execute_api(product, api, region=region, params=params)
+
+    @server.tool()
+    def manage_policy(action: str, line: str | None = None) -> dict[str, Any]:
+        """管理 safety policy（list/add/remove），改动热生效并写回策略文件，无需重启 server。
+
+        action=list 查看当前全部规则；action=add 新增规则（自动插到会遮蔽它的 deny
+        规则之前，如 "OBS:GetObject=allow"）；action=remove 按语义删除首个匹配规则。
+        安全约定：add/remove 前必须向用户确认，授予最小规则；临时授权用完即回收。
+        未配置 policy 文件时本工具拒绝执行（不创建文件）。
+        """
+        return svc.manage_policy(action, line=line)
 
     return server
 

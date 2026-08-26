@@ -10,8 +10,8 @@ gateway 在两种模式中二选一启动，工具集互斥、配置隔离：
 
 | 模式 | CLI | 工具集 | 协议 |
 | --- | --- | --- | --- |
-| **openapi**（默认） | `--mode openapi` | 现有 6 工具（Sync） | 元数据直读 + 签名直连华为云 OpenAPI |
-| **discover** | `--mode discover` | 新 7 工具（Async） | MCP 发现 + Streamable HTTP 代理连接 |
+| **openapi**（默认） | `--mode openapi` | 现有 7 工具（Sync） | 元数据直读 + 签名直连华为云 OpenAPI |
+| **discover** | `--mode discover` | 新 8 工具（Async） | MCP 发现 + Streamable HTTP 代理连接 |
 
 环境变量 `HUAWEICLOUD_MCP_MODE` 可覆盖 CLI 默认值。
 
@@ -26,7 +26,7 @@ gateway 在两种模式中二选一启动，工具集互斥、配置隔离：
 ```
 AI 客户端 ──MCP stdio──▶ huaweicloud-open-mcp (discover mode)
                               │
-  ┌─ 固定 7 工具 ─────────────┤
+  ┌─ 固定 8 工具 ─────────────┤
   │ list_mcp_servers           │
   │ get_mcp_server             │
   │ connect_mcp_server    ─────┤──── 目录源 (configs/mcp-server-catalog.example.json)
@@ -124,6 +124,7 @@ server:serverId:toolPattern=allow|deny  # 控制 call_server_tool（toolPattern 
 修改:
   src/common/types.py               # 新 TypedDict 信封
   src/safety/policy.py              # PolicyRule.kind + evaluate_server/check_server
+  src/safety/policy_store.py        # PolicyStore 热重载 + manage_policy 共用状态层（新增）
   main.py                           # --mode + build_discover_app + INSTRUCTIONS
   configs/safety-policy.example.json
   AGENTS.md
@@ -137,7 +138,7 @@ server:serverId:toolPattern=allow|deny  # 控制 call_server_tool（toolPattern 
 | S7b | policy server 规则匹配 | 纯函数单测，手写字面量矩阵 |
 | S7c | manager session 注册表 + idle/LRU | 纯函数单测，注入时钟 |
 | S7d | SDK 适配层 | fake SessionClient 单测 + 真 SDK + 本地 stub 回环集成 |
-| S7e | 7 工具业务函数 + mode 隔离 | 单测注入 catalog/manager/client 工厂 + test_server 工具注册验证 |
+| S7e | 8 工具业务函数 + mode 隔离 | 单测注入 catalog/manager/client 工厂 + test_server 工具注册验证 |
 
 ## 11. 实施切片（red→green）
 
