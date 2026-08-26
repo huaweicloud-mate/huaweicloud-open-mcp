@@ -1,5 +1,8 @@
 """convert_openapi2 转换逻辑单元测试。"""
 
+import json
+import os
+
 from apie import convert_openapi2 as conv
 
 # ---------- fix_schema_type ----------
@@ -203,3 +206,36 @@ def test_converted_doc_validates(mini_detail, swagger_schema):
         doc = conv.convert_api(mini_detail["apis"][key])
         errs = list(val.iter_errors(doc))
         assert errs == [], f"{key} 转换后有校验错误: {errs[:3]}"
+
+
+# ---------- x-xml-root 提升（OBS 根元素名保留） ----------
+
+def test_clean_schema_hoists_xml_name():
+    schema = {"xml": {"name": "CreateBucketConfiguration"},
+              "properties": {"Location": {"type": "string"}}}
+    conv.clean_schema(schema)
+    assert "xml" not in schema
+    assert schema["x-xml-root"] == "CreateBucketConfiguration"
+
+
+def test_convert_api_preserves_obs_root_element():
+    """OBS raw 定义含 xml.name：转换后经 x-xml-root 保留（运行时 LiveFallback 依赖）。"""
+    with open(_fixture("obs_create_bucket_raw.json"), encoding="utf-8") as f:
+        raw = json.load(f)
+    doc = conv.convert_api(raw)
+    defs = doc["definitions"]["CreateBucketRequestBody"]
+    assert defs["x-xml-root"] == "CreateBucketConfiguration"
+    assert "xml" not in defs
+
+
+def _fixture(name):
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", name)
+
+
+def test_converted_obs_doc_validates(swagger_schema):
+    from jsonschema import Draft4Validator
+    with open(_fixture("obs_create_bucket_raw.json"), encoding="utf-8") as f:
+        raw = json.load(f)
+    doc = conv.convert_api(raw)
+    errs = list(Draft4Validator(swagger_schema).iter_errors(doc))
+    assert errs == [], f"OBS 转换文档校验失败: {errs[:3]}"

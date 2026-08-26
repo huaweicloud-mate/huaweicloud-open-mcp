@@ -27,6 +27,7 @@ class ExecuteResult(TypedDict, total=False):
     error_msg: str | None
     product: str | None
     api: str | None
+    headers: dict[str, str] | None
 
 
 class ToolError(TypedDict):

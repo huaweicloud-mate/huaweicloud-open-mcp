@@ -13,9 +13,12 @@ StringToSign = VERB + "\\n" + Content-MD5 + "\\n" + Content-Type + "\\n" + Date 
 import base64
 import hashlib
 import hmac
+import logging
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
+
+logger = logging.getLogger("mcp_openapi.signer.obs")
 
 OBS_PREFIX = "x-obs-"
 RFC1123_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
@@ -46,14 +49,26 @@ def escape_object_key(object_key: str) -> str:
 
 
 def canonicalized_resource(bucket: str, object_key: str = "",
-                           query: dict[str, Any] | None = None) -> str:
-    """构造 CanonicalizedResource：`/{bucket}/{object}[?子资源]`（path-style）。
+                           query: dict[str, Any] | None = None,
+                           virtual_hosted: bool = False) -> str:
+    """构造 CanonicalizedResource。
 
+    寻址风格影响形态（对齐官方 Go SDK conf.go prepareBaseURL）：
+    - path-style 或自定义域名：`/{bucket}[/{object}]`
+    - virtual-hosted（桶级操作线上强制）：`/{bucket}/[{object}]`（桶名后恒有 `/`）
+    - 列举账号所有桶（无桶）：`/`
     仅白名单子资源（或 x-obs- 前缀键）参与签名，按字典序；值用原始字符串（不编码）。
     """
-    resource = f"/{bucket}"
+    if not bucket:
+        resource = "/"
+    elif virtual_hosted:
+        resource = f"/{bucket}/"
+    else:
+        resource = f"/{bucket}"
     if object_key:
-        resource += "/" + escape_object_key(object_key)
+        if not virtual_hosted:
+            resource += "/"
+        resource += escape_object_key(object_key)
 
     if query:
         sub: dict[str, str] = {}
@@ -96,9 +111,10 @@ def _has(headers: dict[str, str], name: str) -> bool:
 
 def obs_string_to_sign(method: str, *, bucket: str, object_key: str = "",
                        query: dict[str, Any] | None = None,
-                       headers: dict[str, str] | None = None) -> str:
+                       headers: dict[str, str] | None = None,
+                       virtual_hosted: bool = False) -> str:
     """构造 StringToSign。headers 含 content-md5/content-type/date/x-obs-*；
-    x-obs-date 存在时 Date 位按空处理。"""
+    x-obs-date 存在时 Date 位按空处理；virtual_hosted 决定 CanonicalizedResource 形态。"""
     headers = dict(headers or {})
     content_md5 = _header(headers, "content-md5")
     content_type = _header(headers, "content-type")
@@ -110,7 +126,7 @@ def obs_string_to_sign(method: str, *, bucket: str, object_key: str = "",
             f"{content_type}\n"
             f"{date}\n"
             f"{canonicalized_headers(headers)}"
-            f"{canonicalized_resource(bucket, object_key, query)}")
+            f"{canonicalized_resource(bucket, object_key, query, virtual_hosted)}")
 
 
 def obs_signature(string_to_sign: str, sk: str) -> str:
@@ -123,7 +139,8 @@ def obs_signature(string_to_sign: str, sk: str) -> str:
 def sign_obs(method: str, *, ak: str, sk: str, bucket: str, object_key: str = "",
              query: dict[str, Any] | None = None,
              headers: dict[str, str] | None = None,
-             date: str | None = None) -> dict[str, str]:
+             date: str | None = None,
+             virtual_hosted: bool = False) -> dict[str, str]:
     """对 OBS 请求签名，返回需附加的请求头 dict（含 Authorization 与 Date）。"""
     if not ak or not sk:
         raise ValueError("ak and sk are required")
@@ -135,7 +152,9 @@ def sign_obs(method: str, *, ak: str, sk: str, bucket: str, object_key: str = ""
         headers["Date"] = datetime.now(timezone.utc).strftime(RFC1123_FORMAT)
 
     sts = obs_string_to_sign(method, bucket=bucket, object_key=object_key,
-                             query=query, headers=headers)
+                             query=query, headers=headers,
+                             virtual_hosted=virtual_hosted)
+    logger.debug("sign_obs sts=%r", sts)
     out = {"Authorization": f"OBS {ak}:{obs_signature(sts, sk)}"}
     date_value = _header(headers, "date")
     if date_value:

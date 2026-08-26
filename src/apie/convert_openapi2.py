@@ -286,6 +286,10 @@ def clean_response(resp: Any, header_defs: dict[str, Any] | None = None) -> Any:
 
 def clean_schema(obj: Any) -> Any:
     if isinstance(obj, dict):
+        xml = obj.get("xml")
+        if isinstance(xml, dict) and xml.get("name"):
+            # Swagger 2.0 元 schema 只放行 x- 前缀扩展；清洗前提升保留 OBS 根元素名
+            obj.setdefault("x-xml-root", xml["name"])
         for k in ("nullable", "deprecated", "oneOf", "discriminator", "xml", "example", "externalDocs",
                   "writeOnly", "linkage_node_fields", "allOf"):
             obj.pop(k, None)

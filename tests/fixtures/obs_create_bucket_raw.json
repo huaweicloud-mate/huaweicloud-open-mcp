@@ -1,0 +1,38 @@
+{
+  "name": "CreateBucket",
+  "method": "put",
+  "summary": "创建桶",
+  "tags": "桶的基础操作",
+  "product_short": "OBS",
+  "region_id": "cn-north-4",
+  "host": "obs.cn-north-4.myhuaweicloud.com",
+  "base_path": "/",
+  "info_version": "v1",
+  "consumes": ["application/xml;charset=UTF-8"],
+  "schemes": ["HTTPS"],
+  "paths": {
+    "/": {
+      "put": {
+        "operationId": "CreateBucket",
+        "summary": "创建桶",
+        "parameters": [
+          {"name": "bucket_name", "in": "query", "required": true, "type": "string"},
+          {"name": "Authorization", "in": "header", "type": "string"},
+          {"name": "Date", "in": "header", "type": "string"},
+          {"name": "x-obs-acl", "in": "header", "type": "string"},
+          {"in": "body", "name": "CreateBucketRequestBody", "schema": {"$ref": "#/definitions/CreateBucketRequestBody"}}
+        ],
+        "responses": {"200": {"description": "OK"}}
+      }
+    }
+  },
+  "definitions": {
+    "CreateBucketRequestBody": {
+      "xml": {"name": "CreateBucketConfiguration"},
+      "properties": {
+        "Location": {"type": "string", "description": "指定Bucket在哪个区域被创建。"}
+      }
+    },
+    "Error": {"description": "错误响应消息体"}
+  }
+}

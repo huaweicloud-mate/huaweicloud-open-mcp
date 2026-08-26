@@ -90,3 +90,24 @@ def test_canonicalized_resource_only_whitelisted_subresources():
 
 def test_object_key_escaping_keeps_slash():
     assert obs.escape_object_key("a/b c") == "a/b%20c"
+
+
+def test_vhost_resource_trailing_slash():
+    # 对齐官方 Go SDK conf.go：vhost 下桶名后恒有 `/`，无对象也保留
+    assert obs.canonicalized_resource("b", "", virtual_hosted=True) == "/b/"
+    assert obs.canonicalized_resource("b", "o.txt", virtual_hosted=True) == "/b/o.txt"
+    # path-style 保持无尾斜杠
+    assert obs.canonicalized_resource("b", "") == "/b"
+
+
+def test_signature_vhost_bucket_only_golden():
+    # goldens 由 openssl 计算（官方表格样例 CreateBucket 请求，vhost 资源含尾斜杠）：
+    # printf 'PUT\n\napplication/xml\nFri, 06 Jul 2018 03:45:51 GMT\nx-obs-acl:private\n/newbucketname2/'
+    #   | openssl dgst -sha1 -hmac 'SecretKey' -binary | base64
+    out = obs.sign_obs(
+        "PUT", ak=AK, sk=SK, bucket="newbucketname2",
+        headers={"x-obs-acl": "private", "Content-Type": "application/xml"},
+        date="Fri, 06 Jul 2018 03:45:51 GMT",
+        virtual_hosted=True,
+    )
+    assert out["Authorization"] == f"OBS {AK}:7YQzx+sTPCwzCbOvP6EeQivd404="
