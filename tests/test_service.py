@@ -1,5 +1,7 @@
 """ToolService 单元测试（store 注入，不联网、不碰磁盘）。"""
 
+import pytest
+
 from apie.memory_store import MemoryStore
 from common.auth import Credentials
 from mcp_openapi.gate import parse_gate
@@ -260,21 +262,22 @@ def _prep_obs_store():
 
 
 def test_execute_obs_routes_to_obs_lane():
+    """非名单 OBS 接口（ListObjects，控制面）保持 gateway 直连执行。"""
     store = _prep_obs_store()
     obs_client = StubObsClient()
     cred = Credentials(ak="AK", sk="SK")
     service = ToolService(store=store, config=ServiceConfig(
         policy_rules=_policy("OBS:*=allow"),
         credentials=cred, obs_client_factory=lambda: obs_client))
-    out = service.execute_api("OBS", "GetObject",
-                              params={"bucket_name": "b", "object_key": "o.txt"})
+    out = service.execute_api("OBS", "ListObjects",
+                              params={"bucket_name": "b"})
     assert out["ok"] is True
     assert out["body"] == {"obs": True}
     method, host, bucket, object_key, query, headers, body = obs_client.calls[0]
     assert method == "GET"
     assert host == "obs.cn-north-4.myhuaweicloud.com"
     assert bucket == "b"
-    assert object_key == "o.txt"
+    assert object_key == ""
 
 
 def test_execute_obs_deny_without_policy():
@@ -452,13 +455,20 @@ def test_manage_policy_list_and_errors(tmp_path):
 
 OBS_DOC = {
     "swagger": "2.0", "host": "obs.cn-north-4.myhuaweicloud.com", "basePath": "/",
-    "paths": {"/{object_key}": {"get": {"operationId": "GetObject",
-                                        "parameters": [
-                                            {"name": "bucket_name", "in": "query",
-                                             "required": True},
-                                            {"name": "object_key", "in": "path",
-                                             "required": True}],
-                                        "responses": {"200": {"description": "OK"}}}}},
+    "paths": {
+        "/{object_key}": {"get": {"operationId": "GetObject",
+                                  "parameters": [
+                                      {"name": "bucket_name", "in": "query",
+                                       "required": True},
+                                      {"name": "object_key", "in": "path",
+                                       "required": True}],
+                                  "responses": {"200": {"description": "OK"}}}},
+        "/": {"get": {"operationId": "ListObjects",
+                      "parameters": [
+                          {"name": "bucket_name", "in": "query",
+                           "required": True}],
+                      "responses": {"200": {"description": "OK"}}}},
+    },
     "definitions": {},
 }
 
@@ -466,14 +476,19 @@ OBS_DOC = {
 def _prep_obs_store():
     store = MemoryStore()
     store.set_products([{"name": "存储", "products": [
-        {"productshort": "OBS", "name": "对象存储", "api_count": 1,
+        {"productshort": "OBS", "name": "对象存储", "api_count": 2,
          "is_global": False, "link": None}]}])
     store.set_apis("OBS", [{"name": "GetObject", "method": "get", "summary": "下载对象",
                             "tags": "对象操作", "product_short": "OBS",
+                            "info_version": "v1"},
+                           {"name": "ListObjects", "method": "get", "summary": "列举对象",
+                            "tags": "桶操作", "product_short": "OBS",
                             "info_version": "v1"}])
     store.set_api_cache(("obs", "GetObject", "cn-north-4"),
                         (OBS_DOC, "/{object_key}", "get",
                          OBS_DOC["paths"]["/{object_key}"]["get"]))
+    store.set_api_cache(("obs", "ListObjects", "cn-north-4"),
+                        (OBS_DOC, "/", "get", OBS_DOC["paths"]["/"]["get"]))
     return store
 
 
@@ -515,3 +530,58 @@ def test_presign_flow_after_policy_grant(tmp_path):
     assert out2["presign"]["expires_in"] == 300
     assert "AccessKeyId=CRED-AK&Expires=" in out2["presign"]["url"]
     assert out2["presign"]["url"].startswith("https://bkt.obs.cn-north-4.myhuaweicloud.com/k.txt?")
+
+
+# ---------- 对象数据面强制 presign（单口径） ----------
+
+OBJECT_DATA_CASES = [
+    ("PutObject", "put"),
+    ("GetObject", "get"),
+    ("AppendObject", "post"),
+    ("UploadPart", "put"),
+]
+
+
+def _object_data_store(api: str, method: str) -> MemoryStore:
+    """注册单个对象数据面接口的最小 OBS 文档。"""
+    store = MemoryStore()
+    store.set_products([{"name": "存储", "products": [
+        {"productshort": "OBS", "name": "对象存储", "api_count": 1,
+         "is_global": False, "link": None}]}])
+    store.set_apis("OBS", [])
+    doc = {"swagger": "2.0", "host": "obs.cn-north-4.myhuaweicloud.com",
+           "basePath": "/", "definitions": {},
+           "paths": {"/{object_key}": {method: {
+               "operationId": api,
+               "parameters": [
+                   {"name": "bucket_name", "in": "query", "required": True,
+                    "type": "string"},
+                   {"name": "object_key", "in": "path", "required": True,
+                    "type": "string"},
+               ],
+               "responses": {"200": {"description": "OK"}}}}}}
+    store.set_api_cache(
+        ("obs", api, "cn-north-4"),
+        (doc, "/{object_key}", method, doc["paths"]["/{object_key}"][method]))
+    return store
+
+
+@pytest.mark.parametrize("api,method", OBJECT_DATA_CASES)
+def test_object_data_apis_auto_presign_without_flag(api, method):
+    """真实模式：名单接口不带 _presign 也自动返回预签名信封，gateway 不经手字节。"""
+    obs_client = StubObsClient()
+    svc = ToolService(store=_object_data_store(api, method),
+                      config=ServiceConfig(
+                          policy_rules=_policy("OBS:*=allow"),
+                          credentials=Credentials(ak="DATA-AK", sk="SK-DATA"),
+                          obs_client_factory=lambda: obs_client))
+    out = svc.execute_api("OBS", api,
+                          params={"bucket_name": "bkt", "object_key": "k.bin"})
+    assert out["ok"] is True
+    assert out["presign"]["method"] == method.upper()
+    assert obs_client.calls == []
+    assert out["presign"]["url"].startswith("https://bkt.obs.cn-north-4.")
+    assert "AccessKeyId=DATA-AK&Expires=" in out["presign"]["url"]
+    # 信封透出签名口径：缺省空 CT，headers 照抄清单为空
+    assert out["presign"]["signed_content_type"] == ""
+    assert out["presign"]["headers"] == {}

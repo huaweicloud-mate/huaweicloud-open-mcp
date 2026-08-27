@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from common import http as common_http
 from common.auth.credentials import Credentials
-from common.types import ClientResponse, ExecuteResult
+from common.types import ClientResponse, ExecuteResult, PresignInfo
 
 from . import execute
 from .signer import obs as obs_sign
@@ -43,6 +43,20 @@ def is_obs(product: str, doc: dict[str, Any]) -> bool:
         return True
     host = doc.get("host")
     return isinstance(host, str) and host.startswith("obs.")
+
+
+# 对象数据面接口：真实模式下恒走预签发 URL 单口径（gateway 不搬运对象字节）。
+# CopyObject 为服务端复制（字节不过 gateway，且需签名 x-obs-copy-source 头），不在此列。
+OBJECT_DATA_APIS = frozenset({"PutObject", "GetObject", "AppendObject", "UploadPart"})
+
+
+def is_object_data_api(api_name: str, op: dict[str, Any] | None = None) -> bool:
+    """判定是否对象字节面接口：按 api 名或 operationId 精确命中名单。"""
+    candidates = {(api_name or "").strip()}
+    oid = (op or {}).get("operationId")
+    if isinstance(oid, str):
+        candidates.add(oid.strip())
+    return bool(candidates & OBJECT_DATA_APIS)
 
 
 # ---------- XML body 序列化（S9b） ----------
@@ -503,5 +517,15 @@ def execute_presign_api(doc: dict[str, Any], path: str, method: str, op: dict[st
         expires=int(time.time()) + expires, virtual_hosted=bool(built.bucket),
         content_type=content_type,
     )
+    presign = PresignInfo(url=url, method=method.upper(), expires_in=expires,
+                          signed_content_type=content_type,
+                          headers=({"Content-Type": content_type}
+                                   if content_type else {}))
+    if not content_type and method.upper() in ("PUT", "POST"):
+        presign["note"] = (
+            "签名按空 Content-Type 计算：直连请求请勿携带该头"
+            "（curl 示例：-H 'Content-Type:' 移除默认头），"
+            "否则 SignatureDoesNotMatch；如需锁定类型，重走 execute_api "
+            "并传 _presign_content_type，随后携带一致的头域")
     return {"ok": True, "product": product, "api": api_name,
-            "presign": {"url": url, "method": method.upper(), "expires_in": expires}}
+            "presign": presign}

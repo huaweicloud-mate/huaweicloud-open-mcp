@@ -29,7 +29,8 @@
 ├─ 执行层
 │     src/mcp_openapi/signer/  自实现 SDK-HMAC-SHA256 签名（不依赖官方 SDK）
 │     src/mcp_openapi/execute_obs.py + signer/obs.py  OBS 专用执行 lane
-│           （OBS HMAC-SHA1 签名 / path-style 桶寻址 / XML body / XML 错误解析）
+│           （OBS HMAC-SHA1 签名 / virtual-hosted 桶寻址 / XML body / XML 错误解析 /
+│             对象数据面 presign 单口径）
 │     src/common/auth/    凭证加载（AK/SK 环境变量，project_id 自动获取）
 │     HTTP 直连华为云；--mock 模式指向 API Explorer mock 端点
 └─ 测试层（TDD，见「测试」章节）
@@ -64,7 +65,7 @@
 | `src/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端）+ `memory_store.py` 纯内存缓存 + `catalog.py` 远端优先功能接口（缓存命中直接返回，未命中实时拉取） | — | — |
 | `src/mcp_openapi/signer/` | SDK-HMAC-SHA256 签名 + 真实模式 HTTP 客户端（超时/429 退避/错误解析） | — | — |
 | `src/mcp_openapi/signer/obs.py` | OBS Header 签名（HMAC-SHA1）：`Authorization: OBS AK:Signature`，CanonicalizedResource/子资源白名单/对象名编码，对齐官方 Go SDK；含预签发 URL 口径 `url_string_to_sign`/`sign_obs_url`（Expires 替换 Date 位） | — | — |
-| `src/mcp_openapi/execute_obs.py` | OBS 执行 lane：`is_obs` 路由谓词 + 桶寻址（带桶 virtual-hosted/无桶端点根）+ consumes 三态 body 分流（json/xml/octet-stream）+ 开关型子资源自动补全 + `Content-MD5` 自动计算 + dict→XML 序列化（根元素经转换管线 `x-xml-root` 保留）+ XML `<Error>` 解析 + 二进制响应占位 + `_presign` 预签发编排（零字节搬运）+ `ObsHttpClient` 适配器 + 编排 | — | — |
+| `src/mcp_openapi/execute_obs.py` | OBS 执行 lane：`is_obs` 路由谓词 + `OBJECT_DATA_APIS`/`is_object_data_api` 对象数据面名单（真实模式恒走 presign 单口径）+ 桶寻址（带桶 virtual-hosted/无桶端点根）+ consumes 三态 body 分流（json/xml/octet-stream）+ 开关型子资源自动补全 + `Content-MD5` 自动计算 + dict→XML 序列化（根元素经转换管线 `x-xml-root` 保留）+ XML `<Error>` 解析 + 二进制响应占位 + `_presign` 预签发编排（零字节搬运）+ `ObsHttpClient` 适配器 + 编排 | — | — |
 | `src/common/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
 | `src/safety/` | safety policy 解析与匹配（PolicyRule 含 kind=product/server；支持 `product:apiPattern=` 与 `server:serverId[:toolPattern]=` 两种规则前缀）+ `policy_store.py` PolicyStore（策略状态层：文件↔内存双向同步、mtime 热重载、原子落盘，供 manage_policy 与运行时热更新共用） | — | — |
 | `src/mcp_openapi/` | openapi 模式（metadata/execute 纯函数 + `gate.py` 产品门栓 + service 编排层 + server 装配；配置/客户端工厂注入；元数据加载委托 apie.catalog） | — | — |
@@ -206,8 +207,8 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | S9b | dict→OBS XML 序列化（`serialize_body_xml`，含 `xml.name` 根元素、`$ref` 嵌套、数组、转义） | 纯函数单测，迷你 schema fixture | 手写期望 XML 字面量 |
 | S9c | 桶/对象寻址（`build_obs_request` 参数切分 + `build_obs_url` path-style URL） | 纯函数单测 | 手写 URL/参数字面量 |
 | S9d | OBS XML `<Error>` 解析（`parse_obs_error`） | 纯函数单测 | 手写 `<Error>` 片段 |
-| S9e | `is_obs` 路由谓词 + `execute_obs_api` 编排 + `ObsHttpClient` 签名发送 + `service` OBS 分派 | 单测注入 OBS client 工厂 | 手写字面量 + 注入 client |
-| S9f | 预签发 URL（`signer.obs.url_string_to_sign` / `sign_obs_url` / `build_presign_base` + `execute_presign_api` 编排 + service `_presign` 分派与热更新协同） | 纯函数单测 + service 注入凭证 | 官方《URL中携带签名》表4/5 结构原文 + openssl 口径金标 |
+| S9e | `is_obs` 路由谓词 + `OBJECT_DATA_APIS` 名单判定 + `execute_obs_api` 编排 + `ObsHttpClient` 签名发送 + `service` OBS 分派（对象数据面强制 presign） | 单测注入 OBS client 工厂 | 手写字面量 + 注入 client |
+| S9f | 预签发 URL（`signer.obs.url_string_to_sign` / `sign_obs_url` / `build_presign_base` + `execute_presign_api` 编排 + service 对象数据面自动 presign / 显式 `_presign` 分派与热更新协同） | 纯函数单测 + service 注入凭证 | 官方《URL中携带签名》表4/5 结构原文 + openssl 口径金标 |
 
 分层与纪律：
 
@@ -220,11 +221,11 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 
 - `data/openapi/` 全部文档通过 Swagger 2.0 schema 校验（valid 0 invalid）；转换修复规则与 apis 项目一致（consumes 字符串→数组、components→definitions、path 参数 required、3.0 字段清理、enum 去重等）。
 - 签名实现必须通过官方文档测试向量；不得自行推导期望签名值。OBS 用 `Authorization: OBS AK:Signature`（HMAC-SHA1），StringToSign 结构对齐官方文档「Header中携带签名」与官方 Go SDK（obs/authV2.go），子资源白名单以官方 SDK `allowedResourceParameterNames` 为准；virtual-hosted 寻址下 CanonicalizedResource 桶名后恒带 `/`。
-- OBS 执行 lane 约定：带桶 virtual-hosted、无桶端点根（URL 恒带根路径 `/`）；body 按 op consumes 分流 json/xml/octet-stream；XML 根元素经转换管线把 `xml.name` 提升为 `x-xml-root` 保留并注入官方命名空间；带 body 的写请求自动补 `Content-MD5`；元数据中 required 空值型子资源（tagging/acl/lifecycle 等开关）缺失时自动补 `""`；成功响应透出白名单头（ETag/x-obs-request-id 等）。
-- OBS 预签发 URL（`_presign`，S9f）：大文件上传/下载不经 gateway —— params 传 `_presign=true` 时 gate/policy 判定后仅签发访问 URL（`presign.url/method/expires_in`），客户端直连 OBS 收发字节，部署拓扑无关且不限大小；`_presign_expires` 相对秒数默认 900（换算 epoch 入签名 Date 位）、`_presign_content_type` 可锁定 PUT 类型；StringToSign 与 Header 方式唯一差异为 Expires 替换 Date 位，auth 三参数（AccessKeyId/Expires/Signature）不入签，签名值 RFC3986 严格编码；独立真值为官方《URL中携带签名》表4/5 结构原文 + openssl 口径金标；非 OBS 产品传 `_presign` 显式拒绝；二进制 GetObject 不带 `_presign` 时仍返回占位摘要；进度归客户端宿主能力，gateway 无感知。
+- OBS 执行 lane 约定：带桶 virtual-hosted、无桶端点根（URL 恒带根路径 `/`）；控制面接口（桶管理/tagging/acl 等小报文）body 按 op consumes 分流 json/xml/octet-stream；XML 根元素经转换管线把 `xml.name` 提升为 `x-xml-root` 保留并注入官方命名空间；带 body 的写请求自动补 `Content-MD5`；元数据中 required 空值型子资源（tagging/acl/lifecycle 等开关）缺失时自动补 `""`；成功响应透出白名单头（ETag/x-obs-request-id 等）。
+- OBS 对象数据面单口径 presign（S9f）：对象字节搬运接口（PutObject/GetObject/AppendObject/UploadPart，见 `OBJECT_DATA_APIS` + `is_object_data_api`）真实模式下**恒**走预签发 URL——无需任何标志，gate/policy 判定后仅签发访问 URL（`presign.url/method/expires_in` + `signed_content_type` + `headers` 照抄清单），客户端直连 OBS 收发字节，部署拓扑无关且不限大小；`_presign_expires` 相对秒数默认 900（换算 epoch 入签名 Date 位）、`_presign_content_type` 可锁定 PUT 类型；Content-Type 参与签名：锁定时客户端按信封 `headers` 原样携带，未锁定时签名按空 CT 计算，带 body 的 method（PUT/POST）信封附 `note` 警示直连不得携带该头（否则 SignatureDoesNotMatch）；显式 `_presign=true` 对非名单 OBS 接口仍可手动签 URL；StringToSign 与 Header 方式唯一差异为 Expires 替换 Date 位，auth 三参数（AccessKeyId/Expires/Signature）不入签，签名值 RFC3986 严格编码；独立真值为官方《URL中携带签名》表4/5 结构原文 + openssl 口径金标；非 OBS 产品传 `_presign` 显式拒绝；mock 模式豁免强制（继续走 mock 端点）；CopyObject 为服务端复制（字节不过 gateway、需签 x-obs-copy-source 头）保留直连；进度归客户端宿主能力，gateway 无感知。
 - `execute_api` 响应规范化：错误统一转为结构化输出（`error_code`/`error_msg`/HTTP 状态），429 退避重试，响应体积超限截断。
 - safety policy 匹配：按文件行序首个命中生效，`product:apiPattern=allow|deny`；MCP discover 扩展 `server:serverId[:toolPattern]=allow|deny`；无匹配默认 deny；无 policy 文件时 execute_api/call_server_tool 全拒。
-- safety policy 热更新（`PolicyStore` + `manage_policy`）：策略文件为唯一真值源，运行期按 stat（mtime/size/inode）热重载，外部编辑即时生效、无需重启；`manage_policy(action=list/add/remove)` 两模式同构，add/remove 先校验再 `tmp+os.replace` 原子写盘并刷新内存，静止态 memory==file；新 allow 规则自动插到首个会遮蔽它的 deny 规则之前（典型即 `*=deny` 兜底行前）；语义重复 add 幂等不改盘；文件被写坏/短暂消失时沿用最近合法版本记 WARNING，恢复后自动重新采纳；未配置 --policy 时 manage_policy 拒绝且不创建文件；启动时急切加载保留坏文件快速失败。
+- safety policy 热更新（`PolicyStore` + `manage_policy`）：策略文件为唯一真值源，运行期按 stat（mtime/size/inode）热重载，外部编辑即时生效、无需重启；`manage_policy(action=list/add/remove)` 两模式同构，add/remove 先校验再 `tmp+os.replace` 原子写盘并刷新内存，静止态 memory==file；读改写与热重载全段由进程内互斥锁（RLock）串行化，MCP 工具并发派发不丢更新（last-writer-wins 回归测试覆盖）；新 allow 规则自动插到首个会遮蔽它的 deny 规则之前（典型即 `*=deny` 兜底行前）；语义重复 add 幂等不改盘；文件被写坏/短暂消失时沿用最近合法版本记 WARNING，恢复后自动重新采纳；未配置 --policy 时 manage_policy 拒绝且不创建文件；启动时急切加载保留坏文件快速失败。
 - 产品门栓（`Gate`）：openapi 模式产品级白名单，未配置时不限制；配置后未列出产品默认拒；越界产品在 `list_products` 静默隐藏，其余工具返回「不在 openapi mcp 授权范围内」；`execute_api` 先过门栓再过 policy。
 
 ## 文档维护

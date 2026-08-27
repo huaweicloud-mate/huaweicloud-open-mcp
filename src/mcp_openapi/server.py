@@ -46,8 +46,14 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 
 - region 默认 cn-north-4；非默认 region 需显式传 region 参数；
 - 产品 `is_global` 为 true 的全局级服务（如 IAM）与地域级服务认证模型不同。
-- OBS 大文件上传/下载走 `_presign` 预签发 URL（客户端直连 OBS 收发字节，
-  gateway 不经手数据流）；二进制 GetObject 不带 `_presign` 时仅返回占位摘要。
+- OBS 对象上传/下载（PutObject/GetObject/AppendObject/UploadPart）恒走预签发 URL
+  单口径：execute_api 直接返回 presign 信封（url/method/expires_in +
+  signed_content_type + headers 照抄清单），客户端凭 URL 直连 OBS 收发字节，
+  gateway 不经手数据流、不限大小；_presign_expires 可调有效期。
+  Content-Type 参与签名：上传（PUT/POST）建议显式传 _presign_content_type
+  锁定类型，直连时按信封 headers 原样携带；未锁定时按空 CT 签名，
+  直连请求不得携带该头（curl 用 -H 'Content-Type:' 移除默认头），
+  信封 note 字段会给出对应警示口径。
 """
 
 
@@ -145,10 +151,13 @@ def build_openapi_app(service: ToolService | None = None, *,
 
         params 约定：路径参数/query 参数直接平铺，请求体放 params["body"]。
         mock 模式下 params["_status_code"]/params["_number"] 控制 mock 数据。
-        OBS 上传/下载大文件：params["_presign"]=true 预签发访问 URL
-        （_presign_expires 有效期秒数默认 900；_presign_content_type 锁定 PUT 类型），
-        客户端凭 URL 直连 OBS 完成字节流，不经 gateway、不限大小；
-        二进制 GetObject 不带 _presign 时仅返回占位摘要。
+        OBS 对象上传/下载（PutObject/GetObject/AppendObject/UploadPart）恒走预签发：
+        直接返回 presign 信封（url/method/expires_in + signed_content_type +
+        headers 照抄清单），客户端凭 URL 直连 OBS 完成字节流，不经 gateway、
+        不限大小；_presign_expires 有效期秒数默认 900。Content-Type 参与签名：
+        上传建议显式传 _presign_content_type 锁定类型并按 headers 原样携带；
+        未锁定时签名按空 CT 计算，直连请求不得携带 Content-Type 头
+        （信封 note 字段给出警示口径）。桶管理类接口仍由 gateway 直连执行。
 
         被拒时不要绕过：先向用户确认，再经 manage_policy 授予最小规则（热生效）。
 

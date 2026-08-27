@@ -6,8 +6,8 @@
 链路：
 ① get_api 读文档 → ② execute_api(ListBuckets) 真实签名
 → ③ 临时桶自清理写链路：CreateBucket(XML body) → SetBucketTagging(嵌套 XML)
-   → GetBucketTagging(子资源) → PutObject 文本(ETag 头摘取)
-   → GetObject 文本读回 + _presign 预签发 URL
+   → GetBucketTagging(子资源) → PutObject 强制预签发 URL 客户端直传
+   → GetObject 预签发 URL 直连读回比对
    → finally 删除对象/标签/桶（失败也执行）
 → ④ policy 拒绝白名单外接口。
 
@@ -15,6 +15,7 @@
 标 e2e（默认跳过），用 `uv run pytest tests/test_workflow_obs_e2e.py -m e2e` 运行。
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -130,7 +131,8 @@ def test_obs_execute_list_buckets_real(session):
 
 
 def test_obs_write_chain_with_cleanup(session):
-    """临时桶自清理式写链路：XML 根元素 / 嵌套 $ref / 子资源签名 / ETag 头 / b64 上传 / 二进制占位。"""
+    """临时桶自清理式写链路：XML 根元素 / 嵌套 $ref / 子资源签名 /
+    对象数据面强制 presign（直传 PUT + 直拉 GET 比对 ETag）。"""
     bucket = f"mcp-e2e-{int(time.time())}"
     created_objects: list[str] = []
 
@@ -163,23 +165,24 @@ def test_obs_write_chain_with_cleanup(session):
         ok2xx(r, "GetBucketTagging")
         assert "mcp-e2e" in r["body"]
 
-        # ④ 文本上传：ETag 进响应头（headers 白名单透出）
+        # ④ 文本上传：PutObject 强制预签发，客户端（本测试进程）直传字节
         r = call("PutObject", {"bucket_name": bucket, "object_key": "hello.txt",
-                               "body": "hello-mcp-e2e"})
-        ok2xx(r, "PutObject 文本")
-        assert r.get("headers", {}).get("etag"), f"缺少 ETag 头: {r}"
+                               "_presign_content_type": "text/plain"})
+        assert r.get("ok") is True and r["presign"]["method"] == "PUT", \
+            f"预签发失败: {r}"
+        req = urllib.request.Request(r["presign"]["url"], data=b"hello-mcp-e2e",
+                                     method="PUT", headers={"Content-Type": "text/plain"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            etag = resp.headers.get("ETag", "").strip('"')
+        assert etag, f"直传响应缺 ETag: {r}"
         created_objects.append("hello.txt")
 
-        # ⑤ 文本对象可正常读回
+        # ⑤ 文本对象读回：GetObject 同样返回预签名 URL，客户端直连比对
         r = call("GetObject", {"bucket_name": bucket, "object_key": "hello.txt"})
-        assert r.get("ok") is True and r.get("status") == 200 and \
-            r["body"] == "hello-mcp-e2e"
-
-        # ⑥ 预签发 URL 直传直拉（客户端侧字节流，见 S9f-c 用例）
-        r = call("GetObject", {"bucket_name": bucket, "object_key": "hello.txt",
-                               "_presign": True})
-        assert r.get("ok") is True and r.get("presign", {}).get("url"), f"预签发失败: {r}"
-        assert r["presign"]["method"] == "GET"
+        assert r.get("ok") is True and r["presign"]["method"] == "GET"
+        with urllib.request.urlopen(r["presign"]["url"], timeout=60) as resp:
+            got = resp.read()
+        assert hashlib.md5(got).hexdigest() == etag, "回读内容与 ETag 不一致"
     finally:
         _cleanup()
 

@@ -394,6 +394,38 @@ def test_execute_presign_api_custom_expires_and_content_type():
         b"SK9", b"PUT\n\ntext/plain\n" + str(expires_epoch).encode() +
         b"\n/b/u.bin", __import__("hashlib").sha1).digest()).decode()
     assert unquote(sig) == expected_b64   # CT 锁定参与签名（独立公式交叉验证）
+    ps = out["presign"]
+    assert ps["signed_content_type"] == "text/plain"
+    assert ps["headers"] == {"Content-Type": "text/plain"}   # 照抄清单
+    assert "note" not in ps
+
+
+def test_execute_presign_put_default_warns_empty_content_type():
+    from common.auth.credentials import Credentials
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "put", PRESIGN_OP_GET, "OBS", "PutObject",
+        "cn-north-4", {"bucket_name": "b", "object_key": "u.bin"},
+        credentials=Credentials(ak="AK9", sk="SK9"))
+    assert out["ok"] is True
+    ps = out["presign"]
+    assert ps["signed_content_type"] == ""
+    assert ps["headers"] == {}
+    note = ps.get("note") or ""
+    assert "Content-Type" in note
+    assert "_presign_content_type" in note      # 指引锁定方式
+
+
+def test_execute_presign_get_envelope_clean():
+    from common.auth.credentials import Credentials
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "get", PRESIGN_OP_GET, "OBS", "GetObject",
+        "cn-north-4", {"bucket_name": "b", "object_key": "o"},
+        credentials=Credentials(ak="AK9", sk="SK9"))
+    assert out["ok"] is True
+    ps = out["presign"]
+    assert ps["signed_content_type"] == ""
+    assert ps["headers"] == {}
+    assert "note" not in ps          # GET 无 body，无 CT 警示
 
 
 def test_execute_presign_api_invalid_expires():

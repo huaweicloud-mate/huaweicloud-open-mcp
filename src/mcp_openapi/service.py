@@ -240,6 +240,12 @@ class ToolService:
             return self._execute_mock(product, api, region, params)
 
         if execute_obs.is_obs(product, doc):
+            if execute_obs.is_object_data_api(api, op):
+                # 对象数据面单口径：恒返回预签名 URL，gateway 不搬运对象字节
+                return execute_obs.execute_presign_api(
+                    doc, path, method, op, product, api, region, params,
+                    credentials=self.config.credentials,
+                )
             logger.info("execute %s:%s region=%s mode=obs policy=allow",
                         product, api, region)
             return execute_obs.execute_obs_api(

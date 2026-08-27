@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -90,6 +91,7 @@ def _shadows(rule: safety_policy.PolicyRule,
 class PolicyStore:
     def __init__(self, path: str | None, *, stat_fn: StatFn | None = None):
         self.path = path
+        self._lock = threading.RLock()   # 序列化读改写与热重载，杜绝并发丢失更新
         self._stat_fn: StatFn = stat_fn or os.stat
         self._entries: list[str] | None = None
         self._is_json = False
@@ -143,20 +145,23 @@ class PolicyStore:
 
     def rules(self) -> tuple[safety_policy.PolicyRule, ...]:
         """当前生效规则（触发热重载检查）。未配置路径返回空元组。"""
-        self._refresh()
-        return self._rules
+        with self._lock:
+            self._refresh()
+            return self._rules
 
     def text(self) -> str:
         """当前生效策略全文（含注释，按当前磁盘格式渲染）。未配置返回空串。"""
-        self._refresh()
-        if not self._entries:
-            return ""
-        return "\n".join(self._entries) + "\n"
+        with self._lock:
+            self._refresh()
+            if not self._entries:
+                return ""
+            return "\n".join(self._entries) + "\n"
 
     def add_rule(self, line: str) -> MutationResult:
         """新增一条规则并持久化。幂等：语义重复时直接成功且不改写文件。
 
         插入位置保证新规则真实生效：置于首个会遮蔽它的 deny 规则之前。
+        整个读-改-写临界区互斥：并发调用（MCP 工具并行派发）不丢更新。
         """
         if self.path is None or self._entries is None:
             return MutationResult(ok=False, reason=NOT_CONFIGURED_REASON)
@@ -164,42 +169,47 @@ class PolicyStore:
             rule = safety_policy.parse_policy([line])[0]
         except ValueError as exc:
             return MutationResult(ok=False, reason=f"规则格式非法：{exc}")
-        self._refresh()
-        assert self._entries is not None
-        for existing in self._rules:
-            if _rule_key(existing) == _rule_key(rule):
-                return MutationResult(ok=True, reason="规则已存在")
-        pos = self._insert_position(self._entries, rule)
-        new_entries = list(self._entries)
-        new_entries.insert(pos, line.strip())
-        error = self._persist(new_entries)
-        if error is not None:
-            return MutationResult(ok=False, reason=error)
-        logger.info("policy add_rule %s -> ok", line.strip())
-        return MutationResult(ok=True)
+        with self._lock:
+            self._refresh()
+            assert self._entries is not None
+            for existing in self._rules:
+                if _rule_key(existing) == _rule_key(rule):
+                    return MutationResult(ok=True, reason="规则已存在")
+            pos = self._insert_position(self._entries, rule)
+            new_entries = list(self._entries)
+            new_entries.insert(pos, line.strip())
+            error = self._persist(new_entries)
+            if error is not None:
+                return MutationResult(ok=False, reason=error)
+            logger.info("policy add_rule %s -> ok", line.strip())
+            return MutationResult(ok=True)
 
     def remove_rule(self, line: str) -> MutationResult:
-        """删除首个语义匹配的规则并持久化；找不到匹配返回失败且文件不动。"""
+        """删除首个语义匹配的规则并持久化；找不到匹配返回失败且文件不动。
+
+        与 add_rule 共用同一把锁：并发增删互不覆盖。
+        """
         if self.path is None or self._entries is None:
             return MutationResult(ok=False, reason=NOT_CONFIGURED_REASON)
         try:
             rule = safety_policy.parse_policy([line])[0]
         except ValueError as exc:
             return MutationResult(ok=False, reason=f"规则格式非法：{exc}")
-        self._refresh()
-        assert self._entries is not None
-        target = _rule_key(rule)
-        for i in _semantic_positions(self._entries):
-            parsed = safety_policy.parse_policy([self._entries[i]])
-            if parsed and _rule_key(parsed[0]) == target:
-                new_entries = list(self._entries)
-                del new_entries[i]
-                error = self._persist(new_entries)
-                if error is not None:
-                    return MutationResult(ok=False, reason=error)
-                logger.info("policy remove_rule %s -> ok", line.strip())
-                return MutationResult(ok=True)
-        return MutationResult(ok=False, reason="未找到匹配的规则")
+        with self._lock:
+            self._refresh()
+            assert self._entries is not None
+            target = _rule_key(rule)
+            for i in _semantic_positions(self._entries):
+                parsed = safety_policy.parse_policy([self._entries[i]])
+                if parsed and _rule_key(parsed[0]) == target:
+                    new_entries = list(self._entries)
+                    del new_entries[i]
+                    error = self._persist(new_entries)
+                    if error is not None:
+                        return MutationResult(ok=False, reason=error)
+                    logger.info("policy remove_rule %s -> ok", line.strip())
+                    return MutationResult(ok=True)
+            return MutationResult(ok=False, reason="未找到匹配的规则")
 
     # ---------- 持久化 ----------
 

@@ -18,7 +18,7 @@ uv run huaweicloud-open-mcp --mock                 # mock 模式：execute_api �
 
 渐进式工作流：`list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`
 
-OBS 大文件上传/下载：`execute_api` 传 `params["_presign"]=true` 预签发访问 URL（`_presign_expires` 默认 900 秒），客户端凭 URL 直连 OBS 完成字节流——部署拓扑无关、不限大小；进度归客户端管理。
+OBS 对象上传/下载（PutObject/GetObject/AppendObject/UploadPart）：`execute_api` 恒返回预签名 URL 信封（`presign.url/method/expires_in`，`_presign_expires` 默认 900 秒），客户端凭 URL 直连 OBS 完成字节流——部署拓扑无关、不限大小、gateway 不经手数据；Content-Type 参与签名：上传建议传 `_presign_content_type` 锁定类型并按信封 `headers` 原样携带，未锁定时直连请求不得携带该头（信封 `note` 有警示口径）；桶管理类接口仍由 gateway 直连执行。
 
 ## discover 模式（8 工具）
 

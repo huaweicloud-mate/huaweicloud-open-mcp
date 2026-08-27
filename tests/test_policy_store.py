@@ -255,3 +255,65 @@ def test_deleted_file_midrun_keeps_last_known_good(tmp_path):
     store = make_store(p)
     p.unlink()
     assert policy.evaluate(store.rules(), "OBS", "ListBuckets") is True
+
+
+# ---------- 并发一致性（进程内互斥） ----------
+
+def _disk_rule_tuples(path):
+    """独立真值：直接解析磁盘规则为语义元组，不用 store 自身输出断言自身。"""
+    return sorted((r.kind, r.product, r.api_pattern, r.allow)
+                  for r in policy.parse_policy(semantic_lines(path)))
+
+
+def test_concurrent_adds_all_persisted(tmp_path):
+    import concurrent.futures
+    import threading
+
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:*List*=allow\n*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    lines = [f"OBS:*Action{i}*=allow" for i in range(10)]
+    barrier = threading.Barrier(len(lines))
+
+    def worker(line):
+        barrier.wait()          # 最大化并发窗口
+        return store.add_rule(line)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(lines)) as ex:
+        results = list(ex.map(worker, lines))
+
+    assert all(r.ok for r in results)
+    disk = _disk_rule_tuples(p)
+    for line in lines:
+        r = policy.parse_policy([line])[0]
+        assert (r.kind, r.product, r.api_pattern, r.allow) in disk   # 无丢失更新
+    memory = sorted((r.kind, r.product, r.api_pattern, r.allow) for r in store.rules())
+    assert memory == disk            # 静止态 memory == file
+    assert len(disk) == len(lines) + 2
+
+
+def test_concurrent_removes_all_applied(tmp_path):
+    import concurrent.futures
+    import threading
+
+    doomed = [f"OBS:*Act{i}*=allow" for i in range(8)]
+    body = "\n".join(["ECS:*List*=allow", *doomed, "*=deny"]) + "\n"
+    p = tmp_path / "policy.txt"
+    p.write_text(body, encoding="utf-8")
+    store = make_store(p)
+    barrier = threading.Barrier(len(doomed))
+
+    def worker(line):
+        barrier.wait()
+        return store.remove_rule(line)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(doomed)) as ex:
+        results = list(ex.map(worker, doomed))
+
+    assert all(r.ok for r in results)
+    disk = _disk_rule_tuples(p)
+    leftover = {t[2] for t in disk}
+    for line in doomed:
+        pat = line.split(":")[1].split("=")[0]
+        assert pat not in leftover   # 每条目标规则都真实消失（无覆盖回滚）
+    assert store.rules() and len(store.rules()) == 2   # 仅剩 ECS allow + * deny

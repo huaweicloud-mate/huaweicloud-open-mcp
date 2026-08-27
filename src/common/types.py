@@ -2,6 +2,8 @@
 
 from typing import Any, Literal, TypedDict
 
+from typing_extensions import NotRequired
+
 
 class ClientResponse(TypedDict):
     """HTTP 客户端统一响应结构。body 为解析后的 JSON 或原始文本。"""
@@ -32,11 +34,19 @@ class ExecuteResult(TypedDict, total=False):
 
 
 class PresignInfo(TypedDict):
-    """预签发 URL 信封：客户端直连 OBS 的全部信息，字节流不经过 gateway。"""
+    """预签发 URL 信封：客户端直连 OBS 的全部信息，字节流不经过 gateway。
+
+    signed_content_type / headers 透出签名口径：headers 为须照抄的头域清单
+    （锁定类型时含 Content-Type；缺省为空，请求不得携带该头，否则签名失配）。
+    note 仅在带 body 的 method（PUT/POST）未锁定 Content-Type 时提示口径。
+    """
 
     url: str
     method: str
     expires_in: int
+    signed_content_type: str
+    headers: dict[str, str]
+    note: NotRequired[str]   # 仅 PUT/POST 未锁定 Content-Type 时注入口径警示
 
 
 class ToolError(TypedDict):

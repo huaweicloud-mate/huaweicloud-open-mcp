@@ -84,20 +84,24 @@ flowchart TD
     style H fill:#e8f5e9
 ```
 
-### 3.1 OBS 预签发 URL（`_presign`，大文件上传/下载）
+### 3.1 OBS 预签发 URL（对象数据面 presign 单口径）
 
-OBS 大文件不经 gateway 搬运字节——params 带 `_presign=true` 时，gate/policy 判定通过后仅签发访问 URL（内部走 OBS「URL 中携带签名」口径，Expires 替换 Date 位），客户端拿 URL 直连 OBS 收发：
+OBS 对象字节搬运接口（PutObject / GetObject / AppendObject / UploadPart）**恒**经预签发 URL——真实模式下无需任何标志，gate/policy 判定通过后仅签发访问 URL（内部走 OBS「URL 中携带签名」口径，Expires 替换 Date 位），客户端拿 URL 直连 OBS 收发：
 
 ```jsonc
-// 签发下载：返回 {ok:true, presign:{url, method:"GET", expires_in}}
-execute_api("OBS", "GetObject", params={"bucket_name":"b", "object_key":"a.zip", "_presign": true})
-// 签发上传（可锁 Content-Type）：PUT 同理；_presign_expires 相对秒数默认 900
+// 下载：返回 {ok:true, presign:{url, method:"GET", expires_in}}
+execute_api("OBS", "GetObject", params={"bucket_name":"b", "object_key":"a.zip"})
+// 上传：返回 {ok:true, presign:{url, method:"PUT", ...}}；可锁 Content-Type
+execute_api("OBS", "PutObject", params={"bucket_name":"b", "object_key":"a.zip",
+                                        "_presign_content_type": "application/octet-stream"})
+// _presign_expires 相对秒数默认 900；显式 _presign=true 对非名单 OBS 接口仍可手动签 URL
 ```
 
 语义要点：
+- **单口径**：名单接口不再提供 gateway 直传（无 body 过手），`presign.method` 即客户端应发起的动词；桶管理类接口（CreateBucket/SetBucketTagging 等）仍由 gateway 直连执行；
 - **部署拓扑无关**：server 可本地或远程，字节流都在「发起调用的那台机器 ↔ OBS」之间完成；不限大小、进度归客户端宿主能力；
 - **安全等价于原 API**：签发同样过 gate/safety policy（如 `OBS:GetObject=allow`），未授权即拒绝；URL 自带过期时间；
-- 二进制 GetObject 不带 `_presign` 时仍返回占位摘要（避免乱码进 LLM 上下文）。
+- **mock 豁免**：--mock 模式下名单接口继续走 mock 端点。
 
 ## 4. 签名算法（SDK-HMAC-SHA256）
 
