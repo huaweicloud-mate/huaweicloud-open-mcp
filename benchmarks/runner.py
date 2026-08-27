@@ -33,11 +33,21 @@ DEFAULT_POLICY = "configs/safety-policy.example.json"
 DEFAULT_OUT = "benchmarks/results"
 
 
-def build_benchdir_config(policy: str, mock_base: str | None) -> str:
-    """生成 benchdir 的 opencode.json（隔离配置：mock + policy + 权限预批）。"""
+def build_benchdir_config(policy: str, mock_base: str | None, *,
+                          mock_passthrough: bool = False,
+                          audit_file: str | None = None) -> str:
+    """生成 benchdir 的 opencode.json（隔离配置：mock + policy + 权限预批）。
+
+    两个适配器共用（legacy runner 与 harbor OpencodeAgent）：passthrough/audit
+    为 harbor 任务环境约定注入项，legacy 默认不传保持行为不变。
+    """
     cmd = ["uv", "run", "huaweicloud-open-mcp", "--mock", "--policy", policy]
     if mock_base:
         cmd += ["--mock-base", mock_base]
+    if mock_passthrough:
+        cmd += ["--mock-passthrough"]
+    if audit_file:
+        cmd += ["--audit-file", audit_file]
     config = {
         "tool_output": {"max_lines": 50000, "max_bytes": 20971520},
         "$schema": "https://opencode.ai/config.json",

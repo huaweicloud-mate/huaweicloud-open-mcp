@@ -8,3 +8,18 @@ expect:
   constraints:
     tag_narrowing: true
     max_calls: 8
+fixture:
+  apis:
+    ECS/ListServersDetails:
+      body:
+        count: 1
+        servers:
+          - {id: stub-srv-1, name: bench-server, status: ACTIVE, flavor: s6.small.1}
+    ECS/ListCloudServers:
+      body:
+        count: 1
+        servers:
+          - {id: stub-srv-1, name: bench-server, status: ACTIVE, flavor: s6.small.1}
+labels:
+  capability: retrieval
+  difficulty: easy

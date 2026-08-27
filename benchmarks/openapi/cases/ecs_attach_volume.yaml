@@ -8,4 +8,13 @@ expect:
   constraints:
     tag_narrowing: true
     max_calls: 10
+fixture:
+  apis:
+    ECS/AttachServerVolume:
+      body: {attachable: true}
+    ECS/NovaAttachVolume:
+      body: {attachment: {id: stub-att-1, volumeId: vol-001}}
+labels:
+  capability: multi-step
+  difficulty: medium
 repeat: 2

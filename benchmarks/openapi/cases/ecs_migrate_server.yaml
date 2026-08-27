@@ -7,4 +7,11 @@ expect:
   constraints:
     tag_narrowing: true
     max_calls: 10
+fixture:
+  apis:
+    ECS/MigrateServer:
+      body: {job_id: stub-job-migrate}
+labels:
+  capability: write-execution
+  difficulty: medium
 repeat: 2

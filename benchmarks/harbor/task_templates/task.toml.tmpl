@@ -1,0 +1,36 @@
+schema_version = "1.4"
+
+[task]
+name = "__ORG__/__CASE_ID__"
+version = "1.0.0"
+description = "Huawei Cloud MCP regression: __CASE_ID__"
+authors = [{ name = "huaweicloud-open-mcp" }]
+keywords = ["mcp", "huaweicloud", "openapi", "__CAPABILITY__"]
+
+[metadata]
+source_case = "__SOURCE_CASE__"
+capability = "__CAPABILITY__"
+difficulty = "__DIFFICULTY__"
+
+[verifier]
+timeout_sec = 300.0
+
+[agent]
+timeout_sec = 900.0
+# agent 需要访问模型 provider；baseline 对环境与 verifier 关外网（stub/网关全在容器内）
+network_mode = "public"
+
+[environment]
+build_timeout_sec = 900.0
+network_mode = "no-network"
+
+[[environment.mcp_servers]]
+name = "huaweicloud-open-mcp"
+transport = "stdio"
+command = ["__MCP_COMMAND__"]
+
+[environment.healthcheck]
+command = "curl -sf http://127.0.0.1:__STUB_PORT__/health"
+interval_sec = 5.0
+timeout_sec = 10.0
+retries = 12

@@ -1,0 +1,10 @@
+#!/bin/bash
+# MCP server（stdio）启动脚本：task.toml mcp_servers 与 opencode.json 共用，
+# 保证两处注册指向同一约定（stub 端口 / policy / audit 文件）
+set -euo pipefail
+cd /opt/hwc
+exec uv run --frozen huaweicloud-open-mcp --mock \
+  --mock-base http://127.0.0.1:__STUB_PORT__ \
+  --mock-passthrough \
+  --policy /opt/hwc/policy.json \
+  --audit-file __AUDIT_FILE__

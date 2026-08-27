@@ -48,6 +48,9 @@ class BenchmarkCase:
     repeat: int = DEFAULT_REPEAT
     timeout: int = DEFAULT_TIMEOUT
     source: str = ""
+    fixture: dict[str, Any] | None = None
+    labels: dict[str, str] | None = None
+    policy: str | None = None
 
 
 def _expect_executes(data: Any, source: str) -> tuple[ExecuteExpect, ...]:
@@ -133,6 +136,17 @@ def parse_case(data: Any, source: str = "") -> BenchmarkCase:
         raise ValueError(f"{source}: repeat 必须是 >=1 的整数")
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1:
         raise ValueError(f"{source}: timeout 必须是 >=1 的整数")
+    fixture = data.get("fixture")
+    if fixture is not None and not isinstance(fixture, dict):
+        raise ValueError(f"{source}: fixture 必须是 mapping")
+    labels = data.get("labels")
+    if labels is not None:
+        if not isinstance(labels, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in labels.items()):
+            raise ValueError(f"{source}: labels 必须是 str→str mapping")
+    policy_override = data.get("policy")
+    if policy_override is not None and not isinstance(policy_override, str):
+        raise ValueError(f"{source}: policy 必须是字符串（规则文本，每行一条）")
 
     return BenchmarkCase(
         id=case_id,
@@ -142,6 +156,9 @@ def parse_case(data: Any, source: str = "") -> BenchmarkCase:
         repeat=repeat,
         timeout=timeout,
         source=source,
+        fixture=fixture,
+        labels=labels,
+        policy=policy_override,
     )
 
 

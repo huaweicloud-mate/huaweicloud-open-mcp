@@ -1,0 +1,53 @@
+"""oracle：读 /tests/case.yaml，对每个 expect.execute 依次 get_api → execute_api
+（注入 expect.params），最后把 expect.answer 写入 answer.txt。
+
+经 start_mcp.sh（stdio）连 MCP server，审计与真实 agent 走同一口径。
+"""
+
+import asyncio
+import json
+from pathlib import Path
+
+import yaml
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+CASE_FILE = Path("/tests/case.yaml")
+ANSWER_FILE = Path("__ANSWER_FILE__")
+MCP_COMMAND = "__MCP_COMMAND__"
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+async def run() -> None:
+    case = yaml.safe_load(CASE_FILE.read_text(encoding="utf-8"))
+    expect = case.get("expect") or {}
+    params = expect.get("params") or {}
+    targets = _as_list(expect.get("execute"))
+    answers = [str(t) for t in targets]
+    answer_text = expect.get("answer") or json.dumps(answers, ensure_ascii=False)
+
+    server = StdioServerParameters(command=MCP_COMMAND)
+    async with stdio_client(server) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            for t in targets:
+                product, api = t["product"], t["api"]
+                await session.call_tool("get_api", {"product": product, "api": api})
+                call = {"product": product, "api": api}
+                if params:
+                    call["params"] = params
+                result = await session.call_tool("execute_api", call)
+                print(f"[oracle] execute {product}:{api} -> "
+                      f"{result.content[0].text[:200] if result.content else 'ok'}")
+
+    ANSWER_FILE.write_text(answer_text, encoding="utf-8")
+    print(f"[oracle] answer written to {ANSWER_FILE}")
+
+
+if __name__ == "__main__":
+    asyncio.run(run())

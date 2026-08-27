@@ -58,6 +58,22 @@ def _short(name: str) -> str:
     return name[len(TOOL_PREFIX):] if name.startswith(TOOL_PREFIX) else name
 
 
+def event_to_toolcall(event: dict[str, Any]) -> ToolCall:
+    """审计 NDJSON 事件（HUAWEICLOUD_MCP_AUDIT_FILE schema）→ ToolCall。
+
+    scorer 拥有自己接受的输入 schema：本适配是 audit 文件成为 trace 输入源的唯一口径。
+    status 由 ok 映射（success/error）；output 恒 None（审计不落响应体，
+    checks 的 schema_params 因此缺省，不影响 pass/fail）。
+    """
+    ok = bool(event.get("ok", True))
+    return ToolCall(
+        tool=f"{TOOL_PREFIX}{event.get('tool', '')}",
+        input=dict(event.get("input") or {}),
+        status="success" if ok else "error",
+        output=None,
+    )
+
+
 def _norm(s: Any) -> str:
     return (s or "").lower()
 

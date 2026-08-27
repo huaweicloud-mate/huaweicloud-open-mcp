@@ -4,13 +4,17 @@
 调用纯函数层（tools.metadata / tools.execute）与执行客户端。
 """
 
+import functools
+import inspect
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, TypeVar
 
 from apie import catalog, metadata
 from apie import mock as apie_mock
 from apie.memory_store import ApiHit, MemoryStore
+from common.audit import AuditSink
 from common.auth.credentials import Credentials
 from common.types import (
     ApiDetailResult,
@@ -33,6 +37,8 @@ logger = logging.getLogger("mcp_openapi.service")
 
 DEFAULT_REGION = "cn-north-4"
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
 
 @dataclass
 class ServiceConfig:
@@ -42,10 +48,49 @@ class ServiceConfig:
     policy_store: PolicyStore | None = None
     credentials: Credentials | None = None
     mock_base: str = apie_mock.MOCK_BASE
+    mock_passthrough: bool = False
     http_client_factory: Callable[[], execute.ApiExecutor] | None = None
     mock_client_factory: Callable[[], apie_mock.MockApiClient] | None = None
     obs_client_factory: Callable[[], execute_obs.ObsClient] | None = None
     gate: Gate = Gate.unrestricted()
+    audit_sink: AuditSink | None = None
+
+
+def build_audit_event(tool: str, input_args: Mapping[str, Any],
+                      result: Any) -> dict[str, Any]:
+    """审计事件 payload（对 verifier 的已发布契约）：tool/input/ok；ts 由 sink 注入。
+
+    ok 取 result 的 ok 字段（缺失视为成功）；input 为调用方显式入参快照
+    （不含默认值，对齐 agent 侧 trace 口径）。
+    """
+    ok = bool(result.get("ok", True)) if isinstance(result, Mapping) else True
+    return {"tool": tool, "input": dict(input_args), "ok": ok}
+
+
+def _audited(fn: _F) -> _F:
+    """工具方法审计装饰器：每次调用经 audit sink 记一条事件（未配置 sink 零开销跳过）。
+
+    input 为绑定后的显式入参（不含 self 与默认值）；方法抛异常时记 ok=False 并原样抛出。
+    签名保持：装饰不改变方法对调用方的可见类型。
+    """
+    sig = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(self: "ToolService", *args: Any, **kwargs: Any) -> Any:
+        try:
+            bound = sig.bind(self, *args, **kwargs)
+            input_args = {k: v for k, v in bound.arguments.items() if k != "self"}
+        except TypeError:
+            input_args = {}
+        try:
+            result = fn(self, *args, **kwargs)
+        except Exception:
+            self._audit(fn.__name__, input_args, {"ok": False})
+            raise
+        self._audit(fn.__name__, input_args, result)
+        return result
+
+    return wrapper  # type: ignore[return-value]
 
 
 class ToolService:
@@ -88,6 +133,7 @@ class ToolService:
         """检查 safety policy，返回错误描述或 None（放行）。"""
         return safety_policy.check(self._effective_policy_rules(), product, api)
 
+    @_audited
     def manage_policy(self, action: str,
                       line: str | None = None) -> dict[str, Any]:
         """管理 safety policy（list/add/remove），改动即时生效并写回策略文件。
@@ -123,8 +169,16 @@ class ToolService:
             return None
         return f"产品 {product} 不在 openapi mcp 授权范围内"
 
+    def _audit(self, tool: str, input_args: Mapping[str, Any], result: Any) -> None:
+        """经 audit sink 记录一条工具调用事件（best-effort，未配置 sink 跳过）。"""
+        sink = self.config.audit_sink
+        if sink is None:
+            return
+        sink.record(build_audit_event(tool, input_args, result))
+
     # ---------- 元数据工具 ----------
 
+    @_audited
     def list_products(self, category: str | None = None,
                       keyword: str | None = None) -> ProductListResult | ToolError:
         logger.info("list_products category=%s keyword=%s", category or "-", keyword or "-")
@@ -136,6 +190,7 @@ class ToolService:
         return metadata.list_products(groups, counts=catalog.get_api_counts(self.store),
                                       category=category, keyword=keyword)
 
+    @_audited
     def get_product(self, product: str) -> ProductResult | ToolError:
         logger.info("get_product product=%s", product)
         gated = self._check_gate(product)
@@ -152,6 +207,7 @@ class ToolService:
             return {"ok": False, "reason": f"产品 {product} 未找到"}
         return out
 
+    @_audited
     def list_apis(self, product: str, tag: str | None = None, search: str | None = None,
                   limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
         logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d",
@@ -166,6 +222,7 @@ class ToolService:
             return {"ok": False, "reason": "接口索引不可用（远端拉取失败）"}
         return metadata.list_apis(apis, product, tag=tag, search=search, limit=limit, offset=offset)
 
+    @_audited
     def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
         region = region or self.config.region
         logger.info("get_api %s:%s region=%s", product, api, region)
@@ -180,6 +237,7 @@ class ToolService:
         doc, path, method, op = hit
         return metadata.format_api_detail(doc, product, path, method, op)
 
+    @_audited
     def get_api_examples(self, product: str, api: str,
                          region: str | None = None) -> ExamplesResult | ToolError:
         region = region or self.config.region
@@ -199,6 +257,7 @@ class ToolService:
 
     # ---------- 执行工具 ----------
 
+    @_audited
     def execute_api(self, product: str, api: str, region: str | None = None,
                     params: dict[str, Any] | None = None) -> ExecuteResult:
         """执行 API。产品门栓先粗滤，safety policy 再细检，mock/real 分支共享。"""
@@ -262,11 +321,21 @@ class ToolService:
 
     def _execute_mock(self, product: str, api: str, region: str,
                       params: dict[str, Any]) -> ExecuteResult:
-        """mock 模式：直接路由到 API Explorer mock 端点（policy 已在上层检查）。"""
+        """mock 模式：直接路由到 API Explorer mock 端点（policy 已在上层检查）。
+
+        mock_passthrough 开启时把业务参数转发到端点（标量→query、body→POST JSON，
+        控制键剥离）；默认关，保持 API Explorer mock 契约。
+        """
         status_code = params.get("_status_code", 200)
         number = params.get("_number", 1)
-        resp = self._make_mock_client().mock_request(product, api, region,
-                                                     status_code=status_code, number=number)
+        client = self._make_mock_client()
+        if self.config.mock_passthrough:
+            resp = client.mock_request(product, api, region,
+                                       status_code=status_code, number=number,
+                                       params=params)
+        else:
+            resp = client.mock_request(product, api, region,
+                                       status_code=status_code, number=number)
         out = execute.normalize_response(resp)
         out.update({"ok": True, "product": product, "api": api})
         return out

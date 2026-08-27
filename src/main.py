@@ -22,7 +22,12 @@ def main() -> None:
                         help="mock 模式：openapi 模式指向 API Explorer mock；discover 模式指向本地 stub")
     parser.add_argument("--mock-base", default=None,
                         help="mock 端点基础地址（环境变量 HUAWEICLOUD_MCP_MOCK_BASE）")
+    parser.add_argument("--mock-passthrough", action="store_true", default=None,
+                        help="mock 模式转发 execute 业务参数到端点"
+                             "（环境变量 HUAWEICLOUD_MCP_MOCK_PASSTHROUGH）")
     parser.add_argument("--policy", default=None, help="safety policy 文件路径")
+    parser.add_argument("--audit-file", default=None,
+                        help="审计事件 NDJSON 文件路径（环境变量 HUAWEICLOUD_MCP_AUDIT_FILE）")
     parser.add_argument("--gate", default=None,
                         help="openapi 产品门栓配置文件路径（环境变量 HUAWEICLOUD_MCP_OPENAPI_GATE）")
     parser.add_argument("--region", default=None, help="默认 region（openapi 模式，默认 cn-north-4）")

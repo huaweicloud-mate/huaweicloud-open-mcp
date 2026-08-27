@@ -151,3 +151,71 @@ def test_constraints_default_to_empty(tmp_path):
 def test_missing_path_rejected(tmp_path):
     with pytest.raises(ValueError, match="不存在"):
         bench_cases.load_cases(tmp_path / "nope.yaml")
+
+
+# ---------- fixture / labels 扩展（harbor exporter 用） ----------
+
+def test_fixture_and_labels_parsed(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        """\
+id: t
+prompt: p
+expect:
+  execute: {product: ECS, api: ListServersDetails}
+fixture:
+  apis:
+    ECS/ListServersDetails:
+      body: {count: 1, servers: []}
+labels:
+  capability: execute-correctness
+  difficulty: medium
+""",
+        encoding="utf-8",
+    )
+    c = bench_cases.load_cases(p)[0]
+    assert c.fixture == {"apis": {"ECS/ListServersDetails": {"body": {"count": 1,
+                                                                     "servers": []}}}}
+    assert c.labels == {"capability": "execute-correctness", "difficulty": "medium"}
+
+
+def test_fixture_and_labels_default_none(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(MINIMAL, encoding="utf-8")
+    c = bench_cases.load_cases(p)[0]
+    assert c.fixture is None
+    assert c.labels is None
+
+
+def test_fixture_must_be_mapping(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("id: t\nprompt: p\nexpect:\n  execute: {product: E, api: A}\nfixture: [1]\n",
+                 encoding="utf-8")
+    with pytest.raises(ValueError, match="fixture"):
+        bench_cases.load_cases(p)
+
+
+def test_labels_must_be_mapping(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text("id: t\nprompt: p\nexpect:\n  execute: {product: E, api: A}\nlabels: x\n",
+                 encoding="utf-8")
+    with pytest.raises(ValueError, match="labels"):
+        bench_cases.load_cases(p)
+
+
+def test_policy_override_parsed(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        "id: t\nprompt: p\nexpect:\n  execute: {product: E, api: A}\n"
+        "policy: |\n  E:*List*=allow\n  *=deny\n",
+        encoding="utf-8",
+    )
+    c = bench_cases.load_cases(p)[0]
+    assert c.policy is not None
+    assert c.policy.rstrip() == "E:*List*=allow\n*=deny"
+
+
+def test_policy_default_none(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(MINIMAL, encoding="utf-8")
+    assert bench_cases.load_cases(p)[0].policy is None

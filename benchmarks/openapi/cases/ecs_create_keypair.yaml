@@ -3,8 +3,17 @@ prompt: 创建一个名为 my-key 的 SSH 密钥对
 expect:
   execute:
     - {product: ECS, api: NovaCreateKeypair}
+  params:
+    body: {keypair: {name: my-key}}
   answer: 密钥
   constraints:
     tag_narrowing: true
     max_calls: 10
+fixture:
+  apis:
+    ECS/NovaCreateKeypair:
+      body: {keypair: {name: my-key, fingerprint: "aa:bb:cc", public_key: ""}}
+labels:
+  capability: execute-correctness
+  difficulty: medium
 repeat: 2

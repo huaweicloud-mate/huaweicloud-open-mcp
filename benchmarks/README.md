@@ -100,3 +100,48 @@ benchmarks/results/
   确定性测量请用 stub 后端。
 - `cost` 依赖 provider 上报价格，当前 maas/glm 上报为 0；token 计数不受影响。
 - LLM 非确定性：单次 run 不构成结论，看多次聚合（pass 率 + p50/p95）。
+
+## Harbor 集成（`harbor/`）
+
+用 [harbor](https://github.com/harbor-framework/harbor)（environment + solver + verifier
+容器范式）跑同一批 case 的**确定性回归**：任务目录自包含、stub 进容器、verifier 读
+网关审计 NDJSON 评分，与上面这套旧 runner 并存（旧 runner 走宿主进程 + opencode export）。
+
+```bash
+# 1. 导出数据集（可重建不入库；--case-id 过滤，缺省全量）
+uv run python -m benchmarks.harbor.exporter benchmarks/openapi/cases datasets/mcp-regression
+
+# 2. 运行（本地 provider 需 docker + harbor CLI；harbor 仅运行时环境要求 py>=3.12）
+harbor run -p datasets/mcp-regression/ecs_list_servers \
+  --agent benchmarks.harbor.opencode_agent:OpencodeAgent -m <provider/model>
+```
+
+### 任务结构（`datasets/mcp-regression/<case_id>/`，exporter 生成）
+
+| 部分 | 内容 |
+| --- | --- |
+| `instruction.md` | case prompt + 「答案写入 /tmp/answer.txt」约定 |
+| `task.toml` | `task.name = "mcp/<case_id>"`；网络 baseline `no-network`（agent 阶段 `public` 放行 LLM）；`mcp_servers` 注册 `/opt/hwc/start_mcp.sh`（stdio） |
+| `environment/` | Dockerfile（uv sync 内嵌 hwc 源码树）+ `start_services.sh`（stub :8010）+ `stub_server.py`（fixture 引擎）+ `fixtures.json` + `policy.json`（case 可覆盖）+ `start_mcp.sh`（`--mock-passthrough --audit-file`） |
+| `tests/` | `test.sh` → pytest 薄壳：读 `/tmp/hwc_audit.jsonl` → `scorer.event_to_toolcall` → `scorer.score`，硬 gate 分项断言（partial credit），语义与旧 runner 同源 |
+| `solution/` | oracle：脚本化 mcp client 按 `expect.execute` 顺序 get_api→execute_api 并写 answer.txt（验证环境+verifier 闭环，不评 LLM） |
+
+### 关键约定（单一真值源：`harbor/conventions.py`）
+
+- stub `:8010`、audit `/tmp/hwc_audit.jsonl`、stub 台账 `/tmp/hwc_stub_ledger.jsonl`、
+  答案 `/tmp/answer.txt`、MCP 入口 `/opt/hwc/start_mcp.sh`。
+- Harbor 专用 stub（`task_templates/stub_server.py`，单文件纯标准库）与旧
+  `openapi/stub_server.py` 解耦：fixture 文件驱动罐头、GET/POST 双方法、region 覆盖
+  （`by_region`）、请求台账 NDJSON（wire 级断言）、`/health`；API Explorer mock 契约
+  （恒 200 / 非 200 空 body / 默认 body）保持一致。
+- 参数断言通道：passthrough 把 execute 参数打上线缆 → stub 台账可见；
+  「agent 传了什么」以网关审计为准，「线上收到什么」以 stub 台账为准。
+- case YAML 扩展字段（向后兼容）：`fixture`（stub 罐头）、`labels`（capability/
+  difficulty，缺省按 expect 推导）、`policy`（per-case policy 覆盖 example，safety
+  类 case 用 `*=deny` 构造拒绝场景）。
+
+### 试点任务（5 个，覆盖五维度）
+
+`ecs_list_servers`（retrieval）、`ecs_create_keypair`（execute-correctness，params
+断言）、`ecs_attach_volume`（multi-step）、`ecs_migrate_server`（write-execution）、
+`ecs_delete_servers_guarded`（safety：per-case policy 拒删除，forbidden + answer 断言）。

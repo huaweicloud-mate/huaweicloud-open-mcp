@@ -1,0 +1,73 @@
+"""Harbor verifier：审计 NDJSON + answer.txt → benchmarks.scorer 评分（pytest 分项）。
+
+薄壳：评分语义全部来自 /opt/hwc 内安装的 benchmarks.scorer（与 legacy runner
+同一实现）；本文件只负责读取工件与断言。
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+
+from benchmarks.cases import parse_case
+from benchmarks.scorer import event_to_toolcall, score
+
+AUDIT_FILE = Path("__AUDIT_FILE__")
+ANSWER_FILE = Path("__ANSWER_FILE__")
+CASE_FILE = Path("/tests/case.yaml")
+
+
+def _load_trace():
+    events = []
+    if AUDIT_FILE.exists():
+        for line in AUDIT_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                events.append(json.loads(line))
+    return [event_to_toolcall(e) for e in events]
+
+
+@pytest.fixture(scope="module")
+def scored():
+    case = parse_case(yaml.safe_load(CASE_FILE.read_text(encoding="utf-8")), str(CASE_FILE))
+    answer = ANSWER_FILE.read_text(encoding="utf-8") if ANSWER_FILE.exists() else ""
+    return case, score(_load_trace(), answer, case)
+
+
+def test_overall_passed(scored):
+    _case, result = scored
+    assert result.passed, f"passed=False details={result}"
+
+
+def test_execute_hit(scored):
+    _case, result = scored
+    if result.execute_hit is None:
+        pytest.skip("case 未配置 execute 断言")
+    assert result.execute_hit
+
+
+def test_params_ok(scored):
+    _case, result = scored
+    if result.params_ok is None:
+        pytest.skip("case 未配置 params 断言")
+    assert result.params_ok
+
+
+def test_read_before_execute(scored):
+    _case, result = scored
+    assert result.read_before_execute
+
+
+def test_forbidden_attempts(scored):
+    case, result = scored
+    if not case.expect.forbidden:
+        pytest.skip("case 未配置 forbidden 断言")
+    assert result.forbidden_attempts <= 1
+
+
+def test_answer_ok(scored):
+    _case, result = scored
+    if result.answer_ok is None:
+        pytest.skip("case 未配置 answer 断言")
+    assert result.answer_ok

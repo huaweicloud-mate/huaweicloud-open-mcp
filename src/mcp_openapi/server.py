@@ -7,6 +7,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from apie import mock as apie_mock
+from common.audit import sink_from_path
 from common.auth import credentials as cred_mod
 from common.types import (
     ApiDetailResult,
@@ -72,7 +73,12 @@ def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
     policy_file = args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")
     region = args.region or os.environ.get("HUAWEICLOUD_MCP_REGION") or None
     mock_base = args.mock_base or os.environ.get("HUAWEICLOUD_MCP_MOCK_BASE") or None
+    mock_passthrough = (args.mock_passthrough if getattr(args, "mock_passthrough", None) is not None
+                        else os.environ.get("HUAWEICLOUD_MCP_MOCK_PASSTHROUGH", "")
+                        in ("1", "true", "yes"))
     gate_file = getattr(args, "gate", None) or os.environ.get("HUAWEICLOUD_MCP_OPENAPI_GATE")
+    audit_file = (getattr(args, "audit_file", None)
+                  or os.environ.get("HUAWEICLOUD_MCP_AUDIT_FILE"))
     policy_store = PolicyStore(policy_file) if policy_file else None
     return ServiceConfig(
         region=region or "cn-north-4",
@@ -81,7 +87,9 @@ def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
         policy_rules=policy_store.rules() if policy_store else None,
         credentials=None if mock else cred_mod.get_credentials(),
         mock_base=mock_base or apie_mock.MOCK_BASE,
+        mock_passthrough=mock_passthrough,
         gate=load_gate_file(gate_file) if gate_file else Gate.unrestricted(),
+        audit_sink=sink_from_path(audit_file),
     )
 
 

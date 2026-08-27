@@ -1,0 +1,5 @@
+#!/bin/bash
+# Harbor verifier 入口：容器内执行，评分语义全部来自 benchmarks.scorer（双消费者）
+set -euo pipefail
+cd /opt/hwc
+uv run --frozen python -m pytest /tests/test_outputs.py -rA -v

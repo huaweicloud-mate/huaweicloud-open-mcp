@@ -18,6 +18,9 @@ logs/
 
 # benchmark 运行产物（原始数据不入库，基线保留用于回归对比）
 benchmarks/results/
+
+# Harbor 数据集（exporter 从 case 模板重建，不入库）
+datasets/
 !benchmarks/results/baseline-*.json
 
 # 中间产物

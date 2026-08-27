@@ -1,7 +1,7 @@
 """S6：benchmark scorer 分层评分纯函数单测。"""
 
 from benchmarks.cases import parse_case
-from benchmarks.scorer import ToolCall, score
+from benchmarks.scorer import ToolCall, event_to_toolcall, score
 
 SERVE = "huaweicloud-open-mcp_"
 
@@ -302,3 +302,51 @@ def test_call_efficiency_empty_trace():
     )
     r = score([], "x", case)
     assert r.workflow.call_efficiency == 1.0
+
+
+# ---------- event_to_toolcall：审计事件 → trace 输入适配（harbor verifier 用） ----------
+
+def test_event_to_toolcall_maps_fields():
+    event = {"ts": "2026-01-01T00:00:00+00:00", "tool": "execute_api",
+             "input": {"product": "ECS", "api": "ListServersDetails", "params": {"limit": 1}},
+             "ok": True}
+    call = event_to_toolcall(event)
+    assert call.tool == f"{SERVE}execute_api"
+    assert call.input == {"product": "ECS", "api": "ListServersDetails", "params": {"limit": 1}}
+    assert call.status == "success"
+    assert call.output is None
+
+
+def test_event_to_toolcall_error_status():
+    event = {"ts": "t", "tool": "get_api", "input": {"product": "ECS", "api": "X"}, "ok": False}
+    call = event_to_toolcall(event)
+    assert call.tool == f"{SERVE}get_api"
+    assert call.status == "error"
+
+
+def test_audit_events_score_end_to_end():
+    from benchmarks.cases import parse_case
+    case = parse_case({
+        "id": "t", "prompt": "查询云服务器列表",
+        "expect": {
+            "execute": {"product": "ECS", "api": "ListServersDetails"},
+            "answer": "服务器",
+        },
+    })
+    events = [
+        {"ts": "t1", "tool": "list_products", "input": {"keyword": "云"}, "ok": True},
+        {"ts": "t2", "tool": "list_apis", "input": {"product": "ECS", "tag": "状态管理"},
+         "ok": True},
+        {"ts": "t3", "tool": "get_api",
+         "input": {"product": "ECS", "api": "ListServersDetails"}, "ok": True},
+        {"ts": "t4", "tool": "execute_api",
+         "input": {"product": "ECS", "api": "ListServersDetails", "params": {"limit": 1}},
+         "ok": True},
+    ]
+    trace = [event_to_toolcall(e) for e in events]
+    result = score(trace, "北京四共有 1 台服务器", case)
+    assert result.passed is True
+    assert result.execute_hit is True
+    assert result.read_before_execute is True
+    assert result.workflow.full_chain is True
+    assert result.workflow.order_ok is True

@@ -1,0 +1,6 @@
+#!/bin/bash
+# 容器入口：后台起 stub，前台保活
+set -euo pipefail
+python3 /opt/hwc/stub_server.py --port __STUB_PORT__ \
+  --fixture /opt/hwc/fixtures.json --ledger __STUB_LEDGER__ &
+exec tail -f /dev/null

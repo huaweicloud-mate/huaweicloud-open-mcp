@@ -68,15 +68,16 @@
 | `src/mcp_openapi/execute_obs.py` | OBS 执行 lane：`is_obs` 路由谓词 + `OBJECT_DATA_APIS`/`is_object_data_api` 对象数据面名单（真实模式恒走 presign 单口径）+ 桶寻址（带桶 virtual-hosted/无桶端点根）+ consumes 三态 body 分流（json/xml/octet-stream）+ 开关型子资源自动补全 + `Content-MD5` 自动计算 + dict→XML 序列化（根元素经转换管线 `x-xml-root` 保留）+ XML `<Error>` 解析 + 二进制响应占位 + `_presign` 预签发编排（零字节搬运）+ `ObsHttpClient` 适配器 + 编排 | — | — |
 | `src/common/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
 | `src/safety/` | safety policy 解析与匹配（PolicyRule 含 kind=product/server；支持 `product:apiPattern=` 与 `server:serverId[:toolPattern]=` 两种规则前缀）+ `policy_store.py` PolicyStore（策略状态层：文件↔内存双向同步、mtime 热重载、原子落盘，供 manage_policy 与运行时热更新共用） | — | — |
-| `src/mcp_openapi/` | openapi 模式（metadata/execute 纯函数 + `gate.py` 产品门栓 + service 编排层 + server 装配；配置/客户端工厂注入；元数据加载委托 apie.catalog） | — | — |
+| `src/mcp_openapi/` | openapi 模式（metadata/execute 纯函数 + `gate.py` 产品门栓 + service 编排层 + server 装配；配置/客户端工厂注入；元数据加载委托 apie.catalog；service 层 7 个工具方法经 `_audited` 装饰器统一写审计事件，`build_audit_event` 定义对 verifier 的已发布 payload 契约 `tool/input/ok`） | — | — |
 | `src/mcp_discover/` | discover 模式（catalog.py 目录源 + config.py + sdk.py SessionClient 协议 + manager.py session 注册表 + service.py + server.py） | — | — |
 | `src/common/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封 + MCP discover 结果信封（McpServerItem/*Result） | — | — |
 | `src/common/paths.py` | 项目根路径解析（统一 project_root） | — | — |
 | `src/common/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
 | `main.py` | CLI 入口（按 --mode 分发 openapi/discover 两条路径） | — | — |
+| `benchmarks/` | LLM Agent 级工作流 benchmark（`openapi/cases/` 用例 + 旧 stub_server + scorer/report/trace/runner；`harbor/` Harbor 集成：`conventions.py` 路径常量单一真值源 + `build_agent_opencode_config`、`exporter.py`（render_task 纯核/export_dataset 薄壳）、`task_templates/` 模板组（stub_server/Dockerfile/task.toml/instruction/verifier/oracle/脚本）、`opencode_agent.py`（仅 harbor 运行时加载，本项目不声明 harbor 依赖）；`results/` 不入库，`baseline-*.json` 除外） | — | — |
 | `configs/` | safety policy 示例（含 server 规则）、`openapi-gate.example.json` 产品门栓示例、tag 中文→英文翻译映射、`mcp-server-catalog.example.json` 本地目录 | — | — |
 | `tests/` | TDD 测试（见「测试」章节） | — | — |
-| `benchmarks/` | LLM Agent 级工作流 benchmark（cases/ 用例、stub_server、scorer/report 纯函数、runner；`results/` 运行产物不入库，`baseline-*.json` 除外） | — | — |
+| `datasets/` | Harbor 任务数据集（exporter 从 cases + task_templates 重建，不入库）；`datasets/mcp-regression/<case_id>/` 每目录一个自包含 Harbor task（instruction/task.toml/environment 内嵌 hwc 源码树+stub+fixtures/solution oracle/tests verifier 壳） | `python -m benchmarks.harbor.exporter`（经 export_dataset） | 是 |
 
 数据流（端到端 openapi 模式）：`API Explorer 远端 → 内存缓存（MemoryStore）→ 元数据工具（get_api 等）→ 门栓过滤（Gate）→ execute_api → safety 检查 → 签名 → 华为云 API（或 mock 端点）`。缓存未命中时自动从 API Explorer 实时拉取并缓存。OBS 产品在 execute_api 处经 `is_obs` 分流到 OBS lane（HMAC-SHA1 签名 + virtual-hosted 桶寻址 + consumes 分流 body + 自动 Content-MD5 + 开关型子资源补全），其余产品走 SDK-HMAC-SHA256 直连。
 
@@ -104,7 +105,7 @@
                               ├ metadata / mock / api_docs(CLI)
                               └ 管道文件（fetch/split/merge/organize/validate/refresh/retry）
            │                        │
-第1层  src/common/            （types / http / paths / logconf / auth/credentials，均零内部依赖）
+第1层  src/common/            （types / http / paths / logconf / audit / auth/credentials，均零内部依赖）
 ```
 
 | 模块 | 依赖 |
@@ -130,7 +131,7 @@
 - **产品名**：以 `raw/apis_detail.json` 的驼峰 `product_short` 为准（如 `ECS`）；与 apis 项目的大小写去重映射保持一致。
 - **tag 文件名**：英文 PascalCase，中文→英文映射维护在 `configs/tag_translations.json`；`sanitize_tag` 用 `_` 替换空格与 `/`。
 - **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api`/`manage_policy`）；discover 模式工具（`list_mcp_servers`/`get_mcp_server`/`connect_mcp_server`/`list_server_tools`/`get_server_tool`/`call_server_tool`/`disconnect_mcp_server`/`manage_policy`）。
-- **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`、`HUAWEICLOUD_MCP_OPENAPI_GATE`）。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
+- **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`、`HUAWEICLOUD_MCP_OPENAPI_GATE`、`HUAWEICLOUD_MCP_AUDIT_FILE`（审计 NDJSON 落盘路径）、`HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`（mock 模式转发业务参数））。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
 - **region**：默认 `cn-north-4` 平铺，非默认 region 带 `{region}` 目录/后缀（沿用 apis 的 region 目录规则）。
 
 ## 构建与运行命令
@@ -160,6 +161,15 @@ uv run api-docs api ECS ListServersDetails  # 接口详情（OpenAPI 2.0）
 uv run api-docs search 云服务器 --product ECS
 ```
 
+Harbor 评测数据集（重建不入库；本地需 docker + harbor CLI，harbor 仅在运行时环境要求 py>=3.12）：
+
+```bash
+uv run python -m benchmarks.harbor.exporter \
+  benchmarks/openapi/cases datasets/mcp-regression [--case-id <id>]...
+harbor run -p datasets/mcp-regression/ecs_list_servers \
+  --agent benchmarks.harbor.opencode_agent:OpencodeAgent -m <provider/model>
+```
+
 MCP server 启动（stdio，由 MCP 客户端拉起）：
 
 ```bash
@@ -167,6 +177,8 @@ uv run huaweicloud-open-mcp                    # openapi 真实模式：AK/SK �
 uv run huaweicloud-open-mcp --mock             # mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）
 uv run huaweicloud-open-mcp --mode discover    # discover 模式：发现连接云端 MCP server（环境变量 HUAWEICLOUD_MCP_MODE）
 uv run huaweicloud-open-mcp --mock-base http://127.0.0.1:8000  # 自定义 mock 端点基础地址（benchmark 本地 stub 用；环境变量 HUAWEICLOUD_MCP_MOCK_BASE）
+uv run huaweicloud-open-mcp --mock --mock-passthrough   # mock 模式转发 execute 业务参数到端点（环境变量 HUAWEICLOUD_MCP_MOCK_PASSTHROUGH）
+uv run huaweicloud-open-mcp --audit-file /tmp/hwc_audit.jsonl   # 审计事件 NDJSON 落盘（环境变量 HUAWEICLOUD_MCP_AUDIT_FILE）
 uv run huaweicloud-open-mcp --policy configs/safety-policy.example.json  # 指定 safety policy 文件
 uv run huaweicloud-open-mcp --log-level DEBUG  # 日志级别（默认 INFO）；--log-file 指定文件（默认 logs/huaweicloud-open-mcp.log）
 ```
@@ -193,10 +205,10 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | S1 | `signer.sign(request) → Authorization 头` | 纯函数单测 | 华为云官方签名文档示例向量（先收集，不自行推导） |
 | S2 | `safety.evaluate(policy, product, api) → allow/deny` | 纯函数单测 | 手写策略文件 + 预期字面量 |
 | S2b | `safety/policy_store.py` PolicyStore（rules 热重载 / add_rule / remove_rule / text，文件↔内存双向同步） | 单测：tmp 文件注入 + 内容哈希 stat 替身；服务层「拒→add→同实例立即放行」 | 直接回读磁盘原始内容 + `parse_policy` 交叉验证 |
-| S3 | 各工具业务函数 `mcp_openapi.service` / `apie.metadata`（含 manage_policy 编排） | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/） |
-| S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + 单元层 urllib 打桩注入错误（429/4xx/5xx） | mock 端点返回（HTTP 恒 200；`status_code` 非 200 返回空 body） |
+| S3 | 各工具业务函数 `mcp_openapi.service` / `apie.metadata`（含 manage_policy 编排；`_audited` 审计挂钩：7 工具统一记 `{ts, tool, input, ok}` NDJSON，input 为显式入参快照，异常路径记 ok=False） | 单测，迷你样本 fixture；audit sink 以 tmp 文件/内存替身注入 | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/）+ 回读磁盘原始 NDJSON |
+| S4 | `execute_api` HTTP 边界（含 mock passthrough：`--mock-passthrough` 开启时标量→query、body→POST JSON、`_` 控制键剥离，编码对齐 real 模式 HttpClient；默认关保持 API Explorer 契约） | 集成测试直连 mock 端点 + 本地回环 CaptureServer + 单元层 urllib 打桩注入错误（429/4xx/5xx） | mock 端点返回（HTTP 恒 200；`status_code` 非 200 返回空 body）+ 回环 stub 请求台账 |
 | S5 | APIE 管道各阶段转换 + `apie.memory_store` 内存缓存层（set/get/clear/LRU）+ `apie.catalog` 功能接口（内存缓存优先→远端回退决策，monkeypatch `apie.http.fetch_json` 边界） | 纯函数单测 + 迷你样本集成 + `@pytest.mark.e2e` 全量 | Swagger 2.0 schema 校验；monkeypatch 注入 HTTP 响应控制远端回退路径 |
-| S6 | benchmark 纯函数（`benchmarks/cases.py` 加载校验、`scorer.py` 分层评分、`report.py` 统计/基线对比、`trace.py` export/NDJSON 提取 + export JSON info 的 token 读取、`stub_server.py` 本地回环） | 纯函数单测（trace 用 spike 实测格式的迷你 fixture；stub 用回环 HTTP） | 手写字面量 + 独立构造的样例调用序列 |
+| S6 | benchmark 纯函数（`benchmarks/cases.py` 加载校验（含可选 `fixture`/`labels`/`policy` 扩展字段）、`scorer.py` 分层评分 + `event_to_toolcall`（审计事件→trace 输入适配，双消费者：legacy runner 与 harbor verifier）、`report.py` 统计/基线对比、`trace.py` export/NDJSON 提取 + export JSON info 的 token 读取、`stub_server.py` 本地回环、`runner.py build_benchdir_config`（legacy 与 harbor agent 双适配器）、`harbor/exporter.py` render_task 纯核/export_dataset 薄壳、`harbor/conventions.py build_agent_opencode_config`、`harbor/task_templates/stub_server.py` fixture 引擎（resolve_response/append_ledger 纯核 + GET/POST 回环）） | 纯函数单测（trace 用 spike 实测格式的迷你 fixture；stub 用回环 HTTP；exporter 用 mini project_root + 金标字面量） | 手写字面量 + 独立构造的样例调用序列 |
 | S7a | `mcp_discover/catalog.py` 目录加载/搜索/缓存/clear | 纯函数单测，迷你目录 fixture + 注入 CatalogSource | 文件系统状态变化（删除文件后仍缓存命中） |
 | S7b | `safety.evaluate_server(policy, server, tool) → allow/deny` | 纯函数单测，手写字面量矩阵（含向后兼容 product 规则） | 手写策略文件 + 预期字面量 |
 | S7c | `mcp_discover/manager.py` session 注册表 + idle 回收 + LRU | 纯函数单测，注入时钟 | 手写字面量 |
@@ -227,6 +239,9 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 - safety policy 匹配：按文件行序首个命中生效，`product:apiPattern=allow|deny`；MCP discover 扩展 `server:serverId[:toolPattern]=allow|deny`；无匹配默认 deny；无 policy 文件时 execute_api/call_server_tool 全拒。
 - safety policy 热更新（`PolicyStore` + `manage_policy`）：策略文件为唯一真值源，运行期按 stat（mtime/size/inode）热重载，外部编辑即时生效、无需重启；`manage_policy(action=list/add/remove)` 两模式同构，add/remove 先校验再 `tmp+os.replace` 原子写盘并刷新内存，静止态 memory==file；读改写与热重载全段由进程内互斥锁（RLock）串行化，MCP 工具并发派发不丢更新（last-writer-wins 回归测试覆盖）；新 allow 规则自动插到首个会遮蔽它的 deny 规则之前（典型即 `*=deny` 兜底行前）；语义重复 add 幂等不改盘；文件被写坏/短暂消失时沿用最近合法版本记 WARNING，恢复后自动重新采纳；未配置 --policy 时 manage_policy 拒绝且不创建文件；启动时急切加载保留坏文件快速失败。
 - 产品门栓（`Gate`）：openapi 模式产品级白名单，未配置时不限制；配置后未列出产品默认拒；越界产品在 `list_products` 静默隐藏，其余工具返回「不在 openapi mcp 授权范围内」；`execute_api` 先过门栓再过 policy。
+- 审计 NDJSON（`HUAWEICLOUD_MCP_AUDIT_FILE` / `--audit-file`）：service 层 7 个 openapi 工具每次调用经 `AuditSink.record` 追加一行 `{"ts", "tool", "input", "ok"}`（ts ISO8601 UTC 由 sink 注入；input 为显式入参快照不含默认值；ok 缺省视为 true；异常路径记 ok=False 后原样抛出）；best-effort 永不抛出（写失败 WARNING）；事件 payload 契约由 `mcp_openapi.service.build_audit_event` 定义并经 `scorer.event_to_toolcall` 成为 harbor verifier 的 trace 输入源；未配置 sink 时零开销跳过。
+- mock passthrough（`--mock-passthrough` / `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`，默认关）：开启时 `MockApiClient.mock_request(params=...)` 把 execute 业务参数转发到 mock 端点——`_` 前缀控制键剥离、扁平标量→query（bool→`str(v).lower()` 对齐 real 模式 HttpClient，扁平 dict/list→JSON 串）、`params["body"]`→POST JSON body（无 body 保持 GET，`status_code/number/region_id` 三元组不变）；service 只透传原始 params，剥离职责在 `apie/mock.py` 编码层。
+- Harbor 数据集（`datasets/mcp-regression/`，exporter 重建不入库）：任务目录自包含（environment/ 内嵌 hwc 源码树 + stub_server + fixtures.json + policy.json）；task.name=`mcp/<case_id>`；环境 baseline `no-network`、agent 阶段 `public`（LLM 需外网，stub/网关全在容器内 127.0.0.1）；verifier 评分语义全部来自 `benchmarks.scorer`（薄壳只读 `/tmp/hwc_audit.jsonl` + `/tmp/answer.txt` + `/tests/case.yaml`）；case YAML 可选扩展字段 `fixture`（stub 罐头）/`labels`（capability/difficulty，缺省按 expect 推导）/`policy`（per-case policy 覆盖 example）。
 
 ## 文档维护
 
