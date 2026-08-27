@@ -165,8 +165,8 @@ def build_obs_request(op: dict[str, Any], path: str,
                       params: dict[str, Any], doc: dict[str, Any]) -> ObsRequest | str:
     """把用户参数映射为 OBS 请求（bucket/object/query/headers/body）。返回 ObsRequest 或错误描述。
 
-    媒体分流：`_content_b64` → base64 解码字节直发（octet-stream）；body 为 dict/list 时按
-    op consumes 分 JSON / XML；非结构化字符串按原文 octet-stream 发送。
+    媒体分流：body 为 dict/list 时按 op consumes 分 JSON / XML；
+    非结构化字符串按原文 octet-stream 发送。大文件上传走 _presign 预签发 URL（客户端直传）。
     """
     params = dict(params or {})
     declared = {p.get("name"): p for p in (op.get("parameters") or [])
@@ -178,7 +178,6 @@ def build_obs_request(op: dict[str, Any], path: str,
     query: dict[str, Any] = {}
     headers: dict[str, str] = {}
     body_value: Any = params.pop("body", None)
-    content_b64: Any = params.pop("_content_b64", None)
 
     for name, value in list(params.items()):
         if name == "bucket_name":
@@ -222,13 +221,8 @@ def build_obs_request(op: dict[str, Any], path: str,
     if missing:
         return "缺少必填参数: " + "、".join(missing)
 
-    if content_b64 is not None:
-        try:
-            body: str | bytes | None = base64.b64decode(str(content_b64), validate=True)
-        except Exception:
-            return "_content_b64 不是合法的 base64 编码"
-        content_type = "application/octet-stream"
-    elif isinstance(body_value, (dict, list)):
+    body: str | bytes | None
+    if isinstance(body_value, (dict, list)):
         if "application/json" in media:
             body = json.dumps(body_value, ensure_ascii=False)
             content_type = "application/json"
@@ -462,3 +456,52 @@ def execute_obs_api(doc: dict[str, Any], path: str, method: str, op: dict[str, A
     out = _normalize_obs(resp)
     out.update({"ok": True, "product": product, "api": api_name})
     return out
+
+
+# ---------- 预签发 URL 编排（S9f-b） ----------
+
+PRESIGN_DEFAULT_EXPIRES = 900
+
+
+def execute_presign_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
+                        product: str, api_name: str, region: str,
+                        params: dict[str, Any], *,
+                        credentials: Credentials | None) -> ExecuteResult:
+    """预签发 OBS 访问 URL（gateway 只签名，字节流由客户端直连 OBS 完成）。
+
+    `_presign_expires` 有效期秒数（默认 900）；`_presign_content_type` 可锁定 PUT 的
+    Content-Type 参与签名；其余参数按常规 lane 切分桶/对象/白名单 query。
+    本路径零网络请求、零落盘，部署拓扑无关。
+    """
+    logger.info("execute %s:%s region=%s mode=presign", product, api_name, region)
+
+    control = dict(params or {})
+    expires_raw: Any = control.pop("_presign_expires", None)
+    content_type = str(control.pop("_presign_content_type", "") or "")
+    try:
+        expires = int(expires_raw) if expires_raw is not None else PRESIGN_DEFAULT_EXPIRES
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "_presign_expires 必须为正整数秒"}
+    if expires <= 0:
+        return {"ok": False, "reason": "_presign_expires 必须为正整数秒"}
+
+    if not (credentials and credentials.ak and credentials.sk):
+        return {"ok": False, "reason": "_presign 需要可用 AK/SK 凭证（当前环境未配置）"}
+
+    built = build_obs_request(op, path, control, doc)
+    if isinstance(built, str):
+        return {"ok": False, "reason": built}
+
+    host = doc.get("host")
+    if not isinstance(host, str) or not host:
+        return {"ok": False, "reason": "接口元数据缺少 host，无法执行"}
+
+    import time
+    url = obs_sign.sign_obs_url(
+        method.upper(), ak=credentials.ak, sk=credentials.sk, host=host,
+        bucket=built.bucket, object_key=built.object_key, query=built.query,
+        expires=int(time.time()) + expires, virtual_hosted=bool(built.bucket),
+        content_type=content_type,
+    )
+    return {"ok": True, "product": product, "api": api_name,
+            "presign": {"url": url, "method": method.upper(), "expires_in": expires}}

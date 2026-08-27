@@ -223,6 +223,15 @@ class ToolService:
         doc, path, method, op = hit
         params = dict(params or {})
 
+        # 预签发分支：OBS 专用，gateway 只签名不搬运字节；先于 mock/real 分流
+        if params.get("_presign"):
+            if not execute_obs.is_obs(product, doc):
+                return {"ok": False,
+                        "reason": "_presign 仅支持 OBS 产品（其余服务无预签发语义）"}
+            return execute_obs.execute_presign_api(
+                doc, path, method, op, product, api, region, params,
+                credentials=self.config.credentials)
+
         logger.info("execute %s:%s region=%s mode=%s policy=allow",
                     product, api, region,
                     "mock" if self.config.mock else "real")

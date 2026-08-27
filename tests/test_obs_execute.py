@@ -159,27 +159,6 @@ def test_build_obs_request_xml_media_default():
     assert req.content_type == "application/xml"
 
 
-def test_build_obs_request_b64_binary_upload():
-    import base64
-    raw_bytes = b"\x00\x01hello\xff"
-    b64 = base64.b64encode(raw_bytes).decode("ascii")
-    op = {"consumes": ["application/octet-stream"],
-          "parameters": [{"name": "bucket_name", "in": "query"},
-                         {"name": "object_key", "in": "path"}]}
-    req = build_obs_request(op, "/{object_key}",
-                            {"bucket_name": "b", "object_key": "o.bin",
-                             "_content_b64": b64, "body": "ignored"}, {})
-    assert isinstance(req, execute_obs.ObsRequest)
-    assert req.body == raw_bytes
-    assert req.content_type == "application/octet-stream"
-
-
-def test_build_obs_request_invalid_b64_rejected():
-    op = {"parameters": [{"name": "bucket_name", "in": "query"}]}
-    out = build_obs_request(op, "/", {"bucket_name": "b", "_content_b64": "@@not-b64@@"}, {})
-    assert out == "_content_b64 不是合法的 base64 编码"
-
-
 def test_build_obs_request_normalizes_bool_query():
     op = {"parameters": [{"name": "bucket_name", "in": "query"},
                          {"name": "enabled", "in": "query", "type": "boolean"}]}
@@ -370,3 +349,77 @@ def test_obs_http_client_signs():
     client = ObsHttpClient(credentials=None)
     assert client.request("put", "obs.cn-north-4.myhuaweicloud.com",
                           bucket="b", object_key="o", body="x") is not None
+
+
+# ---------- S9f-b 预签发 URL 编排 ----------
+
+PRESIGN_OP_GET = {"parameters": [{"name": "bucket_name", "in": "query", "required": True},
+                                 {"name": "object_key", "in": "path", "required": True}]}
+PRESIGN_DOC = {"host": "obs.cn-north-4.myhuaweicloud.com", "definitions": {}}
+
+
+def test_execute_presign_api_get_object():
+    from common.auth.credentials import Credentials
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "get", PRESIGN_OP_GET, "OBS", "GetObject",
+        "cn-north-4", {"bucket_name": "my-bucket", "object_key": "dir/a b.zip"},
+        credentials=Credentials(ak="CRED-AK", sk="SK-TEST"))
+    assert out["ok"] is True
+    assert out["product"] == "OBS" and out["api"] == "GetObject"
+    ps = out["presign"]
+    assert ps["method"] == "GET" and ps["expires_in"] == 900
+    url = ps["url"]
+    assert url.startswith("https://my-bucket.obs.cn-north-4.myhuaweicloud.com/dir/a%20b.zip?")
+    assert "AccessKeyId=CRED-AK" in url and "Signature=" in url
+    exp = int(url.split("Expires=", 1)[1].split("&", 1)[0])
+    import time as _t
+    assert abs(exp - (_t.time() + 900)) < 5
+
+
+def test_execute_presign_api_custom_expires_and_content_type():
+    from urllib.parse import unquote
+
+    from common.auth.credentials import Credentials
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "put", PRESIGN_OP_GET, "OBS", "PutObject",
+        "cn-north-4", {"bucket_name": "b", "object_key": "u.bin",
+                       "_presign_expires": 60, "_presign_content_type": "text/plain"},
+        credentials=Credentials(ak="AK9", sk="SK9"))
+    assert out["ok"] is True and out["presign"]["method"] == "PUT"
+    assert out["presign"]["expires_in"] == 60
+    url = out["presign"]["url"]
+    expires_epoch = int(url.split("Expires=", 1)[1].split("&", 1)[0])
+    sig = url.rsplit("Signature=", 1)[1]
+    expected_b64 = __import__("base64").b64encode(__import__("hmac").new(
+        b"SK9", b"PUT\n\ntext/plain\n" + str(expires_epoch).encode() +
+        b"\n/b/u.bin", __import__("hashlib").sha1).digest()).decode()
+    assert unquote(sig) == expected_b64   # CT 锁定参与签名（独立公式交叉验证）
+
+
+def test_execute_presign_api_invalid_expires():
+    from common.auth.credentials import Credentials
+    for bad in ("abc", "0", "-5"):
+        out = execute_obs.execute_presign_api(
+            PRESIGN_DOC, "/{object_key}", "get", PRESIGN_OP_GET, "OBS", "GetObject",
+            "cn-north-4", {"bucket_name": "b", "object_key": "o",
+                           "_presign_expires": bad},
+            credentials=Credentials(ak="A", sk="B"))
+        assert out["ok"] is False
+        assert "_presign_expires" in (out.get("reason") or "")
+
+
+def test_execute_presign_api_requires_credentials():
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "get", PRESIGN_OP_GET, "OBS", "GetObject",
+        "cn-north-4", {"bucket_name": "b", "object_key": "o"}, credentials=None)
+    assert out["ok"] is False and "AK/SK" in (out.get("reason") or "")
+
+
+def test_execute_presign_api_missing_object_key_passthrough():
+    from common.auth.credentials import Credentials
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "get", PRESIGN_OP_GET, "OBS", "GetObject",
+        "cn-north-4", {"bucket_name": "b"},
+        credentials=Credentials(ak="A", sk="B"))
+    assert out["ok"] is False
+    assert "object_key" in (out.get("reason") or "")

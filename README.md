@@ -18,6 +18,8 @@ uv run huaweicloud-open-mcp --mock                 # mock 模式：execute_api �
 
 渐进式工作流：`list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`
 
+OBS 大文件上传/下载：`execute_api` 传 `params["_presign"]=true` 预签发访问 URL（`_presign_expires` 默认 900 秒），客户端凭 URL 直连 OBS 完成字节流——部署拓扑无关、不限大小；进度归客户端管理。
+
 ## discover 模式（8 工具）
 
 ```bash

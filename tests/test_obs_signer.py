@@ -111,3 +111,76 @@ def test_signature_vhost_bucket_only_golden():
         virtual_hosted=True,
     )
     assert out["Authorization"] == f"OBS {AK}:7YQzx+sTPCwzCbOvP6EeQivd404="
+
+
+# ---------- URL 中携带签名（S9f-a） ----------
+#
+# 期望信息来源（独立真值）：
+# - StringToSign 结构来自华为云官方文档「URL中携带签名」表4/表5 原文
+#   （Date 位替换为 Expires UNIX 秒时间戳，其余与 Header 方式一致）；
+# - 官方示例未公开对应 SK，签名值按官方公式 Signature = URL-Encode(Base64(HMAC-SHA1(SK, STS)))
+#   由 openssl 口径独立预计算为字面量（printf '<sts>' | openssl dgst -sha1 -hmac 'SecretKey'
+#   -binary | base64），RFC3986 严格编码后写入断言，非被测代码推导。
+
+
+def test_url_string_to_sign_doc_table4_structure():
+    # 官方表4原文：GET /objectkey?...Expires=1532779451...
+    sts = obs.url_string_to_sign("GET", bucket="examplebucket", object_key="objectkey",
+                                 expires=1532779451)
+    assert sts == "GET\n\n\n1532779451\n/examplebucket/objectkey"
+
+
+def test_url_string_to_sign_doc_table5_temp_token():
+    # 官方表5：临时 AK/SK 场景，security-token 作为子资源进入 CanonicalizedResource
+    sts = obs.url_string_to_sign(
+        "GET", bucket="bucket", object_key="objectkey", expires=1532779451,
+        query={"x-obs-security-token": "TOKEN123"},
+    )
+    assert sts == ("GET\n\n\n1532779451\n"
+                   "/bucket/objectkey?x-obs-security-token=TOKEN123")
+
+
+def test_url_signature_goldens():
+    # openssl 金标（SK='SecretKey'）：
+    # A: printf 'GET\n\n\n1532779451\n/examplebucket/objectkey' → S0mZabLxzI3DxNGveZ4kio2q7iQ=
+    # B: printf 'GET\n\n\n1532779451\n/bucket/object.txt?response-content-type=text/plain&versionId=v1'
+    #      → AhHyPOd5z1UVPELdlpJ41b82Mrs=
+    sts_a = obs.url_string_to_sign("GET", bucket="examplebucket", object_key="objectkey",
+                                   expires=1532779451)
+    assert obs.obs_signature(sts_a, SK) == "S0mZabLxzI3DxNGveZ4kio2q7iQ="
+    sts_b = obs.url_string_to_sign(
+        "GET", bucket="bucket", object_key="object.txt", expires=1532779451,
+        query={"versionId": "v1", "response-content-type": "text/plain"},
+    )
+    assert sts_b == ("GET\n\n\n1532779451\n"
+                     "/bucket/object.txt?response-content-type=text/plain&versionId=v1")
+    assert obs.obs_signature(sts_b, SK) == "AhHyPOd5z1UVPELdlpJ41b82Mrs="
+
+
+def test_sign_obs_url_assembles_signed_url():
+    url = obs.sign_obs_url(
+        "GET", ak="AccessKey", sk=SK, host="obs.cn-north-4.myhuaweicloud.com",
+        bucket="bucket", object_key="dir/a b.zip", expires=1532779451,
+        query={"response-content-disposition": "attachment"},
+    )
+    # virtual-hosted 寻址 + 对象名编码 + 子资源在 auth 三参数之前
+    assert url.startswith(
+        "https://bucket.obs.cn-north-4.myhuaweicloud.com/dir/a%20b.zip?")
+    assert ("response-content-disposition=attachment&"
+            "AccessKeyId=AccessKey&Expires=1532779451&Signature=") in url
+    sig = url.rsplit("Signature=", 1)[1]
+    # 金标：STS 为 GET\n\n\n1532779451\n/bucket/dir/a%20b.zip?response-content-disposition=attachment
+    # printf 该串 | openssl dgst -sha1 -hmac 'SecretKey' -binary | base64
+    #   = QM2ROs+zm00rYNkqm7ZBNFYOaH8= → RFC3986 严格编码
+    assert sig == "QM2ROs%2Bzm00rYNkqm7ZBNFYOaH8%3D"
+
+
+def test_sign_obs_url_put_with_content_type():
+    url = obs.sign_obs_url(
+        "PUT", ak="AccessKey", sk=SK, host="obs.example.com",
+        bucket="bucket", object_key="upload.bin", expires=1532779451,
+        content_type="text/plain",
+    )
+    assert url == (
+        "https://bucket.obs.example.com/upload.bin?"
+        "AccessKeyId=AccessKey&Expires=1532779451&Signature=IJjth67l56ui0skXKWNveY7Gbks%3D")

@@ -446,3 +446,72 @@ def test_manage_policy_list_and_errors(tmp_path):
     assert listed["ok"] is True and "ECS:*List*=allow" in listed["policy"]
     assert svc.manage_policy("grant", line="ECS:*=allow")["ok"] is False   # 未知 action
     assert svc.manage_policy("add")["ok"] is False                         # 缺 line
+
+
+# ---------- _presign 预签发分支（S9f-b service 级） ----------
+
+OBS_DOC = {
+    "swagger": "2.0", "host": "obs.cn-north-4.myhuaweicloud.com", "basePath": "/",
+    "paths": {"/{object_key}": {"get": {"operationId": "GetObject",
+                                        "parameters": [
+                                            {"name": "bucket_name", "in": "query",
+                                             "required": True},
+                                            {"name": "object_key", "in": "path",
+                                             "required": True}],
+                                        "responses": {"200": {"description": "OK"}}}}},
+    "definitions": {},
+}
+
+
+def _prep_obs_store():
+    store = MemoryStore()
+    store.set_products([{"name": "存储", "products": [
+        {"productshort": "OBS", "name": "对象存储", "api_count": 1,
+         "is_global": False, "link": None}]}])
+    store.set_apis("OBS", [{"name": "GetObject", "method": "get", "summary": "下载对象",
+                            "tags": "对象操作", "product_short": "OBS",
+                            "info_version": "v1"}])
+    store.set_api_cache(("obs", "GetObject", "cn-north-4"),
+                        (OBS_DOC, "/{object_key}", "get",
+                         OBS_DOC["paths"]["/{object_key}"]["get"]))
+    return store
+
+
+def test_presign_non_obs_product_refused():
+    from common.auth.credentials import Credentials
+    svc = ToolService(store=_prep_store(products=False, apis=False),
+                      config=ServiceConfig(credentials=Credentials(ak="A", sk="B"),
+                                           policy_rules=_policy("ECS:*=allow")))
+    out = svc.execute_api("ECS", "ListServersDetails", params={"_presign": True})
+    assert out["ok"] is False
+    assert "_presign 仅支持 OBS" in (out.get("reason") or "")
+
+
+def test_presign_flow_after_policy_grant(tmp_path):
+    """拒（未授权）→ manage_policy 加规则 → 同实例立即产出预签发 URL（无网络调用）。"""
+    import json as _json
+
+    from common.auth.credentials import Credentials
+    from safety.policy_store import PolicyStore
+
+    p = tmp_path / "policy.json"
+    p.write_text(_json.dumps(["*=deny"]), encoding="utf-8")
+    svc = ToolService(
+        store=_prep_obs_store(),
+        config=ServiceConfig(policy_store=PolicyStore(str(p)),
+                             credentials=Credentials(ak="CRED-AK", sk="SK-TEST")))
+
+    out = svc.execute_api("OBS", "GetObject",
+                          params={"bucket_name": "bkt", "object_key": "k.txt",
+                                  "_presign": True})
+    assert out["ok"] is False and "safety policy 拒绝执行" in (out.get("reason") or "")
+
+    assert svc.manage_policy("add", "OBS:GetObject=allow")["ok"] is True
+
+    out2 = svc.execute_api("OBS", "GetObject",
+                           params={"bucket_name": "bkt", "object_key": "k.txt",
+                                   "_presign": True, "_presign_expires": 300})
+    assert out2["ok"] is True and out2["presign"]["method"] == "GET"
+    assert out2["presign"]["expires_in"] == 300
+    assert "AccessKeyId=CRED-AK&Expires=" in out2["presign"]["url"]
+    assert out2["presign"]["url"].startswith("https://bkt.obs.cn-north-4.myhuaweicloud.com/k.txt?")

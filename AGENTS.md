@@ -63,8 +63,8 @@
 | `data/openapi/` | 管道产物：`{Product}/{Tag}.json` OpenAPI 2.0 文档；MCP server 不依赖此目录 | `api-refresh`（split→convert→merge→organize） | 是 |
 | `src/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端）+ `memory_store.py` 纯内存缓存 + `catalog.py` 远端优先功能接口（缓存命中直接返回，未命中实时拉取） | — | — |
 | `src/mcp_openapi/signer/` | SDK-HMAC-SHA256 签名 + 真实模式 HTTP 客户端（超时/429 退避/错误解析） | — | — |
-| `src/mcp_openapi/signer/obs.py` | OBS Header 签名（HMAC-SHA1）：`Authorization: OBS AK:Signature`，CanonicalizedResource/子资源白名单/对象名编码，对齐官方 Go SDK | — | — |
-| `src/mcp_openapi/execute_obs.py` | OBS 执行 lane：`is_obs` 路由谓词 + 桶寻址（带桶 virtual-hosted/无桶端点根）+ consumes 三态 body 分流（json/xml/octet-stream）+ 开关型子资源自动补全 + `Content-MD5` 自动计算 + dict→XML 序列化（根元素经转换管线 `x-xml-root` 保留）+ XML `<Error>` 解析 + 二进制响应占位 + `ObsHttpClient` 适配器 + 编排 | — | — |
+| `src/mcp_openapi/signer/obs.py` | OBS Header 签名（HMAC-SHA1）：`Authorization: OBS AK:Signature`，CanonicalizedResource/子资源白名单/对象名编码，对齐官方 Go SDK；含预签发 URL 口径 `url_string_to_sign`/`sign_obs_url`（Expires 替换 Date 位） | — | — |
+| `src/mcp_openapi/execute_obs.py` | OBS 执行 lane：`is_obs` 路由谓词 + 桶寻址（带桶 virtual-hosted/无桶端点根）+ consumes 三态 body 分流（json/xml/octet-stream）+ 开关型子资源自动补全 + `Content-MD5` 自动计算 + dict→XML 序列化（根元素经转换管线 `x-xml-root` 保留）+ XML `<Error>` 解析 + 二进制响应占位 + `_presign` 预签发编排（零字节搬运）+ `ObsHttpClient` 适配器 + 编排 | — | — |
 | `src/common/auth/` | 凭证加载（env/profile，project_id 自动获取） | — | — |
 | `src/safety/` | safety policy 解析与匹配（PolicyRule 含 kind=product/server；支持 `product:apiPattern=` 与 `server:serverId[:toolPattern]=` 两种规则前缀）+ `policy_store.py` PolicyStore（策略状态层：文件↔内存双向同步、mtime 热重载、原子落盘，供 manage_policy 与运行时热更新共用） | — | — |
 | `src/mcp_openapi/` | openapi 模式（metadata/execute 纯函数 + `gate.py` 产品门栓 + service 编排层 + server 装配；配置/客户端工厂注入；元数据加载委托 apie.catalog） | — | — |
@@ -207,19 +207,21 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | S9c | 桶/对象寻址（`build_obs_request` 参数切分 + `build_obs_url` path-style URL） | 纯函数单测 | 手写 URL/参数字面量 |
 | S9d | OBS XML `<Error>` 解析（`parse_obs_error`） | 纯函数单测 | 手写 `<Error>` 片段 |
 | S9e | `is_obs` 路由谓词 + `execute_obs_api` 编排 + `ObsHttpClient` 签名发送 + `service` OBS 分派 | 单测注入 OBS client 工厂 | 手写字面量 + 注入 client |
+| S9f | 预签发 URL（`signer.obs.url_string_to_sign` / `sign_obs_url` / `build_presign_base` + `execute_presign_api` 编排 + service `_presign` 分派与热更新协同） | 纯函数单测 + service 注入凭证 | 官方《URL中携带签名》表4/5 结构原文 + openssl 口径金标 |
 
 分层与纪律：
 
 - **单元测试**（`tests/test_signer.py`、`tests/test_obs_signer.py`、`tests/test_obs_execute.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`、`tests/test_gate.py`、`tests/test_bench_*.py`、`tests/test_mcp_discover_*.py`）：纯函数，不联网、不碰真实数据；service 层用 monkeypatch HTTP 注入 + 客户端工厂注入。
 - **集成测试**（`tests/test_execute_mock.py`：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名；`tests/test_execute_mcp_mock.py`：真 mcp SDK client → 本地 MCP stub 回环 HTTP，覆盖 Streamable HTTP 协议全链路）。
-- **E2E 测试**（`tests/test_e2e.py`：真实 AK/SK 只读调用；`tests/test_obs_e2e.py`：OBS 只读 ListBuckets + 错误签名拒绝；`tests/test_workflow_e2e.py`：openapi 渐进式工作流全链，真实 API Explorer 远端数据；`tests/test_workflow_obs_e2e.py`：OBS 全链路 real 模式，元数据 live 回退 + 临时桶自清理式写链路（CreateBucket/SetBucketTagging/PutObject 文本与 `_content_b64`/GetObject 二进制占位，finally 删除对象/标签/桶）；`tests/test_workflow_discover_e2e.py`：discover 渐进式工作流全链，mock 模式 + 本地 MCP stub 回环，无外网依赖）：标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。E2E 红线为「只读 + 自清理临时资源」——写操作仅允许走带唯一前缀的临时桶并在 finally 清理。。
+- **E2E 测试**（`tests/test_e2e.py`：真实 AK/SK 只读调用；`tests/test_obs_e2e.py`：OBS 只读 ListBuckets + 错误签名拒绝；`tests/test_workflow_e2e.py`：openapi 渐进式工作流全链，真实 API Explorer 远端数据；`tests/test_workflow_obs_e2e.py`：OBS 全链路 real 模式，元数据 live 回退 + 临时桶自清理式写链路（CreateBucket/SetBucketTagging/PutObject 文本/GetObject 读回/_presign 预签发 URL 客户端直连 PUT-GET-过期负路径，finally 删除对象/标签/桶）；`tests/test_workflow_discover_e2e.py`：discover 渐进式工作流全链，mock 模式 + 本地 MCP stub 回环，无外网依赖）：标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。E2E 红线为「只读 + 自清理临时资源」——写操作仅允许走带唯一前缀的临时桶并在 finally 清理。。
 - red→green 垂直切片，禁止先写全部测试再写实现；禁止 mock 自有模块；期望值禁止用被测代码同法重算。
 
 ## 校验规则（必须满足）
 
 - `data/openapi/` 全部文档通过 Swagger 2.0 schema 校验（valid 0 invalid）；转换修复规则与 apis 项目一致（consumes 字符串→数组、components→definitions、path 参数 required、3.0 字段清理、enum 去重等）。
 - 签名实现必须通过官方文档测试向量；不得自行推导期望签名值。OBS 用 `Authorization: OBS AK:Signature`（HMAC-SHA1），StringToSign 结构对齐官方文档「Header中携带签名」与官方 Go SDK（obs/authV2.go），子资源白名单以官方 SDK `allowedResourceParameterNames` 为准；virtual-hosted 寻址下 CanonicalizedResource 桶名后恒带 `/`。
-- OBS 执行 lane 约定：带桶 virtual-hosted、无桶端点根（URL 恒带根路径 `/`）；body 按 op consumes 分流 json/xml/octet-stream；XML 根元素经转换管线把 `xml.name` 提升为 `x-xml-root` 保留并注入官方命名空间；带 body 的写请求自动补 `Content-MD5`；元数据中 required 空值型子资源（tagging/acl/lifecycle 等开关）缺失时自动补 `""`；二进制上传走 `params["_content_b64"]`；成功响应透出白名单头（ETag/x-obs-request-id 等）。
+- OBS 执行 lane 约定：带桶 virtual-hosted、无桶端点根（URL 恒带根路径 `/`）；body 按 op consumes 分流 json/xml/octet-stream；XML 根元素经转换管线把 `xml.name` 提升为 `x-xml-root` 保留并注入官方命名空间；带 body 的写请求自动补 `Content-MD5`；元数据中 required 空值型子资源（tagging/acl/lifecycle 等开关）缺失时自动补 `""`；成功响应透出白名单头（ETag/x-obs-request-id 等）。
+- OBS 预签发 URL（`_presign`，S9f）：大文件上传/下载不经 gateway —— params 传 `_presign=true` 时 gate/policy 判定后仅签发访问 URL（`presign.url/method/expires_in`），客户端直连 OBS 收发字节，部署拓扑无关且不限大小；`_presign_expires` 相对秒数默认 900（换算 epoch 入签名 Date 位）、`_presign_content_type` 可锁定 PUT 类型；StringToSign 与 Header 方式唯一差异为 Expires 替换 Date 位，auth 三参数（AccessKeyId/Expires/Signature）不入签，签名值 RFC3986 严格编码；独立真值为官方《URL中携带签名》表4/5 结构原文 + openssl 口径金标；非 OBS 产品传 `_presign` 显式拒绝；二进制 GetObject 不带 `_presign` 时仍返回占位摘要；进度归客户端宿主能力，gateway 无感知。
 - `execute_api` 响应规范化：错误统一转为结构化输出（`error_code`/`error_msg`/HTTP 状态），429 退避重试，响应体积超限截断。
 - safety policy 匹配：按文件行序首个命中生效，`product:apiPattern=allow|deny`；MCP discover 扩展 `server:serverId[:toolPattern]=allow|deny`；无匹配默认 deny；无 policy 文件时 execute_api/call_server_tool 全拒。
 - safety policy 热更新（`PolicyStore` + `manage_policy`）：策略文件为唯一真值源，运行期按 stat（mtime/size/inode）热重载，外部编辑即时生效、无需重启；`manage_policy(action=list/add/remove)` 两模式同构，add/remove 先校验再 `tmp+os.replace` 原子写盘并刷新内存，静止态 memory==file；新 allow 规则自动插到首个会遮蔽它的 deny 规则之前（典型即 `*=deny` 兜底行前）；语义重复 add 幂等不改盘；文件被写坏/短暂消失时沿用最近合法版本记 WARNING，恢复后自动重新采纳；未配置 --policy 时 manage_policy 拒绝且不创建文件；启动时急切加载保留坏文件快速失败。

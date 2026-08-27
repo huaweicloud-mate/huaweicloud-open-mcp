@@ -62,7 +62,8 @@ def test_execute_api_output_schema_optional_fields_nullable():
     # outputSchema 必须允许 null，否则客户端严格校验报 -32602。
     app = build_app()
     schema = app._tool_manager._tools["execute_api"].output_schema
-    for field in ("reason", "status", "truncated", "error_code", "error_msg", "product", "api"):
+    for field in ("reason", "status", "truncated", "error_code", "error_msg",
+                  "product", "api", "presign"):
         prop = schema["properties"][field]
         assert any(opt.get("type") == "null" for opt in prop.get("anyOf", []))
 

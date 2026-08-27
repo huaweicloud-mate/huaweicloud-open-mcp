@@ -28,6 +28,15 @@ class ExecuteResult(TypedDict, total=False):
     product: str | None
     api: str | None
     headers: dict[str, str] | None
+    presign: "PresignInfo | None"
+
+
+class PresignInfo(TypedDict):
+    """预签发 URL 信封：客户端直连 OBS 的全部信息，字节流不经过 gateway。"""
+
+    url: str
+    method: str
+    expires_in: int
 
 
 class ToolError(TypedDict):

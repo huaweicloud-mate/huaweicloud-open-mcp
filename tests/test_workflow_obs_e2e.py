@@ -7,7 +7,7 @@
 ① get_api 读文档 → ② execute_api(ListBuckets) 真实签名
 → ③ 临时桶自清理写链路：CreateBucket(XML body) → SetBucketTagging(嵌套 XML)
    → GetBucketTagging(子资源) → PutObject 文本(ETag 头摘取)
-   → PutObject _content_b64 + GetObject 二进制占位
+   → GetObject 文本读回 + _presign 预签发 URL
    → finally 删除对象/标签/桶（失败也执行）
 → ④ policy 拒绝白名单外接口。
 
@@ -15,12 +15,13 @@
 标 e2e（默认跳过），用 `uv run pytest tests/test_workflow_obs_e2e.py -m e2e` 运行。
 """
 
-import base64
 import json
 import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -169,24 +170,16 @@ def test_obs_write_chain_with_cleanup(session):
         assert r.get("headers", {}).get("etag"), f"缺少 ETag 头: {r}"
         created_objects.append("hello.txt")
 
-        # ⑤ b64 字节上传 + GetObject 二进制占位（size/content_type 准确）
-        raw = b"\x00\x01obs\xffbin"
-        r = call("PutObject", {"bucket_name": bucket, "object_key": "blob.bin",
-                               "_content_b64": base64.b64encode(raw).decode()})
-        ok2xx(r, "PutObject b64")
-        created_objects.append("blob.bin")
-
-        r = call("GetObject", {"bucket_name": bucket, "object_key": "blob.bin"})
-        ok2xx(r, "GetObject 二进制")
-        body = r["body"]
-        assert isinstance(body, dict) and body.get("note") == "二进制响应未渲染", \
-            f"二进制应返回占位而非乱码: {body}"
-        assert body.get("size") == len(raw)
-
-        # ⑥ 文本对象可正常读回
+        # ⑤ 文本对象可正常读回
         r = call("GetObject", {"bucket_name": bucket, "object_key": "hello.txt"})
         assert r.get("ok") is True and r.get("status") == 200 and \
             r["body"] == "hello-mcp-e2e"
+
+        # ⑥ 预签发 URL 直传直拉（客户端侧字节流，见 S9f-c 用例）
+        r = call("GetObject", {"bucket_name": bucket, "object_key": "hello.txt",
+                               "_presign": True})
+        assert r.get("ok") is True and r.get("presign", {}).get("url"), f"预签发失败: {r}"
+        assert r["presign"]["method"] == "GET"
     finally:
         _cleanup()
 
@@ -198,3 +191,61 @@ def test_obs_execute_api_outside_whitelist_denied(session):
                                       "uploadId": "u"}})
     assert result["ok"] is False
     assert "policy" in result["reason"]
+
+
+def test_obs_presign_roundtrip_with_cleanup(session):
+    """预签发 URL 全链路：gateway 只签名，客户端（本测试进程）urllib 直连 OBS 收发字节。
+
+    上传：presigned PUT → 下载：presigned GET，ETag/内容交叉校验；finally 自清理。
+    同时验证部署拓扑无关性——字节流不经过 MCP server 进程。
+    """
+    bucket = f"mcp-e2e-presign-{int(time.time())}"
+    key = "presign/payload.bin"
+    payload = b"\x00\x01presign\xffroundtrip" * 1024  # ~29KB 二进制
+
+    def call(api: str, params: dict) -> dict:
+        return session.tool("execute_api",
+                            {"product": "OBS", "api": api, "params": params})
+
+    assert call("CreateBucket", {"bucket_name": bucket,
+                                 "body": {"Location": "cn-north-4"}})["status"] == 200
+
+    def cleanup():
+        call("DeleteObject", {"bucket_name": bucket, "object_key": key})
+        call("DeleteBucket", {"bucket_name": bucket})
+
+    try:
+        # 上传：签发 PUT URL 后客户端直传（Content-Type 与签名锁定一致）
+        r = call("PutObject", {"bucket_name": bucket, "object_key": key,
+                               "_presign": True, "_presign_expires": 600,
+                               "_presign_content_type": "application/octet-stream"})
+        assert r["ok"] is True and r["presign"]["method"] == "PUT"
+        req = urllib.request.Request(r["presign"]["url"], data=payload, method="PUT",
+                                     headers={"Content-Type": "application/octet-stream"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            etag = resp.headers.get("ETag", "").strip('"')
+        assert etag, "上传响应缺 ETag"
+
+        # 下传：签发 GET URL 后客户端拉回比对；ETag 应与本地 MD5 一致
+        r = call("GetObject", {"bucket_name": bucket, "object_key": key,
+                               "_presign": True})
+        assert r["ok"] is True and r["presign"]["method"] == "GET"
+        with urllib.request.urlopen(r["presign"]["url"], timeout=60) as resp:
+            got = resp.read()
+        assert got == payload, "回读内容不一致"
+        md5_hex = __import__("hashlib").md5(got).hexdigest()
+        assert md5_hex == etag, f"MD5({md5_hex}) != ETag({etag})"
+
+        # 过期语义：URL 有效期 now+1s，等待后再访问必须 HTTP 错误（负路径）
+        r = call("GetObject", {"bucket_name": bucket, "object_key": key,
+                               "_presign": True, "_presign_expires": 1})
+        expired_url = r["presign"]["url"]
+        time.sleep(3)
+        try:
+            with urllib.request.urlopen(expired_url, timeout=30) as resp:
+                resp.read()
+            raise AssertionError("过期 URL 不应成功")
+        except urllib.error.HTTPError:
+            pass
+    finally:
+        cleanup()
