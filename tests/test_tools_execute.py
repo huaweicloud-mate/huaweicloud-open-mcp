@@ -110,3 +110,103 @@ def test_execute_allow_calls_client(mini_detail):
     assert out["ok"] is True
     assert out["status"] == 200
     assert client.calls[0][0] == "GET"
+
+
+# ---------- validate_params（OpenAPI 元数据校验，policy 接缝） ----------
+
+def _op(*params):
+    return {"operationId": "X", "parameters": list(params)}
+
+
+PATH_P = {"name": "project_id", "in": "path", "type": "string", "required": True}
+
+
+def test_validate_params_ok_passthrough():
+    op = _op(PATH_P, {"name": "limit", "in": "query", "type": "integer"})
+    assert execute.validate_params({}, "/v1/{project_id}/x", op,
+                                   {"project_id": "p", "limit": 5}, None) is None
+
+
+def test_validate_params_path_not_checked():
+    """路径校验归 real lane（build_request）：mock URL 无 path，validate_params 不查。"""
+    assert execute.validate_params({}, "/v1/{project_id}/x", _op(PATH_P), {}, None) is None
+
+
+def test_validate_params_path_filled_by_credentials():
+    assert execute.validate_params({}, "/v1/{project_id}/x", _op(PATH_P), {},
+                                   Credentials(ak="A", sk="S", project_id="proj123")) is None
+
+
+def test_validate_params_query_required_missing():
+    op = _op({"name": "status", "in": "query", "type": "string", "required": True})
+    err = execute.validate_params({}, "/x", op, {}, None)
+    assert err is not None and "缺少必填" in err and "status" in err
+
+
+def test_validate_params_query_type_strict():
+    op = _op({"name": "limit", "in": "query", "type": "integer"})
+    assert execute.validate_params({}, "/x", op, {"limit": 100}, None) is None
+    err = execute.validate_params({}, "/x", op, {"limit": "100"}, None)
+    assert err is not None and "integer" in err and "100" in err
+    # bool 陷阱：True 不是合法 integer
+    err = execute.validate_params({}, "/x", op, {"limit": True}, None)
+    assert err is not None and "integer" in err
+
+
+def test_validate_params_query_number_boolean_string():
+    op = _op({"name": "w", "in": "query", "type": "number"},
+             {"name": "dry", "in": "query", "type": "boolean"},
+             {"name": "name", "in": "query", "type": "string"})
+    assert execute.validate_params({}, "/x", op,
+                                   {"w": 1.5, "dry": True, "name": "vm"}, None) is None
+    assert execute.validate_params({}, "/x", op, {"w": True}, None) is not None
+    assert execute.validate_params({}, "/x", op, {"dry": "true"}, None) is not None
+    assert execute.validate_params({}, "/x", op, {"name": 123}, None) is not None
+
+
+def test_validate_params_query_enum():
+    op = _op({"name": "status", "in": "query", "type": "string",
+              "enum": ["ACTIVE", "SHUTOFF"]})
+    assert execute.validate_params({}, "/x", op, {"status": "ACTIVE"}, None) is None
+    err = execute.validate_params({}, "/x", op, {"status": "BAD"}, None)
+    assert err is not None and "ACTIVE" in err and "BAD" in err
+
+
+def test_validate_params_control_keys_and_undeclared_lenient():
+    op = _op({"name": "limit", "in": "query", "type": "integer"})
+    assert execute.validate_params({}, "/x", op,
+                                   {"_status_code": 400, "foo": "bar"}, None) is None
+
+
+def test_validate_params_header_required_only():
+    op = _op({"name": "X-Trace", "in": "header", "type": "string", "required": True})
+    assert execute.validate_params({}, "/x", op, {"X-Trace": 123}, None) is None
+    err = execute.validate_params({}, "/x", op, {}, None)
+    assert err is not None and "缺少必填" in err
+
+
+def test_validate_params_body_required_field_missing():
+    doc = {"definitions": {"keypair": {
+        "type": "object", "required": ["name"],
+        "properties": {"name": {"type": "string"}, "key_file": {"type": "string"}}}}}
+    op = _op({"name": "body", "in": "body", "required": True,
+              "schema": {"$ref": "#/definitions/keypair"}})
+    err = execute.validate_params(doc, "/x", op, {"body": {"key_file": "k"}}, None)
+    assert err is not None and "name" in err
+    assert execute.validate_params(doc, "/x", op, {"body": {"name": "my-key"}}, None) is None
+
+
+def test_validate_params_body_type_error():
+    op = _op({"name": "body", "in": "body",
+              "schema": {"type": "object", "properties": {"count": {"type": "integer"}}}})
+    err = execute.validate_params({}, "/x", op, {"body": {"count": "x"}}, None)
+    assert err is not None and "body" in err
+
+
+def test_validate_params_body_absent():
+    op = _op({"name": "body", "in": "body", "schema": {"type": "object"}})
+    assert execute.validate_params({}, "/x", op, {}, None) is None
+    op_required = _op({"name": "body", "in": "body", "required": True,
+                       "schema": {"type": "object"}})
+    err = execute.validate_params({}, "/x", op_required, {}, None)
+    assert err is not None and "缺少必填 body" in err

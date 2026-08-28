@@ -585,3 +585,75 @@ def test_object_data_apis_auto_presign_without_flag(api, method):
     # 信封透出签名口径：缺省空 CT，headers 照抄清单为空
     assert out["presign"]["signed_content_type"] == ""
     assert out["presign"]["headers"] == {}
+
+
+# ---------- schema 校验接线（mock/real 共享，OBS 跳过） ----------
+
+def test_execute_mock_schema_reject_bad_params():
+    """query 类型不符 → ok=false + 可操作 reason，mock client 未被调。"""
+    store = _prep_store(products=False, apis=False)
+    mock_client = StubMockClient()
+    service = ToolService(store=store, config=ServiceConfig(
+        mock=True, policy_rules=_policy("ECS:*=allow"),
+        mock_client_factory=lambda: mock_client))
+    out = service.execute_api("ECS", "ListServersDetails", params={"limit": "100"})
+    assert out["ok"] is False
+    assert "limit" in (out["reason"] or "")
+    assert mock_client.calls == []
+
+
+def test_execute_mock_schema_reject_missing_required():
+    """FULL_DOC 的路径参数 project_id 由凭证填充；构造缺 required query 的场景。"""
+    store = MemoryStore()
+    doc = {
+        "swagger": "2.0", "host": "ecs.cn-north-4.myhuaweicloud.com", "basePath": "/",
+        "definitions": {},
+        "paths": {"/v1/{project_id}/servers": {"get": {
+            "operationId": "ListByStatus",
+            "parameters": [
+                {"name": "project_id", "in": "path", "type": "string", "required": True},
+                {"name": "status", "in": "query", "type": "string", "required": True,
+                 "enum": ["ACTIVE", "SHUTOFF"]},
+            ],
+            "responses": {"200": {"description": "OK"}},
+        }}},
+    }
+    store.set_api_cache(("ecs", "ListByStatus", "cn-north-4"),
+                        (doc, "/v1/{project_id}/servers", "get", doc["paths"]["/v1/{project_id}/servers"]["get"]))
+    mock_client = StubMockClient()
+    service = ToolService(store=store, config=ServiceConfig(
+        mock=True, policy_rules=_policy("ECS:*=allow"),
+        mock_client_factory=lambda: mock_client))
+    out = service.execute_api("ECS", "ListByStatus", params={})
+    assert out["ok"] is False
+    assert "status" in (out["reason"] or "")
+    assert mock_client.calls == []
+    out = service.execute_api("ECS", "ListByStatus", params={"status": "BAD"})
+    assert out["ok"] is False and "ACTIVE" in (out["reason"] or "")
+
+
+def test_execute_real_schema_reject_bad_params():
+    store = _prep_store(products=False, apis=False)
+    http_client = StubHttpClient()
+    service = ToolService(store=store, config=ServiceConfig(
+        policy_rules=_policy("ECS:*=allow"),
+        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"),
+        http_client_factory=lambda: http_client))
+    out = service.execute_api("ECS", "ListServersDetails", params={"limit": "many"})
+    assert out["ok"] is False
+    assert http_client.calls == []
+
+
+def test_execute_obs_bypasses_schema_validation():
+    """OBS lane（XML body/自身参数切分）不做 OpenAPI 元数据校验。"""
+    store = _prep_obs_store()
+    obs_client = StubObsClient()
+    service = ToolService(store=store, config=ServiceConfig(
+        policy_rules=_policy("OBS:*=allow"),
+        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"),
+        obs_client_factory=lambda: obs_client))
+    # versionId 声明为 query string，传 int——若误走校验将拒绝
+    out = service.execute_api("OBS", "GetObject",
+                              params={"bucket_name": "b", "object_key": "obj",
+                                      "versionId": 3})
+    assert out["ok"] is True

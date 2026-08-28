@@ -291,6 +291,15 @@ class ToolService:
                 doc, path, method, op, product, api, region, params,
                 credentials=self.config.credentials)
 
+        # OpenAPI 元数据 schema 校验（policy 接缝）：mock/real 共享；
+        # OBS lane（XML body/自身参数切分）不适用，跳过
+        if not execute_obs.is_obs(product, doc):
+            err = execute.validate_params(doc, path, op, params,
+                                          self.config.credentials)
+            if err:
+                logger.warning("execute %s:%s schema=reject reason=%s", product, api, err)
+                return {"ok": False, "reason": err}
+
         logger.info("execute %s:%s region=%s mode=%s policy=allow",
                     product, api, region,
                     "mock" if self.config.mock else "real")
