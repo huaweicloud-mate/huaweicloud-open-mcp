@@ -12,7 +12,7 @@ import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-CASE_FILE = Path("/tests/case.yaml")
+CASE_FILE = Path("/solution/case.yaml")  # tests/ 仅 verifier 阶段上传，oracle 用 solution 内副本
 ANSWER_FILE = Path("__ANSWER_FILE__")
 MCP_COMMAND = "__MCP_COMMAND__"
 

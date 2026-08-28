@@ -25,6 +25,9 @@ def build_agent_opencode_config() -> dict:
 
     与 legacy runner 的 build_benchdir_config 同构；差异仅在 MCP 命令形态：
     容器内指向约定的 start_mcp.sh（stub 端口 / policy / audit 均已固化其中）。
+    permission 通配 allow：无头环境无人审批，instruction 要求 agent 写
+    /tmp/answer.txt（write 工具）；评测容器一次性，权限放开风险可控。
+    注意：opencode 1.18 的 edit/write 细粒度键不生效，须用通配 "*"。
     """
     return {
         "$schema": "https://opencode.ai/config.json",
@@ -37,5 +40,5 @@ def build_agent_opencode_config() -> dict:
                 "enabled": True,
             },
         },
-        "permission": {"huaweicloud-open-mcp_*": "allow"},
+        "permission": {"*": "allow"},
     }

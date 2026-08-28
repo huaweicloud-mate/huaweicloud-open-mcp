@@ -21,6 +21,9 @@ benchmarks/results/
 
 # Harbor 数据集（exporter 从 case 模板重建，不入库）
 datasets/
+
+# harbor run 运行产物（trial 结果/日志，不入库）
+jobs/
 !benchmarks/results/baseline-*.json
 
 # 中间产物

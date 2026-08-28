@@ -1,0 +1,5 @@
+# Harbor compose 覆盖：base 模板的 command 是 `sleep infinity`（不会执行镜像 CMD），
+# 必须在此覆盖为启动 stub 的入口（stub 后台 + 前台保活）
+services:
+  main:
+    command: ["bash", "/opt/hwc/start_services.sh"]

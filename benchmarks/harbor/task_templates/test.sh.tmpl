@@ -1,5 +1,27 @@
 #!/bin/bash
-# Harbor verifier 入口：容器内执行，评分语义全部来自 benchmarks.scorer（双消费者）
-set -euo pipefail
+# Harbor verifier 入口：pytest 分项断言 → reward = 通过项/(通过+失败)（skip 不计）。
+# 评分语义全部来自 benchmarks.scorer（与 legacy runner 同源，双消费者）。
+# Harbor 契约：reward 必须落 /logs/verifier/reward.txt（挂载自 trial verifier 目录）。
+set -uo pipefail
+# benchmarks 包（scorer/cases）不在项目 wheel packages 里，显式注入路径
+export PYTHONPATH=/opt/hwc
 cd /opt/hwc
-uv run --frozen python -m pytest /tests/test_outputs.py -rA -v
+
+python -m pytest /tests/test_outputs.py -q --junitxml=/tmp/junit.xml -p no:cacheprovider
+
+python - <<'PYEOF'
+import xml.etree.ElementTree as ET
+
+root = ET.parse("/tmp/junit.xml").getroot()
+suite = root if root.tag == "testsuite" else root.find("testsuite")
+total = int(suite.get("tests", "0"))
+failed = int(suite.get("failures", "0")) + int(suite.get("errors", "0"))
+skipped = int(suite.get("skipped", "0"))
+scored = total - skipped
+reward = (scored - failed) / scored if scored > 0 else 0.0
+with open("/logs/verifier/reward.txt", "w") as f:
+    f.write(f"{reward:.4f}\n")
+print(f"reward={reward:.4f} scored={scored} failed={failed} skipped={skipped}")
+PYEOF
+
+exit 0

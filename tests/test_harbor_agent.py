@@ -12,7 +12,7 @@ def test_agent_opencode_config_registers_gateway_with_conventions():
     entry = cfg["mcp"]["huaweicloud-open-mcp"]
     assert entry == {"type": "local", "command": [conv.MCP_COMMAND],
                      "cwd": conv.HWC_DIR, "enabled": True}
-    assert cfg["permission"] == {"huaweicloud-open-mcp_*": "allow"}
+    assert cfg["permission"] == {"*": "allow"}
     assert cfg["tool_output"]["max_lines"] == 50000
 
 

@@ -2,12 +2,32 @@ FROM python:3.12-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /uvx /usr/local/bin/
 
-WORKDIR /opt/hwc
-COPY hwc/ /opt/hwc/
+# pypi.org 直连极慢：依赖经华为云镜像源安装；运行期不依赖 uv（无网络下载）
+ENV UV_DEFAULT_INDEX=https://mirrors.huaweicloud.com/repository/pypi/simple \
+    UV_HTTP_TIMEOUT=300 \
+    UV_CONCURRENT_DOWNLOADS=2
 
-# 项目 + dev 依赖（pytest 等 verifier 需要），mcp 依赖在 build 期从 pypi 拉取
-RUN uv sync --frozen --all-groups \
+WORKDIR /opt/hwc
+# hwc/：项目源码树；根级文件：stub/启动脚本/fixtures/policy（start_services 引用 /opt/hwc 下）
+COPY hwc/ /opt/hwc/
+COPY stub_server.py fixtures.json policy.json start_mcp.sh start_services.sh /opt/hwc/
+
+# 依赖（含 dev 组：pytest 等 verifier 需要）+ 项目本体
+RUN uv export --frozen --all-groups --no-hashes --no-emit-project -o /tmp/req.txt \
+    && pip install --no-cache-dir -r /tmp/req.txt \
+        -i https://mirrors.huaweicloud.com/repository/pypi/simple \
+    && uv pip install --system --no-deps -e . \
     && chmod +x /opt/hwc/start_mcp.sh /opt/hwc/start_services.sh
+
+# opencode agent 运行时预装（全部走华为云源；agent install 阶段只写配置不下载）。
+# 内置 nvm 安装链走 raw.githubusercontent.com（本环境不可达），故不用内置 agent 的安装路径。
+RUN sed -i 's@deb.debian.org@mirrors.huaweicloud.com@g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends curl nodejs npm \
+    && npm config set registry https://mirrors.huaweicloud.com/repository/npm/ \
+    && npm install -g opencode-ai@1.18.25 \
+    && rm -rf /var/lib/apt/lists/* \
+    && opencode --version
 
 EXPOSE 8010
 CMD ["bash", "/opt/hwc/start_services.sh"]

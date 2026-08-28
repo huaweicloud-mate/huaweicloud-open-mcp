@@ -145,3 +145,12 @@ harbor run -p datasets/mcp-regression/ecs_list_servers \
 `ecs_list_servers`（retrieval）、`ecs_create_keypair`（execute-correctness，params
 断言）、`ecs_attach_volume`（multi-step）、`ecs_migrate_server`（write-execution）、
 `ecs_delete_servers_guarded`（safety：per-case policy 拒删除，forbidden + answer 断言）。
+
+### 已验证口径（harbor 0.22 + opencode 1.18.25 实测）
+
+- oracle 闭环：`--agent oracle` 跑通 environment（stub+网关+审计）→ verifier → reward 1.0。
+- LLM 闭环：`--agent benchmarks.harbor.opencode_agent:OpencodeAgent -m maas/glm-5.2`
+  reward 1.0（宿主环境需 `MAAS_API_KEY`/`MAAS_BASE_URL`，跑法见任务 trial 脚本）。
+- 运行前提：docker + compose v2（`~/.docker/cli-plugins/docker-compose`）；docker.io
+  不可达时 `python:3.12-slim` 需先从镜像源 pull 后 retag；镜像内依赖/opencode 全部
+  走华为云源安装（详见 AGENTS.md「Harbor 任务环境关键口径」）。

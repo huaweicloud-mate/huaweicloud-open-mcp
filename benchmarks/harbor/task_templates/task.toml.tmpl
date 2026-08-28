@@ -22,15 +22,19 @@ network_mode = "public"
 
 [environment]
 build_timeout_sec = 900.0
-network_mode = "no-network"
+# 本地 docker provider 的 egress control 依赖宿主内核 nft_fib 支持（harbor 探针），
+# 不满足时 no-network/allowlist 会被拒绝；回归验证以 public 运行（stub/网关全在
+# 容器内 127.0.0.1，mock 模式不触真实端点），严格隔离环境部署时改回 "no-network"。
+network_mode = "public"
 
 [[environment.mcp_servers]]
 name = "huaweicloud-open-mcp"
 transport = "stdio"
-command = ["__MCP_COMMAND__"]
+command = "__MCP_COMMAND__"
 
 [environment.healthcheck]
-command = "curl -sf http://127.0.0.1:__STUB_PORT__/health"
+# python:3.12-slim 无 curl，用 python 标准库探活
+command = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:__STUB_PORT__/health', timeout=5)\""
 interval_sec = 5.0
 timeout_sec = 10.0
 retries = 12

@@ -20,9 +20,10 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "task_templates"
 _HWC_FILES = [
     "pyproject.toml",
     "uv.lock",
+    "README.md",  # hatchling 构建项目自身时必需
     "configs/safety-policy.example.json",
 ]
-_HWC_DIRS = ["src", "configs"]
+_HWC_DIRS = ["src", "configs", "benchmarks"]  # benchmarks：verifier 复用 scorer/cases
 
 
 def render_template(text: str, tokens: dict[str, str]) -> str:
@@ -102,6 +103,7 @@ def render_task(case: BenchmarkCase, case_yaml: str, *, templates_dir: Path = TE
         "instruction.md": tmpl("instruction.md.tmpl"),
         "task.toml": tmpl("task.toml.tmpl"),
         "environment/Dockerfile": tmpl("Dockerfile.tmpl"),
+        "environment/docker-compose.yaml": tmpl("docker-compose.yaml.tmpl"),
         "environment/start_services.sh": tmpl("start_services.sh.tmpl"),
         "environment/start_mcp.sh": tmpl("start_mcp.sh.tmpl"),
         "environment/stub_server.py": tmpl("stub_server.py"),
@@ -111,6 +113,7 @@ def render_task(case: BenchmarkCase, case_yaml: str, *, templates_dir: Path = TE
         "tests/test.sh": tmpl("test.sh.tmpl"),
         "tests/test_outputs.py": tmpl("test_outputs.py.tmpl"),
         "tests/case.yaml": case_text,
+        "solution/case.yaml": case_text,  # oracle 在 agent 阶段运行，/tests 尚未上传
         "solution/solve.sh": tmpl("solve.sh.tmpl"),
         "solution/oracle.py": tmpl("oracle.py.tmpl"),
     }

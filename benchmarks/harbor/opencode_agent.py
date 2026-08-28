@@ -24,13 +24,19 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template  # noqa: E402
+from harbor.agents.model_connection import ModelConnectionSpec  # noqa: E402
 
 from benchmarks.harbor import conventions as conv  # noqa: E402
 
-OPENCODE_VERSION = "1.18.23"
+OPENCODE_VERSION = "1.18.25"
 
 
 class OpencodeAgent(BaseInstalledAgent):
+    # provider=maas 时从宿主环境解析连接：MAAS_BASE_URL 有框架 fallback，
+    # MAAS_API_KEY 必须在此显式声明（未知 provider 无默认 key env）。
+    MODEL_CONNECTION = ModelConnectionSpec(
+        passthrough=True, api_key_envs=("MAAS_API_KEY",))
+
     @staticmethod
     def name() -> str:
         return "opencode"
@@ -39,12 +45,28 @@ class OpencodeAgent(BaseInstalledAgent):
         return OPENCODE_VERSION
 
     async def install(self, environment) -> None:
-        # opencode CLI（官方安装脚本）+ 预批权限的 opencode.json（约定见 conventions）
-        await self.exec_as_root(environment, command=(
-            "curl -fsSL https://opencode.ai/install | bash"))
+        # opencode CLI 已在镜像 build 期预装（华为云源，见 Dockerfile）；
+        # install 仅写配置：MCP 注册（conventions）+ 按 model_name 动态补 provider 连接。
+        # key/baseURL 经 harbor 的 model_connection 机制从宿主环境变量解析
+        # （provider=maas → MAAS_API_KEY / MAAS_BASE_URL）。
+        config = conv.build_agent_opencode_config()
+        model = self.model_name or ""
+        if "/" in model:
+            provider, model_id = model.split("/", 1)
+            mc = self.model_connection
+            options: dict[str, str] = {}
+            if mc.base_url:
+                options["baseURL"] = mc.base_url
+            if mc.api_key:
+                options["apiKey"] = mc.api_key
+            config.setdefault("provider", {})[provider] = {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": f"{provider} provider",
+                "options": options,
+                "models": {model_id: {"name": model_id}},
+            }
         encoded = base64.b64encode(
-            json.dumps(conv.build_agent_opencode_config(),
-                       ensure_ascii=False).encode("utf-8")).decode("ascii")
+            json.dumps(config, ensure_ascii=False).encode("utf-8")).decode("ascii")
         await self.exec_as_agent(environment, command=(
             f"mkdir -p {shlex.quote(conv.AGENT_WORKDIR)} /tmp"
             f" && echo {encoded} | base64 -d > {conv.AGENT_WORKDIR}/opencode.json"))
@@ -53,7 +75,8 @@ class OpencodeAgent(BaseInstalledAgent):
     async def run(self, instruction, environment, context) -> None:
         await self.exec_as_agent(environment, command=(
             f"opencode run {shlex.quote(instruction)} --format json"
-            f" --dir {shlex.quote(conv.AGENT_WORKDIR)}"))
+            f" --dir {shlex.quote(conv.AGENT_WORKDIR)}"
+            " 2>&1 </dev/null | stdbuf -oL tee /logs/agent/opencode.txt"))
 
     def populate_context_post_run(self, context) -> None:
         """尽力提取 opencode 输出进 context（trial 奖励以 verifier 为准）。"""

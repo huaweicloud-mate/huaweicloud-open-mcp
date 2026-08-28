@@ -32,6 +32,8 @@ def _mini_project(tmp_path: Path) -> Path:
                                                                  encoding="utf-8")
     (root / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
     (root / "uv.lock").write_text("", encoding="utf-8")
+    readme_stub = "# x\n"
+    (root / "README.md").write_text(readme_stub, encoding="utf-8")
     return root
 
 
@@ -43,21 +45,24 @@ def test_render_task_golden_core_files(tmp_path):
     files = exporter.render_task(_case(), MINI_CASE_YAML, project_root=_mini_project(tmp_path))
     assert set(files) >= {
         "instruction.md", "task.toml", "environment/Dockerfile",
+        "environment/docker-compose.yaml",
         "environment/start_services.sh", "environment/start_mcp.sh",
         "environment/stub_server.py", "environment/fixtures.json",
-        "environment/policy.json", "tests/test.sh", "tests/test_outputs.py",
+        "environment/policy.json",         "tests/test.sh", "tests/test_outputs.py",
         "tests/case.yaml", "solution/solve.sh", "solution/oracle.py",
+        "solution/case.yaml",
     }
     assert files["environment/hwc/pyproject.toml"] == "[project]\nname = 'x'\n"
+    assert files["environment/hwc/README.md"] == "# x\n"
     assert files["environment/hwc/src/pkg/mod.py"] == "X = 1\n"
     assert files["tests/case.yaml"] == MINI_CASE_YAML
 
     toml_text = files["task.toml"]
     assert 'name = "mcp/ecs_list"' in toml_text
     assert "capability = \"retrieval\"" in toml_text
-    assert "network_mode = \"no-network\"" in toml_text
-    assert 'command = ["/opt/hwc/start_mcp.sh"]' in toml_text
-    assert "curl -sf http://127.0.0.1:8010/health" in toml_text
+    assert "network_mode = \"public\"" in toml_text
+    assert 'command = "/opt/hwc/start_mcp.sh"' in toml_text
+    assert "urllib.request.urlopen('http://127.0.0.1:8010/health'" in toml_text
 
     instruction = files["instruction.md"]
     assert "帮我查询北京四地域的云服务器列表" in instruction
