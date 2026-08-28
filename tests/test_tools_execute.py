@@ -185,6 +185,16 @@ def test_validate_params_header_required_only():
     assert err is not None and "缺少必填" in err
 
 
+def test_validate_params_auth_header_skipped():
+    """认证 header（X-Auth-Token/X-Security-Token/Authorization）由签名层自动注入，跳过必填检查。"""
+    op = _op(
+        {"name": "X-Auth-Token", "in": "header", "type": "string", "required": True},
+        {"name": "X-Security-Token", "in": "header", "type": "string", "required": True},
+        {"name": "Authorization", "in": "header", "type": "string", "required": True},
+    )
+    assert execute.validate_params({}, "/x", op, {}, None) is None
+
+
 def test_validate_params_body_required_field_missing():
     doc = {"definitions": {"keypair": {
         "type": "object", "required": ["name"],

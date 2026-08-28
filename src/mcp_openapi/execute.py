@@ -25,6 +25,14 @@ _TYPE_CHECKS: dict[str, Callable[[Any], bool]] = {
     "string": lambda v: isinstance(v, str),
 }
 
+# 认证相关 header——由签名层自动注入（AK/SK 签名生成 Authorization +
+# X-Security-Token；token 认证生成 X-Auth-Token），不要求用户传入
+_AUTH_HEADERS = frozenset({
+    "X-Auth-Token",
+    "X-Security-Token",
+    "Authorization",
+})
+
 
 class ApiExecutor(Protocol):
     """执行层协议：execute_api 只依赖 request()，不耦合具体客户端实现。"""
@@ -77,8 +85,9 @@ def validate_params(doc: dict[str, Any], path: str, op: dict[str, Any],
     返回 None=放行；否则返回可操作错误描述（agent 可据此自纠）。
     口径：只校验文档声明了的参数（未声明宽容透传）；`_` 前缀控制键天然跳过；
     标量类型严格（integer/number/boolean 不接受字符串形式，bool 混入数值显式
-    排除）；header 协议即字符串故只查必填不查类型；body 用 jsonschema
-    （Draft4 + doc.definitions resolver）校验。
+    排除）；header 协议即字符串故只查必填不查类型，但认证 header
+    （X-Auth-Token/X-Security-Token/Authorization）由签名层自动注入故跳过；
+    body 用 jsonschema（Draft4 + doc.definitions resolver）校验。
     路径参数不在此校验：mock URL 不含 path，路径语义仅 real lane 有意义
     （build_request 内守卫）；`path` 形参仅为签名对称保留。
     """
@@ -94,6 +103,8 @@ def validate_params(doc: dict[str, Any], path: str, op: dict[str, Any],
             continue
         value = params.get(name)
         if pin == "path":
+            continue
+        if pin == "header" and name in _AUTH_HEADERS:
             continue
         if pin == "body":
             if isinstance(p.get("schema"), dict) and body_schema is None:
