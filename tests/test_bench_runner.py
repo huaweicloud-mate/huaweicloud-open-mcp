@@ -20,6 +20,7 @@ def test_legacy_signature_unchanged():
     assert cmd[cmd.index("--mock-base") + 1] == "http://127.0.0.1:9"
     assert "--mock-passthrough" not in cmd
     assert "--audit-file" not in cmd
+    assert cmd[cmd.index("--elicitation") + 1] == "off"   # headless 禁用 elicitation
     assert cfg["permission"] == {"huaweicloud-open-mcp_*": "allow"}
     assert cfg["mcp"]["huaweicloud-open-mcp"]["type"] == "local"
 

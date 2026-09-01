@@ -1,14 +1,17 @@
 """openapi 模式 server 装配（MCP 协议层）。"""
 
 import argparse
+import functools
 import os
-from typing import Any
+from typing import Any, cast
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.context import Context
 
 from apie import mock as apie_mock
 from common.audit import sink_from_path
 from common.auth import credentials as cred_mod
+from common.elicit import PolicyConsent, ctx_elicit_fn
 from common.types import (
     ApiDetailResult,
     ApiListResult,
@@ -38,9 +41,13 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 
 - `execute_api` 执行前强制过 safety policy（allowlist/denylist 白名单）；
 - 未配置 policy 时所有执行被拒绝；
-- 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口或询问用户；
-- 被拒接口确属任务必需时：先向用户确认，再调用 `manage_policy(action="add", line=...)`
-  授予最小规则（如 "OBS:GetObject=allow"），**改动热生效、无需重启 server**；
+- 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口；
+- 被拒接口确属任务必需时：重新调用 `execute_api`，server 会经 MCP elicitation
+  向用户弹窗提议授予最小规则（如 "OBS:GetObject=allow"）；用户确认后规则热生效，
+  结果携带 `granted_rule` 字段，再次重试即可通过；
+- 也可直接调用 `manage_policy(action="add", line=...)`：add/remove 前服务端先经
+  elicitation 向用户确认，**改动热生效、无需重启 server**；客户端不支持 elicitation
+  时（--elicitation auto 降级 / off 模式）退回约定：先向用户确认再调用；
   临时授权建议在任务完成后用 `manage_policy(action="remove", ...)` 回收。
 
 ## 其它
@@ -52,7 +59,7 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
   signed_content_type + headers 照抄清单），客户端凭 URL 直连 OBS 收发字节，
   gateway 不经手数据流、不限大小；_presign_expires 可调有效期。
   Content-Type 参与签名：上传（PUT/POST）建议显式传 _presign_content_type
-  锁定类型，直连时按信封 headers 原样携带；未锁定时按空 CT 签名，
+  锁定类型，直连时按信封 headers 原样携带；未锁定时签名按空 CT 签名，
   直连请求不得携带该头（curl 用 -H 'Content-Type:' 移除默认头），
   信封 note 字段会给出对应警示口径。
 """
@@ -94,11 +101,18 @@ def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
 
 
 def build_openapi_app(service: ToolService | None = None, *,
-                      log_level: str = "INFO") -> MCPServer:
+                      log_level: str = "INFO",
+                      elicit_mode: str = "auto") -> MCPServer:
     svc = service or ToolService()
+    consent_mode = elicit_mode
     server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
                        instructions=build_instructions(svc.config.gate),
                        log_level=log_level)  # type: ignore[arg-type]
+
+    def _consent(ctx: Context | None) -> PolicyConsent:
+        assert ctx is not None, "Context injected by MCP framework"
+        grant = functools.partial(svc.manage_policy, "add")
+        return PolicyConsent(consent_mode, ctx_elicit_fn(ctx), grant)
 
     @server.tool()
     def list_products(category: str | None = None,
@@ -153,8 +167,9 @@ def build_openapi_app(service: ToolService | None = None, *,
         return svc.get_api_examples(product, api, region=region)
 
     @server.tool()
-    def execute_api(product: str, api: str, region: str | None = None,
-                    params: dict | None = None) -> ExecuteResult:
+    async def execute_api(product: str, api: str, region: str | None = None,
+                          params: dict | None = None,
+                          ctx: Context | None = None) -> ExecuteResult:
         """第四步：执行华为云 API。执行前强制过 safety policy（未配置 policy 时全部拒绝）。
 
         params 约定：路径参数/query 参数直接平铺，请求体放 params["body"]。
@@ -167,21 +182,37 @@ def build_openapi_app(service: ToolService | None = None, *,
         未锁定时签名按空 CT 计算，直连请求不得携带 Content-Type 头
         （信封 note 字段给出警示口径）。桶管理类接口仍由 gateway 直连执行。
 
-        被拒时不要绕过：先向用户确认，再经 manage_policy 授予最小规则（热生效）。
+        被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
+        向用户提议授予最小规则（用户确认后热生效并携带 granted_rule）；
+        亦可经 manage_policy 授予（add/remove 前服务端先 elicit 确认）。
 
         授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """
-        return svc.execute_api(product, api, region=region, params=params)
+        result = svc.execute_api(product, api, region=region, params=params)
+        if isinstance(result, dict) and result.get("ok") is False:
+            offer = svc.policy_denial_offer(product, api,
+                                            denial_reason=result.get("reason"))
+            if offer is not None:
+                result = cast(ExecuteResult,
+                              await _consent(ctx).offer_grant(offer, result))
+        return result
 
     @server.tool()
-    def manage_policy(action: str, line: str | None = None) -> dict[str, Any]:
+    async def manage_policy(action: str, line: str | None = None,
+                            ctx: Context | None = None) -> dict[str, Any]:
         """管理 safety policy（list/add/remove），改动热生效并写回策略文件，无需重启 server。
 
         action=list 查看当前全部规则；action=add 新增规则（自动插到会遮蔽它的 deny
         规则之前，如 "OBS:GetObject=allow"）；action=remove 按语义删除首个匹配规则。
-        安全约定：add/remove 前必须向用户确认，授予最小规则；临时授权用完即回收。
+        安全约定：add/remove 由服务端先经 elicitation 向用户确认，授予最小规则；
+        客户端不支持 elicitation 时退回约定由调用方先行确认。临时授权用完即回收。
         未配置 policy 文件时本工具拒绝执行（不创建文件）。
         """
+        if ((action or "").strip().lower() in ("add", "remove")
+                and (line or "").strip()):
+            blocked = await _consent(ctx).gate_change(action, line or "")
+            if blocked:
+                return {"ok": False, "action": action, "reason": blocked}
         return svc.manage_policy(action, line=line)
 
     return server

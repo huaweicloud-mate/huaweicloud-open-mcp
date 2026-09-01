@@ -140,6 +140,18 @@ def check_server(rules: Sequence[PolicyRule] | None, server: str, tool: str | No
     return None
 
 
+def grant_rule(product: str, api: str) -> str:
+    """构造最小 product allow 规则文本（拒绝后的提议授予用）。"""
+    return f"{product}:{api}=allow"
+
+
+def grant_server_rule(server: str, tool: str | None = None) -> str:
+    """构造最小 server allow 规则文本：tool=None 为连接级，否则为调用级。"""
+    if tool is None:
+        return f"server:{server}=allow"
+    return f"server:{server}:{tool}=allow"
+
+
 def load_policy_file(path: str) -> list[PolicyRule]:
     with open(path, encoding="utf-8") as f:
         content = f.read()

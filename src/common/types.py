@@ -31,6 +31,7 @@ class ExecuteResult(TypedDict, total=False):
     api: str | None
     headers: dict[str, str] | None
     presign: "PresignInfo | None"
+    granted_rule: str | None  # policy 拒绝经用户 elicitation 确认后授予的最小规则
 
 
 class PresignInfo(TypedDict):
@@ -186,6 +187,7 @@ class McpConnectResult(TypedDict, total=False):
     endpoint: str | None
     protocol_version: str | None
     server_info: dict[str, Any] | None
+    granted_rule: str | None
 
 
 class ServerToolsResult(TypedDict, total=False):
@@ -217,6 +219,7 @@ class McpCallResult(TypedDict, total=False):
     error_code: str | None
     error_msg: str | None
     truncated: bool | None
+    granted_rule: str | None
 
 
 class McpDisconnectResult(TypedDict):

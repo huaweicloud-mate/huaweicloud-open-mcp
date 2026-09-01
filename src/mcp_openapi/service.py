@@ -16,6 +16,7 @@ from apie import mock as apie_mock
 from apie.memory_store import ApiHit, MemoryStore
 from common.audit import AuditSink
 from common.auth.credentials import Credentials
+from common.elicit import DenialOffer
 from common.types import (
     ApiDetailResult,
     ApiListResult,
@@ -132,6 +133,24 @@ class ToolService:
     def _check_policy(self, product: str, api: str) -> str | None:
         """检查 safety policy，返回错误描述或 None（放行）。"""
         return safety_policy.check(self._effective_policy_rules(), product, api)
+
+    def policy_denial_offer(self, product: str, api: str,
+                            denial_reason: str | None = None) -> DenialOffer | None:
+        """policy 拒绝且可授予时构造 elicitation 提议；其余返回 None。
+
+        未配置 policy store（无可写文件）或 policy 放行 → None；
+        denial_reason 非空时须与本方法复查结果一致（确保被增强的确实是
+        policy 拒绝而非门栓/其它拒绝），不一致 → None。
+        """
+        if self.config.policy_store is None:
+            return None
+        err = self._check_policy(product, api)
+        if err is None:
+            return None
+        if denial_reason is not None and denial_reason != err:
+            return None
+        return DenialOffer(subject=f"{product}:{api}",
+                           rule=safety_policy.grant_rule(product, api), reason=err)
 
     @_audited
     def manage_policy(self, action: str,

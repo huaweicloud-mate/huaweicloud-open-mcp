@@ -17,7 +17,7 @@
 │     [discover]  list_mcp_servers / get_mcp_server / connect_mcp_server /
 │                 list_server_tools / get_server_tool / call_server_tool /
 │                 disconnect_mcp_server / manage_policy
-│        ↓ execute/call 前强制过 safety policy（manage_policy 热更新策略）
+│        ↓ execute/call 前强制过 safety policy；拒绝时经 elicitation 提议授予 / manage_policy 前 elicitation 确认（热更新策略）
 ├─ 连接代理层（discover 模式）  src/mcp_discover/
 │     catalog.py  目录源（本地文件起步，预留官方端点）
 │     sdk.py      SessionClient 协议 + mcp SDK 适配器
@@ -71,6 +71,7 @@
 | `src/mcp_openapi/` | openapi 模式（metadata/execute 纯函数 + `gate.py` 产品门栓 + service 编排层 + server 装配；配置/客户端工厂注入；元数据加载委托 apie.catalog；service 层 7 个工具方法经 `_audited` 装饰器统一写审计事件，`build_audit_event` 定义对 verifier 的已发布 payload 契约 `tool/input/ok`） | — | — |
 | `src/mcp_discover/` | discover 模式（catalog.py 目录源 + config.py + sdk.py SessionClient 协议 + manager.py session 注册表 + service.py + server.py） | — | — |
 | `src/common/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封 + MCP discover 结果信封（McpServerItem/*Result） | — | — |
+| `src/common/elicit.py` | PolicyConsent：safety policy 变更的 elicitation 交互语义（offer_grant 拒绝提议授予 / gate_change 变更确认门 / parse_elicit_mode / PolicyChangeConfirm 表单 schema / ElicitFn adapter 契约 + ctx_elicit_fn MCP Context 归一化 adapter） | — | — |
 | `src/common/paths.py` | 项目根路径解析（统一 project_root） | — | — |
 | `src/common/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
 | `main.py` | CLI 入口（按 --mode 分发 openapi/discover 两条路径） | — | — |
@@ -110,7 +111,7 @@
 
 | 模块 | 依赖 |
 | --- | --- |
-| `common/` | 无内部依赖（纯基础设施）；仅 `auth/__init__` re-export `auth.credentials` |
+| `common/` | 无内部依赖（纯基础设施）；仅 `auth/__init__` re-export `auth.credentials`；`elicit` 额外依赖 pydantic（mcp 传递依赖），不 import mcp/safety/service |
 | `safety/policy` | 无依赖（纯函数）；`safety/policy_store` 仅依赖 `safety/policy` |
 | `apie/` | → `common`（http/types/paths/logconf）；`catalog`→`live_fallback`→`convert_openapi2` 链、`memory_store`；`mock`→common.http/types |
 | `mcp_openapi/` | → `apie`（catalog/metadata/mock/memory_store）+ `safety` + `common`；`service`→`execute`+`execute_obs`+`signer.client`+`signer.obs`；`signer.client`→`signer.sign`；`execute_obs`→`execute`+`signer.obs`+`common` |
@@ -131,7 +132,7 @@
 - **产品名**：以 `raw/apis_detail.json` 的驼峰 `product_short` 为准（如 `ECS`）；与 apis 项目的大小写去重映射保持一致。
 - **tag 文件名**：英文 PascalCase，中文→英文映射维护在 `configs/tag_translations.json`；`sanitize_tag` 用 `_` 替换空格与 `/`。
 - **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api`/`manage_policy`）；discover 模式工具（`list_mcp_servers`/`get_mcp_server`/`connect_mcp_server`/`list_server_tools`/`get_server_tool`/`call_server_tool`/`disconnect_mcp_server`/`manage_policy`）。
-- **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`、`HUAWEICLOUD_MCP_OPENAPI_GATE`、`HUAWEICLOUD_MCP_AUDIT_FILE`（审计 NDJSON 落盘路径）、`HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`（mock 模式转发业务参数））。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
+- **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`、`HUAWEICLOUD_MCP_OPENAPI_GATE`、`HUAWEICLOUD_MCP_AUDIT_FILE`（审计 NDJSON 落盘路径）、`HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`（mock 模式转发业务参数）、`HUAWEICLOUD_MCP_ELICIT`（policy 变更 elicitation 确认模式 auto/required/off））。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
 - **region**：默认 `cn-north-4` 平铺，非默认 region 带 `{region}` 目录/后缀（沿用 apis 的 region 目录规则）。
 
 ## 构建与运行命令
@@ -180,6 +181,7 @@ uv run huaweicloud-open-mcp --mock-base http://127.0.0.1:8000  # 自定义 mock 
 uv run huaweicloud-open-mcp --mock --mock-passthrough   # mock 模式转发 execute 业务参数到端点（环境变量 HUAWEICLOUD_MCP_MOCK_PASSTHROUGH）
 uv run huaweicloud-open-mcp --audit-file /tmp/hwc_audit.jsonl   # 审计事件 NDJSON 落盘（环境变量 HUAWEICLOUD_MCP_AUDIT_FILE）
 uv run huaweicloud-open-mcp --policy configs/safety-policy.example.json  # 指定 safety policy 文件
+uv run huaweicloud-open-mcp --elicitation off  # 关闭 elicitation 确认（headless/benchmark；环境变量 HUAWEICLOUD_MCP_ELICIT）
 uv run huaweicloud-open-mcp --log-level DEBUG  # 日志级别（默认 INFO）；--log-file 指定文件（默认 logs/huaweicloud-open-mcp.log）
 ```
 
@@ -221,6 +223,8 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | S9d | OBS XML `<Error>` 解析（`parse_obs_error`） | 纯函数单测 | 手写 `<Error>` 片段 |
 | S9e | `is_obs` 路由谓词 + `OBJECT_DATA_APIS` 名单判定 + `execute_obs_api` 编排 + `ObsHttpClient` 签名发送 + `service` OBS 分派（对象数据面强制 presign） | 单测注入 OBS client 工厂 | 手写字面量 + 注入 client |
 | S9f | 预签发 URL（`signer.obs.url_string_to_sign` / `sign_obs_url` / `build_presign_base` + `execute_presign_api` 编排 + service 对象数据面自动 presign / 显式 `_presign` 分派与热更新协同） | 纯函数单测 + service 注入凭证 | 官方《URL中携带签名》表4/5 结构原文 + openssl 口径金标 |
+| E1 | `common/elicit.py` PolicyConsent（parse_elicit_mode / offer_grant / gate_change / ctx_elicit_fn 归一化）+ `safety/policy.py` grant_rule/grant_server_rule | 纯函数单测，脚本化 ElicitFn + 记录型 grant 注入 | 手写字面量 + `parse_policy` 交叉验证规则文本 |
+| E2 | elicitation 端到端：两模式 server 装配（execute_api/call_server_tool/connect/manage_policy 的 PolicyConsent 接线 + `build_*_app(elicit_mode)`） | 真 mcp SDK client + InMemoryTransport 内存回环（脚本化 elicitation callback；`common.http.fetch_json` monkeypatch 封死元数据网络） | tmp policy 文件回读 + 结构化结果断言（granted_rule/规则落盘） |
 
 分层与纪律：
 
@@ -239,6 +243,7 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 - execute_api OpenAPI 元数据 schema 校验（默认开启，`execute.validate_params` 纯函数，presign 后/三 lane 分流前共享）：只校验文档声明了的参数（未声明宽容透传、`_` 控制键跳过）；query 必填/类型/枚举**严格**（integer/number/boolean 不接受字符串形式，bool 混入数值显式排除，`type(v) is int` 防 bool 陷阱）；header 只查必填（协议即字符串）；body 用 jsonschema Draft4 + doc.definitions resolver 校验；失败返回 `{"ok": false, "reason": 可操作描述（参数/期望/实际值）}` 供 agent 自纠。路径参数校验归 real lane（build_request 内守卫——mock URL 不含 path，mock 环境无凭证时路径填充必然缺失，提前校验会系统性误杀）；OBS lane 跳过（XML body 不适用）；校验失败经 `_audited` 记 ok=False。`_path_param_values` 是路径参数知识的内部接缝（validator/builder 共享，build_request 因此降为纯 mechanism）。
 - safety policy 匹配：按文件行序首个命中生效，`product:apiPattern=allow|deny`；MCP discover 扩展 `server:serverId[:toolPattern]=allow|deny`；无匹配默认 deny；无 policy 文件时 execute_api/call_server_tool 全拒。
 - safety policy 热更新（`PolicyStore` + `manage_policy`）：策略文件为唯一真值源，运行期按 stat（mtime/size/inode）热重载，外部编辑即时生效、无需重启；`manage_policy(action=list/add/remove)` 两模式同构，add/remove 先校验再 `tmp+os.replace` 原子写盘并刷新内存，静止态 memory==file；读改写与热重载全段由进程内互斥锁（RLock）串行化，MCP 工具并发派发不丢更新（last-writer-wins 回归测试覆盖）；新 allow 规则自动插到首个会遮蔽它的 deny 规则之前（典型即 `*=deny` 兜底行前）；语义重复 add 幂等不改盘；文件被写坏/短暂消失时沿用最近合法版本记 WARNING，恢复后自动重新采纳；未配置 --policy 时 manage_policy 拒绝且不创建文件；启动时急切加载保留坏文件快速失败。
+- safety policy elicitation 确认（`common/elicit.py` PolicyConsent + `--elicitation`/`HUAWEICLOUD_MCP_ELICIT`，默认 auto）：`manage_policy` add/remove 前服务端经 elicitation 向用户确认（`gate_change`，confirm 才落盘）；`execute_api`/`call_server_tool`/`connect_mcp_server` 被 policy 拒绝时服务端经 elicitation 提议授予最小规则（`offer_grant`，accept → 经 manage_policy 授予并在 denial 上附 `granted_rule` + 引导重试；grant 失败原因附入 reason）。模式语义：off 从不 elicit（headless/benchmark 用，行为同旧版约定）；auto 客户端不支持 elicitation（`ctx.elicit` 失败）→ 降级放行记 WARNING（拒绝路径原样返回，prompt 约定兜底）；required 不支持 → manage_policy 返回可操作 reason（fail-closed），拒绝路径不提议。规则文本由 `safety/policy.py` grant_rule/grant_server_rule 构造（parse_policy 交叉验证）；门栓拒绝/未配置 policy/非 denial 结果一律不提议；decline/cancel 不写审计 NDJSON（仅 WARNING，`_audited` 契约不变；accept 的授予经 manage_policy 正常入审计）；headless `opencode run` 可能声明 capability 却无 UI（上游 #36076），headless 场景建议显式 off。
 - 产品门栓（`Gate`）：openapi 模式产品级白名单，未配置时不限制；配置后未列出产品默认拒；越界产品在 `list_products` 静默隐藏，其余工具返回「不在 openapi mcp 授权范围内」；`execute_api` 先过门栓再过 policy。
 - 审计 NDJSON（`HUAWEICLOUD_MCP_AUDIT_FILE` / `--audit-file`）：service 层 7 个 openapi 工具每次调用经 `AuditSink.record` 追加一行 `{"ts", "tool", "input", "ok"}`（ts ISO8601 UTC 由 sink 注入；input 为显式入参快照不含默认值；ok 缺省视为 true；异常路径记 ok=False 后原样抛出）；best-effort 永不抛出（写失败 WARNING）；事件 payload 契约由 `mcp_openapi.service.build_audit_event` 定义并经 `scorer.event_to_toolcall` 成为 harbor verifier 的 trace 输入源；未配置 sink 时零开销跳过。
 - mock passthrough（`--mock-passthrough` / `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`，默认关）：开启时 `MockApiClient.mock_request(params=...)` 把 execute 业务参数转发到 mock 端点——`_` 前缀控制键剥离、扁平标量→query（bool→`str(v).lower()` 对齐 real 模式 HttpClient，扁平 dict/list→JSON 串）、`params["body"]`→POST JSON body（无 body 保持 GET，`status_code/number/region_id` 三元组不变）；service 只透传原始 params，剥离职责在 `apie/mock.py` 编码层。

@@ -41,7 +41,8 @@ def build_benchdir_config(policy: str, mock_base: str | None, *,
     两个适配器共用（legacy runner 与 harbor OpencodeAgent）：passthrough/audit
     为 harbor 任务环境约定注入项，legacy 默认不传保持行为不变。
     """
-    cmd = ["uv", "run", "huaweicloud-open-mcp", "--mock", "--policy", policy]
+    cmd = ["uv", "run", "huaweicloud-open-mcp", "--mock", "--policy", policy,
+           "--elicitation", "off"]
     if mock_base:
         cmd += ["--mock-base", mock_base]
     if mock_passthrough:

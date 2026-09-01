@@ -657,3 +657,49 @@ def test_execute_obs_bypasses_schema_validation():
                               params={"bucket_name": "b", "object_key": "obj",
                                       "versionId": 3})
     assert out["ok"] is True
+
+
+# ---------- policy_denial_offer（elicitation 授予提议，E1 服务层） ----------
+
+def test_policy_denial_offer_constructed_for_policy_denial(tmp_path):
+    """policy 配置且拒绝 → DenialOffer；放行 → None；拒绝 reason 与 offer 一致。"""
+    from common.elicit import DenialOffer
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    denial = svc.execute_api("ECS", "ListServersDetails")
+    offer = svc.policy_denial_offer("ECS", "ListServersDetails",
+                                    denial_reason=denial.get("reason"))
+    assert isinstance(offer, DenialOffer)
+    assert offer.subject == "ECS:ListServersDetails"
+    assert offer.rule == "ECS:ListServersDetails=allow"
+    assert offer.reason == denial["reason"]
+
+
+def test_policy_denial_offer_none_when_allowed_or_unconfigured(tmp_path):
+    from safety.policy import PolicyRule
+    from safety.policy_store import PolicyStore
+
+    svc = ToolService(config=ServiceConfig(mock=True,
+                                           policy_rules=[PolicyRule("ECS", "*", True)]))
+    assert svc.policy_denial_offer("ECS", "ListServersDetails") is None  # policy 放行
+
+    unconfigured = ToolService(config=ServiceConfig(mock=True))  # 未配置 store（无可写文件）
+    assert unconfigured.policy_denial_offer("ECS", "ListServersDetails") is None
+
+    # 有 store 且无匹配规则（默认 deny）→ 提议存在
+    p = _policy_file(tmp_path, ["ECS:*=allow"])
+    stored = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    assert stored.policy_denial_offer("OBS", "PutObject") is not None
+
+
+def test_policy_denial_offer_none_when_reason_mismatches(tmp_path):
+    """门栓拒绝（reason 非 policy）→ 不提议授予。"""
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    gate_denial_reason = "产品 ECS 不在 openapi mcp 授权范围内"
+    assert svc.policy_denial_offer("ECS", "ListServersDetails",
+                                   denial_reason=gate_denial_reason) is None

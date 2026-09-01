@@ -8,6 +8,7 @@ import json
 import logging
 from typing import Any, Sequence, cast
 
+from common.elicit import DenialOffer
 from common.types import (
     McpCallResult,
     McpConnectResult,
@@ -86,6 +87,25 @@ class DiscoverService:
 
     def _check_policy(self, server: str, tool: str | None = None) -> str | None:
         return safety_policy.check_server(self._effective_policy_rules(), server, tool)
+
+    def policy_denial_offer(self, server: str, tool: str | None = None,
+                            denial_reason: str | None = None) -> DenialOffer | None:
+        """server 规则拒绝且可授予时构造 elicitation 提议；其余返回 None。
+
+        未配置 policy store（无可写文件）或放行 → None；
+        denial_reason 非空时须与本方法复查结果一致（确保被增强的确实是
+        policy 拒绝），不一致 → None。
+        """
+        if self.config.policy_store is None:
+            return None
+        err = self._check_policy(server, tool)
+        if err is None:
+            return None
+        if denial_reason is not None and denial_reason != err:
+            return None
+        return DenialOffer(
+            subject=f"{server}:{tool}" if tool else server,
+            rule=safety_policy.grant_server_rule(server, tool), reason=err)
 
     def manage_policy(self, action: str,
                       line: str | None = None) -> dict[str, Any]:
