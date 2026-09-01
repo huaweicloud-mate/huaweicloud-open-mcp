@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "documentation": {
+      "source": "mcollina/skills",
+      "sourceType": "github",
+      "skillPath": "skills/documentation/SKILL.md",
+      "computedHash": "9a43f2e8ebb01dbc162ad78d865ff9e20bf20270e0514095c3bf3f1ac43599c6"
+    },
     "grill-me": {
       "source": "mattpocock/skills",
       "sourceType": "github",
