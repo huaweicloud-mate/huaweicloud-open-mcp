@@ -3,7 +3,8 @@
 - 默认日志文件 logs/{program}.log（RotatingFileHandler 10MB×5），目录自动创建
 - stderr 同步 WARNING+（stdio 协议安全：stdout 永不被日志污染）
 - 级别/文件：参数 > 环境变量（HUAWEICLOUD_MCP_LOG_LEVEL / HUAWEICLOUD_MCP_LOG_FILE）
-- 命名空间：logging.getLogger("openmcp") 及其子级
+- 接管点：root logger——全部模块 logger（main/common.*/safety.*/mcp_openapi.*、
+  mcp_discover.*/apie.* 等）经传播汇入；三方噪音库（httpx/httpcore）固定 WARNING
 """
 
 import logging
@@ -17,7 +18,7 @@ MAX_BYTES = 10 * 1024 * 1024
 BACKUP_COUNT = 5
 _FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
-ROOT_LOGGER = "openmcp"
+NOISY_LOGGERS = ("httpx", "httpcore")
 
 
 def resolve_level(level: str | None) -> int:
@@ -29,10 +30,9 @@ def resolve_level(level: str | None) -> int:
 
 def configure_logging(*, program: str, level: str | None = None,
                       log_file: str | None = None) -> str:
-    """配置 openmcp 日志器，返回实际日志文件路径。重复调用会重置 handler。"""
-    logger = logging.getLogger(ROOT_LOGGER)
+    """配置 root logger（全模块命名空间汇入），返回实际日志文件路径。重复调用会重置 handler。"""
+    logger = logging.getLogger()
     logger.setLevel(resolve_level(level))
-    logger.propagate = False
     logger.handlers.clear()
 
     log_file = log_file or os.environ.get("HUAWEICLOUD_MCP_LOG_FILE")
@@ -55,5 +55,8 @@ def configure_logging(*, program: str, level: str | None = None,
     sh.setLevel(logging.WARNING)
     sh.setFormatter(formatter)
     logger.addHandler(sh)
+
+    for name in NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     return log_file
