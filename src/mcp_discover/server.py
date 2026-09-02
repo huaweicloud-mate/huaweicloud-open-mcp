@@ -47,12 +47,13 @@ INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现
 - `connect_mcp_server` 和 `call_server_tool` 执行前强制过 safety policy；
 - 未配置 policy 时所有连接与调用被拒绝；
 - 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的 server/tool；
-- 被拒连接/调用确属任务必需时：重新调用同一工具，server 会经 MCP elicitation
-  向用户弹窗提议授予最小规则（如 "server:@huaweicloud/ecs=allow"）；用户确认后
-  规则热生效，结果携带 `granted_rule` 字段，再次重试即可通过；
-- 也可直接调用 `manage_policy(action="add", line=...)`：add/remove 前服务端先经
-  elicitation 向用户确认，**改动热生效、无需重启 server**；客户端不支持 elicitation
-  时（--elicitation auto 降级 / off 模式）退回约定：先向用户确认再调用；
+- 被拒连接/调用确属任务必需时：先向用户确认，再调用 `manage_policy(action="add", line=...)`
+  授予最小规则（如 "server:@huaweicloud/ecs=allow"），规则热生效后重试即可通过；
+  部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
+  经 MCP elicitation 向用户弹窗提议授予，结果携带 `granted_rule` 字段；
+- 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
+  （--elicitation off）无弹窗，务必先向用户确认再调用；开启 elicitation 后
+  add/remove 由服务端先经 elicitation 向用户确认；
   临时授权建议在任务完成后用 `manage_policy(action="remove", ...)` 回收。
 
 ## 其它
@@ -87,7 +88,7 @@ def build_discover_config(args: argparse.Namespace) -> DiscoverConfig:
 
 def build_discover_app(config: DiscoverConfig, *,
                        log_level: str = "INFO",
-                       elicit_mode: str = "auto") -> MCPServer:
+                       elicit_mode: str = "off") -> MCPServer:
     ds = DiscoverService(config)
     consent_mode = elicit_mode
 

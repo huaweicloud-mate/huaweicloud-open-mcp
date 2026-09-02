@@ -30,7 +30,8 @@ def main() -> None:
     parser.add_argument("--elicitation", default=None,
                         choices=["auto", "required", "off"],
                         help="policy 变更的 elicitation 确认模式"
-                             "（环境变量 HUAWEICLOUD_MCP_ELICIT；默认 auto；headless 建议 off）")
+                             "（环境变量 HUAWEICLOUD_MCP_ELICIT；默认 off，"
+                             "交互客户端可 auto/required 显式开启确认门）")
     parser.add_argument("--audit-file", default=None,
                         help="审计事件 NDJSON 文件路径（环境变量 HUAWEICLOUD_MCP_AUDIT_FILE）")
     parser.add_argument("--gate", default=None,

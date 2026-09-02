@@ -12,6 +12,11 @@ mode 语义（implementation 内聚，不外泄）：
 - required 客户端不支持 → gate_change 返回可操作 reason（fail-closed），
   offer_grant 保持原 denial（拒绝路径本就无操作可做）。
 
+缺省 off（2026-09 起）：各 code agent 对 elicitation 支持参差，auto 的降级路径使
+确认门语义随客户端漂移；默认关闭保持跨客户端行为一致（fail-safe），需要交互
+确认门的部署显式传 auto/required（--elicitation / HUAWEICLOUD_MCP_ELICIT），
+理由详见 AGENTS.md「校验规则」。
+
 模块不依赖 mcp SDK / safety / service：adapter（``ctx_elicit_fn``）以 duck-typed
 Protocol 接收 MCP Context；规则文本知识在 ``safety.policy.grant_rule``。
 """
@@ -63,11 +68,11 @@ class ElicitContext(Protocol):
 
 
 def parse_elicit_mode(raw: str | None) -> ElicitMode:
-    """解析 elicitation 模式；空/非法值宽容回退 auto。"""
+    """解析 elicitation 模式；空/非法值宽容回退 off（缺省关闭，确认门需显式 opt-in）。"""
     text = (raw or "").strip().lower()
     if text in ELICIT_MODES:
         return text
-    return "auto"
+    return "off"
 
 
 def change_message(action: str, line: str) -> str:

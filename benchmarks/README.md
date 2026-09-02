@@ -92,8 +92,8 @@ benchmarks/results/
 - token/cost：`opencode export` JSON 的 `info.tokens`（`input/output/reasoning/cache`）与 `info.cost`，由 `trace.extract_usage` 读取；export JSON 截断时由 raw 文本正则兜底提取。
 - 权限预批：benchdir 的 `opencode.json` 用 `"permission": {"huaweicloud-open-mcp_*": "allow"}`
   即可非交互运行，无需 `--auto`。
-- MCP server 以 `--elicitation off` 启动（headless 无 UI 应答 elicitation，禁用后
-  policy 变更确认退回 prompt 约定，行为与历史版本一致）。
+- MCP server 以 `--elicitation off` 启动（elicitation 默认即 off，此处显式传参以求
+  稳健；off 下 policy 变更确认退回 prompt 约定，行为与历史版本一致）。
 - 每次 `opencode run` 冷启 MCP server（真实客户端行为），元数据冷加载计入耗时。
 
 ## 已知限制

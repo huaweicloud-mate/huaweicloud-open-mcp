@@ -63,16 +63,16 @@ def make_grant(fail: bool = False):
 # ---------- parse_elicit_mode ----------
 
 def test_parse_elicit_mode_valid_and_default():
-    assert parse_elicit_mode(None) == "auto"
-    assert parse_elicit_mode("") == "auto"
+    assert parse_elicit_mode(None) == "off"
+    assert parse_elicit_mode("") == "off"
     assert parse_elicit_mode("auto") == "auto"
     assert parse_elicit_mode("REQUIRED") == "required"
     assert parse_elicit_mode(" off ") == "off"
 
 
-def test_parse_elicit_mode_invalid_falls_back_auto():
-    assert parse_elicit_mode("yes") == "auto"
-    assert parse_elicit_mode("1") == "auto"
+def test_parse_elicit_mode_invalid_falls_back_off():
+    assert parse_elicit_mode("yes") == "off"
+    assert parse_elicit_mode("1") == "off"
 
 
 # ---------- 规则文本（safety/policy 纯函数，parse_policy 交叉验证） ----------
