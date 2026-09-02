@@ -390,7 +390,7 @@ def _policy_file(tmp_path, entries):
 
 
 def test_manage_policy_grant_takes_effect_without_restart(tmp_path):
-    """拒 → add → 同一 service 实例立即放行；文件持久化对新 store 一致可见。"""
+    """拒 → add（默认会话内）→ 同一 service 实例立即放行；文件不动，重启等价不可见。"""
     from safety.policy_store import PolicyStore
 
     p = _policy_file(tmp_path, ["*=deny"])
@@ -400,6 +400,7 @@ def test_manage_policy_grant_takes_effect_without_restart(tmp_path):
         mock=True,
         policy_store=PolicyStore(str(p)),
         mock_client_factory=lambda: mock_client))
+    before = p.read_text(encoding="utf-8")
 
     out = svc.execute_api("ECS", "ListServersDetails")
     assert out["ok"] is False
@@ -407,15 +408,17 @@ def test_manage_policy_grant_takes_effect_without_restart(tmp_path):
 
     res = svc.manage_policy("add", "ECS:*=allow")
     assert res["ok"] is True
-    assert "policy" in res
+    assert res["scope"] == "session"
 
     out2 = svc.execute_api("ECS", "ListServersDetails", params={"_status_code": 200})
     assert out2["ok"] is True                       # 无需重建 service / 重启 server
     assert mock_client.calls == [("ECS", "ListServersDetails", "cn-north-4", 200, 1)]
 
+    assert p.read_text(encoding="utf-8") == before   # 会话内不落盘
     other = ToolService(config=ServiceConfig(
-        mock=True, policy_store=PolicyStore(str(p))))   # 新实例读同一文件应一致
-    assert policy.evaluate(other._effective_policy_rules(), "ECS", "ShowServers")
+        mock=True, policy_store=PolicyStore(str(p)),
+        mock_client_factory=lambda: StubMockClient()))
+    assert other.execute_api("ECS", "ListServersDetails")["ok"] is False  # 重启等价：不可见
 
 
 def test_manage_policy_remove_revokes(tmp_path):
@@ -447,8 +450,75 @@ def test_manage_policy_list_and_errors(tmp_path):
     svc = ToolService(ServiceConfig(policy_store=PolicyStore(str(path))))
     listed = svc.manage_policy("list")
     assert listed["ok"] is True and "ECS:*List*=allow" in listed["policy"]
+    assert listed["rules"] == [{"line": "ECS:*List*=allow",
+                                "scope": "permanent", "expires_in": None}]
     assert svc.manage_policy("grant", line="ECS:*=allow")["ok"] is False   # 未知 action
     assert svc.manage_policy("add")["ok"] is False                         # 缺 line
+
+
+def test_manage_policy_scope_session_default(tmp_path):
+    """默认 add = 会话内：同实例立即放行，文件字节不动，新实例（重启等价）不可见。"""
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    mock_client = StubMockClient()
+    svc = ToolService(config=ServiceConfig(
+        mock=True, policy_store=PolicyStore(str(p)),
+        mock_client_factory=lambda: mock_client))
+    before = p.read_text(encoding="utf-8")
+
+    res = svc.manage_policy("add", "ECS:*=allow")
+    assert res["ok"] is True and res["scope"] == "session"
+    assert p.read_text(encoding="utf-8") == before          # 永不落盘
+    assert svc.execute_api("ECS", "ListServersDetails",
+                           params={"_status_code": 200})["ok"] is True
+    other = ToolService(config=ServiceConfig(
+        mock=True, policy_store=PolicyStore(str(p)),
+        mock_client_factory=lambda: mock_client))
+    assert other.execute_api("ECS", "ListServersDetails")["ok"] is False  # 重启等价
+
+
+def test_manage_policy_add_permanent_persists(tmp_path):
+    """scope=permanent 落盘：文件持久化对新 store 一致可见。"""
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+
+    res = svc.manage_policy("add", "ECS:*=allow", scope="permanent")
+    assert res["ok"] is True and res["scope"] == "permanent"
+    import json
+    assert "ECS:*=allow" in json.loads(p.read_text(encoding="utf-8"))
+    other = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    assert policy.evaluate(other._effective_policy_rules(), "ECS", "ShowServers")
+
+
+def test_manage_policy_temporary_ttl_and_list(tmp_path):
+    """scope=temporary 按 ttl_seconds 过期；list 返回结构化 rules（评估序）。"""
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+
+    res = svc.manage_policy("add", "ECS:*=allow", scope="temporary", ttl_seconds=120)
+    assert res["ok"] is True and res["scope"] == "temporary"
+    listed = svc.manage_policy("list")
+    assert listed["ok"] is True
+    assert [r["scope"] for r in listed["rules"]] == ["temporary", "permanent"]
+    entry = listed["rules"][0]
+    assert entry["line"] == "ECS:*=allow"
+    assert 0 < entry["expires_in"] <= 120
+
+
+def test_manage_policy_invalid_scope_and_ttl(tmp_path):
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+
+    assert svc.manage_policy("add", "ECS:*=allow", scope="once")["ok"] is False
+    assert svc.manage_policy("add", "ECS:*=allow", ttl_seconds=60)["ok"] is False  # ttl 仅 temporary
+    assert svc.manage_policy("add", "ECS:*=allow", scope="session")["ok"] is True
 
 
 # ---------- _presign 预签发分支（S9f-b service 级） ----------

@@ -49,7 +49,10 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 - 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
   （--elicitation off）无弹窗，务必先向用户确认再调用；开启 elicitation 后
   add/remove 由服务端先经 elicitation 向用户确认；
-  临时授权建议在任务完成后用 `manage_policy(action="remove", ...)` 回收。
+- 规则三档 scope：`session` 会话内（缺省，进程存活期，重启即失、无需回收）/
+  `temporary` 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ `permanent` 永久
+  （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用会话内/临时；
+  `remove` 跨层回收（先会话/临时后文件，首个语义命中移除）。
 
 ## 其它
 
@@ -200,13 +203,19 @@ def build_openapi_app(service: ToolService | None = None, *,
 
     @server.tool()
     async def manage_policy(action: str, line: str | None = None,
+                            scope: str | None = None,
+                            ttl_seconds: int | None = None,
                             ctx: Context | None = None) -> dict[str, Any]:
-        """管理 safety policy（list/add/remove），改动热生效并写回策略文件，无需重启 server。
+        """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
 
-        action=list 查看当前全部规则；action=add 新增规则（自动插到会遮蔽它的 deny
-        规则之前，如 "OBS:GetObject=allow"）；action=remove 按语义删除首个匹配规则。
-        安全约定：add/remove 由服务端先经 elicitation 向用户确认，授予最小规则；
-        客户端不支持 elicitation 时退回约定由调用方先行确认。临时授权用完即回收。
+        三档 scope：session 会话内（缺省，进程存活期，重启即失、无需回收）/
+        temporary 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ permanent 永久
+        （写入策略文件，跨重启）。仅 permanent 落盘。
+        action=list 查看当前全部规则（结构化 rules 含 scope/expires_in + 文件全文）；
+        action=add 新增规则（自动插到会遮蔽它的 deny 规则之前，如 "OBS:GetObject=allow"）；
+        action=remove 按语义移除首个匹配规则（跨层：先会话/临时后文件；不接受
+        scope/ttl_seconds）。安全约定：add/remove 由服务端先经 elicitation
+        向用户确认，授予最小规则；客户端不支持 elicitation 时退回约定由调用方先行确认。
         未配置 policy 文件时本工具拒绝执行（不创建文件）。
         """
         if ((action or "").strip().lower() in ("add", "remove")
@@ -214,7 +223,7 @@ def build_openapi_app(service: ToolService | None = None, *,
             blocked = await _consent(ctx).gate_change(action, line or "")
             if blocked:
                 return {"ok": False, "action": action, "reason": blocked}
-        return svc.manage_policy(action, line=line)
+        return svc.manage_policy(action, line=line, scope=scope, ttl_seconds=ttl_seconds)
 
     return server
 

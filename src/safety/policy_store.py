@@ -5,11 +5,15 @@
   文件被外部编辑即时生效，无需重启。
 - 内存 → 文件：add/remove 先校验、原子落盘（tmp + os.replace）、再刷新内存，
   静止态恒满足 memory == file。
+- 三档 scope：permanent（文件真值源，跨重启）/ temporary（内存 overlay + TTL，
+  到期自动剪枝）/ session（内存 overlay，进程存活期，缺省档）。
+  生效规则 = overlay（插入序）++ 文件规则，整体行序 first-match；overlay allow
+  穿透文件具体 deny 与兜底 deny（与落盘插位语义一致），overlay deny 可临时收紧。
+  overlay 仅内存态，重启即失；未配置路径（path=None）三档全拒（红线不变）。
 - 插入不变量：新 allow 规则插在首个会遮蔽它的 deny 规则之前
   （典型形态即 `*=deny` 兜底行之前），保证行序 first-match 语义下新增规则真实生效。
 - 运行时降级：运行期文件被写坏/短暂消失时沿用最近合法版本并记 WARNING；
   文件恢复合法后自动重新采纳。启动时急切加载，坏文件快速失败（与既有行为一致）。
-- 未配置路径（path=None）：store 只读不可变，「未配置即全拒」红线不变。
 
 依赖边界：仅依赖标准库与本包 policy.py 纯函数，保持 safety 最底层零外部依赖。
 """
@@ -20,6 +24,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -31,13 +36,28 @@ NOT_CONFIGURED_REASON = (
     "未配置 safety policy 文件，manage_policy 不可用"
     "（启动参数 --policy 或环境变量 HUAWEICLOUD_MCP_POLICY_FILE）")
 
+SCOPES: tuple[str, ...] = ("permanent", "temporary", "session")
+DEFAULT_SCOPE = "session"
+DEFAULT_TTL_SECONDS = 3600
+
 StatFn = Callable[[str], Any]
+TimeFn = Callable[[], float]
 
 
 @dataclass(frozen=True)
 class MutationResult:
     ok: bool
     reason: str | None = None
+    scope: str | None = None
+
+
+@dataclass(frozen=True)
+class RuleInfo:
+    """规则的结构化视图（评估序）：scope 标明所属档位。"""
+
+    line: str
+    scope: str
+    expires_in: int | None = None
 
 
 def _read_entries(path: str) -> tuple[list[str], bool]:
@@ -88,16 +108,31 @@ def _shadows(rule: safety_policy.PolicyRule,
     return not rule.allow
 
 
+@dataclass(frozen=True)
+class _OverlayEntry:
+    """内存规则（session/temporary）：仅进程内存活，永不落盘。
+
+    expire_at=None 为 session（无 TTL）；否则为 temporary 的到期时刻。
+    """
+
+    line: str
+    rule: safety_policy.PolicyRule
+    expire_at: float | None = None
+
+
 class PolicyStore:
-    def __init__(self, path: str | None, *, stat_fn: StatFn | None = None):
+    def __init__(self, path: str | None, *, stat_fn: StatFn | None = None,
+                 time_fn: TimeFn | None = None):
         self.path = path
         self._lock = threading.RLock()   # 序列化读改写与热重载，杜绝并发丢失更新
         self._stat_fn: StatFn = stat_fn or os.stat
+        self._time_fn: TimeFn = time_fn or time.monotonic
         self._entries: list[str] | None = None
         self._is_json = False
         self._rules: tuple[safety_policy.PolicyRule, ...] = ()
         self._stamp: Any = None
         self._missing = False
+        self._overlay: list[_OverlayEntry] = []   # session/temporary 规则（评估时前置）
         if path is not None:
             entries, is_json = _read_entries(path)          # 缺文件 → FileNotFoundError 快速失败
             rules = tuple(safety_policy.parse_policy(entries))  # 非法规则 → ValueError 快速失败
@@ -144,50 +179,112 @@ class PolicyStore:
     # ---------- 对外接口 ----------
 
     def rules(self) -> tuple[safety_policy.PolicyRule, ...]:
-        """当前生效规则（触发热重载检查）。未配置路径返回空元组。"""
+        """当前生效规则 = overlay（插入序）++ 文件规则，整体 first-match。
+
+        触发热重载检查。未配置路径返回空元组（红线：未配置即全拒）。
+        """
         with self._lock:
             self._refresh()
-            return self._rules
+            self._prune_expired()
+            overlay = tuple(entry.rule for entry in self._overlay)
+            return overlay + self._rules
 
     def text(self) -> str:
-        """当前生效策略全文（含注释，按当前磁盘格式渲染）。未配置返回空串。"""
+        """当前生效策略全文（含注释，按当前磁盘格式渲染；仅文件规则）。
+        未配置返回空串。"""
         with self._lock:
             self._refresh()
             if not self._entries:
                 return ""
             return "\n".join(self._entries) + "\n"
 
-    def add_rule(self, line: str) -> MutationResult:
-        """新增一条规则并持久化。幂等：语义重复时直接成功且不改写文件。
+    def add_rule(self, line: str, *, scope: str | None = None,
+                 ttl_seconds: int | None = None) -> MutationResult:
+        """新增一条规则，按 scope 分派：permanent 落盘，session/temporary 入内存 overlay。
 
-        插入位置保证新规则真实生效：置于首个会遮蔽它的 deny 规则之前。
+        scope=None 取缺省档 session（默认解析在本层，调用方零知识透传）。
+        temporary 按 ttl_seconds（缺省 3600）到期，取规则时惰性剪枝。
+        幂等：同 scope 层内语义重复时直接成功且不改写状态。
+        插入位置保证新规则真实生效：置于首个会遮蔽它的 deny 规则之前
+        （overlay 内与文件内各自维护该不变量）。
         整个读-改-写临界区互斥：并发调用（MCP 工具并行派发）不丢更新。
         """
+        scope = scope or DEFAULT_SCOPE
+        if scope not in SCOPES:
+            return MutationResult(
+                ok=False, scope=scope,
+                reason=f"未知 scope: {scope}（可选 permanent/temporary/session）")
+        if ttl_seconds is not None and scope != "temporary":
+            return MutationResult(
+                ok=False, scope=scope, reason="ttl_seconds 仅支持 scope=temporary")
+        if ttl_seconds is not None and ttl_seconds <= 0:
+            return MutationResult(
+                ok=False, scope=scope, reason="ttl_seconds 必须为正整数（秒）")
         if self.path is None or self._entries is None:
-            return MutationResult(ok=False, reason=NOT_CONFIGURED_REASON)
+            return MutationResult(ok=False, scope=scope, reason=NOT_CONFIGURED_REASON)
         try:
             rule = safety_policy.parse_policy([line])[0]
         except ValueError as exc:
-            return MutationResult(ok=False, reason=f"规则格式非法：{exc}")
+            return MutationResult(ok=False, scope=scope, reason=f"规则格式非法：{exc}")
+        if scope == "permanent":
+            return self._add_permanent(line, rule)
+        return self._add_overlay(line, rule, scope, ttl_seconds)
+
+    def _add_permanent(self, line: str,
+                       rule: safety_policy.PolicyRule) -> MutationResult:
         with self._lock:
             self._refresh()
             assert self._entries is not None
             for existing in self._rules:
                 if _rule_key(existing) == _rule_key(rule):
-                    return MutationResult(ok=True, reason="规则已存在")
+                    return MutationResult(ok=True, scope="permanent", reason="规则已存在")
             pos = self._insert_position(self._entries, rule)
             new_entries = list(self._entries)
             new_entries.insert(pos, line.strip())
             error = self._persist(new_entries)
             if error is not None:
-                return MutationResult(ok=False, reason=error)
-            logger.info("policy add_rule %s -> ok", line.strip())
-            return MutationResult(ok=True)
+                return MutationResult(ok=False, scope="permanent", reason=error)
+            logger.info("policy add_rule %s scope=permanent -> ok", line.strip())
+            return MutationResult(ok=True, scope="permanent")
+
+    def _add_overlay(self, line: str, rule: safety_policy.PolicyRule,
+                     scope: str, ttl_seconds: int | None) -> MutationResult:
+        with self._lock:
+            self._prune_expired()
+            for entry in self._overlay:
+                if _rule_key(entry.rule) == _rule_key(rule):
+                    return MutationResult(ok=True, scope=scope, reason="规则已存在")
+            expire_at = ((self._time_fn() + (ttl_seconds if ttl_seconds is not None
+                                             else DEFAULT_TTL_SECONDS))
+                         if scope == "temporary" else None)
+            pos = self._overlay_insert_position(rule)
+            self._overlay.insert(pos, _OverlayEntry(line=line.strip(), rule=rule,
+                                                    expire_at=expire_at))
+            logger.info("policy add_rule %s scope=%s -> ok", line.strip(), scope)
+            return MutationResult(ok=True, scope=scope)
+
+    def _prune_expired(self) -> None:
+        """惰性剪枝：剔除到期的 temporary 规则（取规则/新增前调用）。"""
+        now = self._time_fn()
+        kept = [e for e in self._overlay
+                if e.expire_at is None or e.expire_at > now]
+        if len(kept) != len(self._overlay):
+            logger.info("policy overlay 临时规则到期剪枝：%d 条",
+                        len(self._overlay) - len(kept))
+            self._overlay = kept
+
+    def _overlay_insert_position(self, rule: safety_policy.PolicyRule) -> int:
+        """overlay 内插入点：首个「对探测字面量判 false」的 overlay 规则之前；无则末尾。"""
+        probe_product, probe_api = _probe_args(rule)
+        for i, entry in enumerate(self._overlay):
+            if _shadows(entry.rule, probe_product, probe_api):
+                return i
+        return len(self._overlay)
 
     def remove_rule(self, line: str) -> MutationResult:
-        """删除首个语义匹配的规则并持久化；找不到匹配返回失败且文件不动。
+        """删除首个语义匹配的规则：先内存 overlay 后策略文件；scope 回报删除层。
 
-        与 add_rule 共用同一把锁：并发增删互不覆盖。
+        与 add_rule 共用同一把锁：并发增删互不覆盖。找不到匹配返回失败且状态不动。
         """
         if self.path is None or self._entries is None:
             return MutationResult(ok=False, reason=NOT_CONFIGURED_REASON)
@@ -197,8 +294,15 @@ class PolicyStore:
             return MutationResult(ok=False, reason=f"规则格式非法：{exc}")
         with self._lock:
             self._refresh()
-            assert self._entries is not None
+            self._prune_expired()
             target = _rule_key(rule)
+            for i, entry in enumerate(self._overlay):
+                if _rule_key(entry.rule) == target:
+                    scope = "temporary" if entry.expire_at is not None else "session"
+                    del self._overlay[i]
+                    logger.info("policy remove_rule %s scope=%s -> ok", line.strip(), scope)
+                    return MutationResult(ok=True, scope=scope)
+            assert self._entries is not None
             for i in _semantic_positions(self._entries):
                 parsed = safety_policy.parse_policy([self._entries[i]])
                 if parsed and _rule_key(parsed[0]) == target:
@@ -207,9 +311,31 @@ class PolicyStore:
                     error = self._persist(new_entries)
                     if error is not None:
                         return MutationResult(ok=False, reason=error)
-                    logger.info("policy remove_rule %s -> ok", line.strip())
-                    return MutationResult(ok=True)
+                    logger.info("policy remove_rule %s scope=permanent -> ok", line.strip())
+                    return MutationResult(ok=True, scope="permanent")
             return MutationResult(ok=False, reason="未找到匹配的规则")
+
+    def list_rules(self) -> list[RuleInfo]:
+        """规则的结构化视图（评估序）：overlay（session/temporary）前置，文件规则随后。
+
+        temporary 的 expires_in 为剩余秒；其余 None。未配置路径返回空列表。
+        """
+        with self._lock:
+            self._refresh()
+            self._prune_expired()
+            now = self._time_fn()
+            infos: list[RuleInfo] = []
+            for entry in self._overlay:
+                scope = "temporary" if entry.expire_at is not None else "session"
+                expires_in = (max(0, int(entry.expire_at - now))
+                              if entry.expire_at is not None else None)
+                infos.append(RuleInfo(line=entry.line, scope=scope,
+                                      expires_in=expires_in))
+            if self._entries:
+                for i in _semantic_positions(self._entries):
+                    infos.append(RuleInfo(line=self._entries[i].strip(),
+                                          scope="permanent"))
+            return infos
 
     # ---------- 持久化 ----------
 

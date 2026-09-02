@@ -13,14 +13,38 @@ def make_service(tmp_path, entries):
 
 
 def test_grant_takes_effect_without_restart(tmp_path):
-    svc, _ = make_service(tmp_path, ["*=deny"])
+    """默认 add = 会话内：同实例立即放行；文件不动，重启等价不可见。"""
+    svc, p = make_service(tmp_path, ["*=deny"])
     assert svc._check_policy("@huaweicloud/ecs") is not None
+    before = p.read_text(encoding="utf-8")
 
     res = svc.manage_policy("add", "server:@huaweicloud/ecs=allow")
     assert res["ok"] is True
-    assert "manage_policy" in res["policy"] or "server:@huaweicloud/ecs=allow" in res["policy"]
+    assert res["scope"] == "session"
+    assert p.read_text(encoding="utf-8") == before
     assert svc._check_policy("@huaweicloud/ecs") is None          # 连接放行
     assert svc._check_policy("@huaweicloud/ecs", "list*") is not None  # 未授工具级
+
+    other, _ = make_service(tmp_path, ["*=deny"])                 # 重启等价
+    assert other._check_policy("@huaweicloud/ecs") is not None
+
+
+def test_add_permanent_persists_and_list(tmp_path):
+    """scope=permanent 落盘；list 返回结构化 rules（评估序，overlay 前置）。"""
+    svc, p = make_service(tmp_path, ["*=deny"])
+    assert svc.manage_policy("add", "server:@huaweicloud/ecs=allow",
+                             scope="permanent")["ok"] is True
+    assert "server:@huaweicloud/ecs=allow" in p.read_text(encoding="utf-8")
+
+    svc.manage_policy("add", "server:@huaweicloud/oss:list*=allow",
+                      scope="temporary", ttl_seconds=120)
+    listed = svc.manage_policy("list")
+    assert listed["ok"] is True
+    assert [r["scope"] for r in listed["rules"]] == [
+        "temporary", "permanent", "permanent"]
+    assert listed["rules"][0]["line"] == "server:@huaweicloud/oss:list*=allow"
+    assert 0 < listed["rules"][0]["expires_in"] <= 120
+    assert listed["rules"][1]["line"] == "server:@huaweicloud/ecs=allow"
 
 
 def test_remove_revokes_and_persists(tmp_path):

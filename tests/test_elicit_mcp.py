@@ -1,8 +1,8 @@
 """Elicitation 集成测试（E2）：真 mcp SDK client ↔ 真 MCPServer 内存回环。
 
 验证 adapter（ctx_elicit_fn 归一化）与端到端契约：
-拒绝→accept→规则落盘+granted_rule；decline→原样；off→从不发 elicitation；
-不支持 elicitation 的客户端→auto 降级 / required 拒绝。
+拒绝→accept→会话内规则（不落盘）+granted_rule；decline→原样；off→从不发 elicitation；
+不支持 elicitation 的客户端→auto 降级 / required 拒绝；显式 scope=permanent 才落盘。
 元数据网络边界以 monkeypatch apie.http.fetch_json 封死（远端回退返回 None）。
 """
 
@@ -91,10 +91,46 @@ def test_openapi_execute_denied_accept_grants_rule(tmp_path, monkeypatch):
     assert first["ok"] is False
     assert first["granted_rule"] == "ECS:ListServersDetails=allow"
     assert "请重新调用" in first["reason"]
-    assert seen and "ECS:ListServersDetails=allow" in seen[0]
-    assert "ECS:ListServersDetails=allow" in policy_lines(p)
+    assert "ECS:ListServersDetails=allow" in seen[0]
+    assert "会话" in seen[0]                              # 文案声明会话内语义
+    assert "ECS:ListServersDetails=allow" not in policy_lines(p)   # 会话内授予不落盘
     assert second["ok"] is False
     assert "safety policy" not in (second.get("reason") or "")  # policy 已放行
+
+
+def test_openapi_grant_is_session_scoped_restart_equivalent(tmp_path, monkeypatch):
+    """授予为会话内：同一 server 实例重试放行；新建实例（重启等价）恢复拒绝。"""
+    app, p = make_openapi(tmp_path, "auto")
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
+
+    async def _granted_run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client([ACCEPT], [])) as s:
+                await s.initialize()
+                first = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+                second = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+                return first, second
+
+    first, second = run(_granted_run())
+    assert first["granted_rule"] == "ECS:ListServersDetails=allow"
+    assert "safety policy" not in (second.get("reason") or "")   # 同实例已放行
+
+    fresh_svc = ToolService(ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    fresh = build_openapi_app(fresh_svc, elicit_mode="off")
+    seen: list = []
+
+    async def _fresh_run():
+        async with InMemoryTransport(fresh) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client([], seen)) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+
+    out = run(_fresh_run())
+    assert "safety policy 拒绝执行" in out["reason"]              # 重启等价：规则已失
+    assert out.get("granted_rule") is None
 
 
 def test_openapi_execute_denied_decline_keeps_denial(tmp_path, monkeypatch):
@@ -133,6 +169,25 @@ def test_openapi_mode_off_never_elicits(tmp_path, monkeypatch):
     assert seen == []                                     # 从未发起 elicitation
     assert exec_res.get("granted_rule") is None
     assert mp_res["ok"] is True                           # off 模式直接放行
+    assert mp_res["scope"] == "session"                   # 默认会话内
+    assert "ECS:ListServers=allow" not in policy_lines(p)  # 不落盘
+
+
+def test_openapi_manage_policy_permanent_scope_persists(tmp_path, monkeypatch):
+    """显式 scope=permanent：落盘且对新实例可见（off 模式免确认）。"""
+    app, p = make_openapi(tmp_path, "off")
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool(
+                    "manage_policy", {"action": "add", "line": "ECS:ListServers=allow",
+                                      "scope": "permanent"}))
+
+    out = run(_run())
+    assert out["ok"] is True and out["scope"] == "permanent"
     assert "ECS:ListServers=allow" in policy_lines(p)
 
 
@@ -155,7 +210,7 @@ def test_openapi_unsupported_client_auto_degrades(tmp_path, monkeypatch):
     assert "safety policy 拒绝执行" in exec_res["reason"]
     assert exec_res.get("granted_rule") is None
     assert mp_res["ok"] is True
-    assert "ECS:GetObject=allow" in policy_lines(p)
+    assert "ECS:GetObject=allow" not in policy_lines(p)   # 默认会话内，不落盘
 
 
 def test_openapi_manage_policy_confirm_flow(tmp_path):
@@ -184,7 +239,8 @@ def test_openapi_manage_policy_confirm_flow(tmp_path):
     assert blocked["ok"] is False and "未确认" in blocked["reason"]
     granted = run(_granted())
     assert granted["ok"] is True
-    assert "OBS:GetObject=allow" in policy_lines(p)
+    assert granted["scope"] == "session"
+    assert "OBS:GetObject=allow" not in policy_lines(p)   # 会话内授予不落盘
 
 
 def test_openapi_required_unsupported_blocks_manage_policy(tmp_path):
@@ -238,7 +294,7 @@ def test_discover_connect_denied_accept_grants_rule(tmp_path):
     assert out["ok"] is False
     assert out["granted_rule"] == "server:@huaweicloud/ecs=allow"
     assert seen and "server:@huaweicloud/ecs=allow" in seen[0]
-    assert "server:@huaweicloud/ecs=allow" in policy_lines(p)
+    assert "server:@huaweicloud/ecs=allow" not in policy_lines(p)   # 会话内授予不落盘
 
 
 def test_discover_manage_policy_decline_keeps_file(tmp_path):

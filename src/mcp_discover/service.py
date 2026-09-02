@@ -107,30 +107,46 @@ class DiscoverService:
             subject=f"{server}:{tool}" if tool else server,
             rule=safety_policy.grant_server_rule(server, tool), reason=err)
 
-    def manage_policy(self, action: str,
-                      line: str | None = None) -> dict[str, Any]:
-        """管理 safety policy（list/add/remove），改动即时生效并写回策略文件。
+    def manage_policy(self, action: str, line: str | None = None,
+                      scope: str | None = None,
+                      ttl_seconds: int | None = None) -> dict[str, Any]:
+        """管理 safety policy（list/add/remove），改动即时生效无需重启。
 
+        三档 scope：permanent（写策略文件，跨重启）/ temporary（内存 + TTL 自动
+        过期，ttl_seconds 缺省 3600）/ session（内存，进程存活期，缺省档）。
+        remove 跨层先 overlay 后文件并回报 scope；不接受 scope/ttl_seconds。
         安全约定：调用方（Agent）应先向用户确认再 add/remove；审计日志强制记录。
         """
         action = (action or "").strip().lower()
-        logger.info("manage_policy action=%s line=%s", action, line or "-")
+        logger.info("manage_policy action=%s line=%s scope=%s ttl=%s",
+                    action, line or "-", scope or "-", ttl_seconds)
         store = self.config.policy_store
         if store is None:
             return {"ok": False, "reason": (
                 "未配置 safety policy 文件，manage_policy 不可用"
                 "（--policy 或环境变量 HUAWEICLOUD_MCP_POLICY_FILE）")}
         if action == "list":
-            return {"ok": True, "action": "list", "policy": store.text()}
+            return {"ok": True, "action": "list", "policy": store.text(),
+                    "rules": [{"line": r.line, "scope": r.scope,
+                               "expires_in": r.expires_in}
+                              for r in store.list_rules()]}
         if action not in ("add", "remove"):
             return {"ok": False, "reason": f"未知 action: {action}（可选 list/add/remove）"}
         rule_text = (line or "").strip()
         if not rule_text:
             return {"ok": False, "reason": f"{action} 需要提供 line 参数（规则文本）"}
-        result = (store.add_rule(rule_text) if action == "add"
-                  else store.remove_rule(rule_text))
+        if action == "remove":
+            if scope is not None or ttl_seconds is not None:
+                return {"ok": False, "reason": (
+                    "remove 不接受 scope/ttl_seconds 参数"
+                    "（跨层匹配：先会话/临时后文件，首个语义命中移除）")}
+            result = store.remove_rule(rule_text)
+        else:
+            result = store.add_rule(rule_text, scope=scope, ttl_seconds=ttl_seconds)
         logger.info("manage_policy %s result=%s", action, "ok" if result.ok else "deny")
         out: dict[str, Any] = {"ok": result.ok, "action": action}
+        if result.scope:
+            out["scope"] = result.scope
         if result.reason:
             out["reason"] = result.reason
         out["policy"] = store.text()

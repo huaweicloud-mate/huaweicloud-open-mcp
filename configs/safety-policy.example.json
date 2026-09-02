@@ -2,7 +2,9 @@
   "# =======================================================",
   "# OpenAPI 直连模式规则（product:apiPattern=allow|deny）",
   "# 本文件是唯一真值源：server 运行期经 PolicyStore 热重载，外部编辑即时生效；",
-  "# 也可由 Agent 经 manage_policy(list/add/remove) 增删（原子写盘、热生效、无需重启）。",
+  "# 也可由 Agent 经 manage_policy(list/add/remove) 增删（原子写盘、热生效、无需重启）：",
+  "# add 缺省 scope=session（会话内，重启即失、不落盘）；temporary 带 TTL 自动过期；",
+  "# 仅显式 scope=permanent 写入本文件（跨重启持久）。",
   "# =======================================================",
   "ECS:*Show*=allow",
   "ECS:*List*=allow",
@@ -29,5 +31,6 @@
   "# server:@huaweicloud/vpc:*=allow",
   "",
   "OBS:ListBuckets=allow",
+  "CES:ShowMetricData=allow",
   "*=deny"
 ]

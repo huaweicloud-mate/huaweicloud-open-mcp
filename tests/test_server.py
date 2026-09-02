@@ -169,6 +169,7 @@ def test_manage_policy_description_notes_hot_reload_and_confirm():
     desc = app._tool_manager._tools["manage_policy"].description
     assert "无需重启" in desc
     assert "向用户确认" in desc
+    assert "session" in desc and "temporary" in desc and "permanent" in desc
 
 
 def test_discover_manage_policy_description_notes_confirm():
@@ -177,3 +178,4 @@ def test_discover_manage_policy_description_notes_confirm():
     app = build_discover_app(DiscoverConfig())
     desc = app._tool_manager._tools["manage_policy"].description
     assert "向用户确认" in desc
+    assert "session" in desc and "temporary" in desc and "permanent" in desc

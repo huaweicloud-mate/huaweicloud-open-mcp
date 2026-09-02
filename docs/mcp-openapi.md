@@ -231,7 +231,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | S1 | `signer.sign(request) → Authorization 头` | 纯函数单测 | 华为云官方 Go SDK 测试向量 |
 | S2 | `safety.evaluate(policy, product, api)` | 纯函数单测 | 手写策略文件 + 预期字面量 |
-| S2b | `safety/policy_store.py` PolicyStore（热重载 / 文件↔内存双向同步） | 单测：tmp 文件 + 内容哈希 stat 替身 | 回读磁盘原始内容 + parse_policy 交叉验证 |
+| S2b | `safety/policy_store.py` PolicyStore（热重载 / 文件↔内存双向同步 / 三档 scope：permanent 落盘、temporary TTL、session 内存 overlay 缺省档） | 单测：tmp 文件 + 内容哈希 stat 替身 + 注入时钟 | 回读磁盘原始内容 + parse_policy 交叉验证 |
 | S3 | 各工具纯函数（含 manage_policy 编排） | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段 |
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + urllib 打桩错误注入 | mock 端点返回 |
 | S5 | APIE 管道各阶段 | 单测 + 迷你样本集成 + e2e 全量 | Swagger 2.0 schema |

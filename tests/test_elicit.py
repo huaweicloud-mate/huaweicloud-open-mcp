@@ -219,6 +219,19 @@ def test_messages_mention_rule_and_action():
     assert "safety policy 拒绝执行" in denial_message(OFFER)
 
 
+def test_messages_state_session_scope_semantics():
+    """文案契约：授予/变更声明会话内语义（重启即失）；只有显式 permanent 才写文件。"""
+    from common.elicit import change_message
+
+    msg = denial_message(OFFER)
+    assert "会话" in msg and "重启" in msg
+    assert "策略文件" not in msg
+    add_msg = change_message("add", "OBS:GetObject=allow")
+    assert "会话" in add_msg
+    assert "permanent" in add_msg      # 指引：需持久时显式传 scope
+    assert "策略文件" in add_msg
+
+
 # ---------- ctx_elicit_fn adapter 归一化 ----------
 
 class FakeCtx:

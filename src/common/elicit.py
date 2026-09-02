@@ -79,17 +79,18 @@ def change_message(action: str, line: str) -> str:
     """manage_policy add/remove 确认弹窗文案。"""
     if action == "add":
         return (f"确认新增 safety policy 规则 '{line}'？"
-                "规则写入策略文件并热生效，临时授权建议用完即回收（remove）。")
+                "缺省仅在当前会话内生效（重启即失，无需回收）；"
+                '需跨重启持久时显式传 scope="permanent"（写入策略文件）。')
     if action == "remove":
         return f"确认移除 safety policy 规则 '{line}'？"
     return f"确认对 safety policy 执行 {action}：'{line}'？"
 
 
 def denial_message(offer: DenialOffer) -> str:
-    """拒绝路径提议授予弹窗文案。"""
+    """拒绝路径提议授予弹窗文案（缺省授予会话内规则，不落盘）。"""
     return (f"{offer.reason}\n\n"
             f"是否授予最小规则 '{offer.rule}' 放行 {offer.subject}？"
-            "规则将写入策略文件并热生效。")
+            "规则仅在当前会话内生效（重启即失，无需回收）。")
 
 
 class PolicyConsent:

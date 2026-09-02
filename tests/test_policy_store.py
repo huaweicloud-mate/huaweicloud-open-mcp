@@ -140,7 +140,7 @@ def test_add_rule_persists_to_disk_and_takes_effect(tmp_path):
     p.write_text('["OBS:*List*=allow", "*=deny"]', encoding="utf-8")
     store = make_store(p)
 
-    res = store.add_rule("OBS:GetObject=allow")
+    res = store.add_rule("OBS:GetObject=allow", scope="permanent")
     assert res.ok is True
 
     disk = json.loads(read_disk(p))
@@ -156,7 +156,7 @@ def test_add_rule_inserted_before_catchall_deny(tmp_path):
     p.write_text(json.dumps(
         ["#", "*=deny"], ensure_ascii=False), encoding="utf-8")
     store = make_store(p)
-    store.add_rule("ECS:*List*=allow")
+    store.add_rule("ECS:*List*=allow", scope="permanent")
     lines = semantic_lines(p)
     assert lines == ["ECS:*List*=allow", "*=deny"]  # 顺序敏感：兜底行之前
 
@@ -213,7 +213,7 @@ def test_remove_keeps_comments_json_format(tmp_path):
         ["# head", "OBS:GetObject=allow", "*=deny"], ensure_ascii=False),
         encoding="utf-8")
     store = make_store(p)
-    store.add_rule("VPC:*List*=allow")
+    store.add_rule("VPC:*List*=allow", scope="permanent")
     disk = json.loads(read_disk(p))
     assert disk[0] == "# head"
     assert disk == ["# head", "OBS:GetObject=allow", "VPC:*List*=allow", "*=deny"]
@@ -223,7 +223,7 @@ def test_text_format_roundtrip_preserves_order(tmp_path):
     p = tmp_path / "policy.txt"
     p.write_text("# c1\nOBS:GetObject=allow\n*=deny\n", encoding="utf-8")
     store = make_store(p)
-    store.add_rule("ECS:*=allow")
+    store.add_rule("ECS:*=allow", scope="permanent")
     lines = semantic_lines(p)
     assert lines.index("ECS:*=allow") < lines.index("*=deny")
 
@@ -257,6 +257,206 @@ def test_deleted_file_midrun_keeps_last_known_good(tmp_path):
     assert policy.evaluate(store.rules(), "OBS", "ListBuckets") is True
 
 
+# ---------- 三档 scope：会话内 overlay（默认档） ----------
+
+def test_add_rule_defaults_to_session_overlay(tmp_path):
+    """默认 scope=session：内存前置生效；文件字节不动；新实例（重启等价）即失。"""
+    p = tmp_path / "policy.json"
+    before = '["OBS:*List*=allow", "*=deny"]'
+    p.write_text(before, encoding="utf-8")
+    store = make_store(p)
+
+    res = store.add_rule("OBS:GetObject=allow")
+    assert res.ok is True
+    assert res.scope == "session"
+    assert read_disk(p) == before                                   # 文件不动
+    assert policy.evaluate(store.rules(), "OBS", "GetObject") is True
+    other = make_store(p)                                           # 重启等价：新实例无 overlay
+    assert policy.evaluate(other.rules(), "OBS", "GetObject") is False
+
+
+def test_session_overlay_precedes_file_rules(tmp_path):
+    """一律前置：overlay allow 穿透文件具体 deny 与兜底 deny；overlay deny 收紧文件 allow。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:DeleteServer=deny\nECS:*List*=allow\nECS:ShowServer=allow\n*=deny\n",
+                 encoding="utf-8")
+    store = make_store(p)
+
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True
+    store.add_rule("ECS:DeleteServer=allow")       # 穿透具体 deny
+    assert policy.evaluate(store.rules(), "ECS", "DeleteServer") is True
+    store.add_rule("VPC:ShowSubnet=allow")         # 穿透兜底 deny
+    assert policy.evaluate(store.rules(), "VPC", "ShowSubnet") is True
+    store.add_rule("ECS:*List*=deny")              # overlay deny 收紧文件 allow
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is False
+    assert policy.evaluate(store.rules(), "ECS", "ListImages") is False
+    assert policy.evaluate(store.rules(), "ECS", "ShowServer") is True  # 未命中的文件规则照常
+
+
+def test_overlay_new_allow_inserted_before_overlay_deny(tmp_path):
+    """overlay 内行序不变量：新 allow 插到 overlay 内首个遮蔽它的 deny 之前。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+
+    store.add_rule("ECS:*=deny")
+    store.add_rule("ECS:ListServers=allow")   # 若追加到 deny 之后则被遮蔽
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True
+    assert policy.evaluate(store.rules(), "ECS", "DeleteServer") is False
+
+
+def test_session_add_duplicate_idempotent(tmp_path):
+    """层内语义幂等（大小写不敏感）；同文本与文件规则独立共存。"""
+    p = tmp_path / "policy.txt"
+    before = "ECS:List*=allow\n*=deny\n"
+    p.write_text(before, encoding="utf-8")
+    store = make_store(p)
+
+    assert store.add_rule("ECS:GetServer=allow").ok is True
+    assert store.add_rule("ecs:getserver=allow").ok is True   # 幂等，不重复入 overlay
+    assert read_disk(p) == before
+    assert len(store.rules()) == 3   # 2 文件 + 1 overlay（非 4）
+
+
+# ---------- 临时（temporary，TTL 自动过期） ----------
+
+def test_temporary_rule_expires_after_ttl(tmp_path):
+    """scope=temporary：time_fn 注入时钟，到期惰性剪枝；剪枝后可重新授予。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    now = {"t": 1000.0}
+    store = PolicyStore(str(p), stat_fn=make_stat_fn(), time_fn=lambda: now["t"])
+
+    res = store.add_rule("ECS:ListServers=allow", scope="temporary", ttl_seconds=60)
+    assert res.ok is True and res.scope == "temporary"
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True
+    now["t"] += 59
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True   # 未到期
+    now["t"] += 2
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is False  # 到期剪枝
+    assert store.add_rule("ECS:ListServers=allow",
+                          scope="temporary", ttl_seconds=60).ok is True   # 可重新授予
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True
+
+
+def test_temporary_default_ttl_is_3600(tmp_path):
+    """scope=temporary 缺省 ttl_seconds=3600。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    now = {"t": 0.0}
+    store = PolicyStore(str(p), stat_fn=make_stat_fn(), time_fn=lambda: now["t"])
+
+    store.add_rule("ECS:ListServers=allow", scope="temporary")
+    now["t"] += 3599
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True
+    now["t"] += 2
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is False
+
+
+def test_ttl_only_valid_with_temporary(tmp_path):
+    """ttl_seconds 仅与 scope=temporary 组合，且必须为正。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+
+    assert store.add_rule("ECS:*=allow", scope="session", ttl_seconds=60).ok is False
+    assert store.add_rule("ECS:*=allow", scope="permanent", ttl_seconds=60).ok is False
+    res0 = store.add_rule("ECS:*=allow", scope="temporary", ttl_seconds=0)
+    assert res0.ok is False and "ttl_seconds" in (res0.reason or "")
+    resn = store.add_rule("ECS:*=allow", scope="temporary", ttl_seconds=-5)
+    assert resn.ok is False
+
+
+# ---------- remove 跨层 + list_rules ----------
+
+def test_remove_searches_overlay_before_file(tmp_path):
+    """remove 先 overlay 后文件；scope 回报删除层；同语义两层共存时分两次移除。"""
+    p = tmp_path / "policy.txt"
+    before = "OBS:GetObject=allow\n*=deny\n"
+    p.write_text(before, encoding="utf-8")
+    store = make_store(p)
+
+    store.add_rule("OBS:GetObject=allow")            # overlay（默认 session）
+    res = store.remove_rule("OBS:GetObject=allow")
+    assert res.ok is True and res.scope == "session"
+    assert read_disk(p) == before                    # 文件同文本仍在
+    res2 = store.remove_rule("OBS:GetObject=allow")
+    assert res2.ok is True and res2.scope == "permanent"
+    res3 = store.remove_rule("OBS:GetObject=allow")
+    assert res3.ok is False and "未找到" in (res3.reason or "")
+
+
+def test_remove_temporary_reports_scope(tmp_path):
+    now = {"t": 0.0}
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = PolicyStore(str(p), stat_fn=make_stat_fn(), time_fn=lambda: now["t"])
+
+    store.add_rule("ECS:*=allow", scope="temporary", ttl_seconds=100)
+    res = store.remove_rule("ECS:*=allow")
+    assert res.ok is True and res.scope == "temporary"
+    assert read_disk(p) == "*=deny\n"
+
+
+def test_list_rules_structure_and_order(tmp_path):
+    """list_rules 按评估序：overlay 前置；temporary 带 expires_in 剩余秒。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:*List*=allow\n*=deny\n", encoding="utf-8")
+    now = {"t": 100.0}
+    store = PolicyStore(str(p), stat_fn=make_stat_fn(), time_fn=lambda: now["t"])
+
+    store.add_rule("ECS:GetServer=allow")                                  # session
+    store.add_rule("OBS:GetObject=allow", scope="temporary", ttl_seconds=50)
+
+    infos = store.list_rules()
+    assert [i.scope for i in infos] == ["session", "temporary", "permanent", "permanent"]
+    assert infos[0].line == "ECS:GetServer=allow"
+    assert infos[0].expires_in is None
+    assert infos[1].line == "OBS:GetObject=allow"
+    assert infos[1].expires_in == 50     # 剩余秒（now=100，expire_at=150）
+    assert all(i.expires_in is None for i in infos[2:])
+    assert infos[2].line == "ECS:*List*=allow"
+
+    now["t"] += 50                        # 恰到 expire_at → 剪枝
+    infos = store.list_rules()
+    assert [i.scope for i in infos] == ["session", "permanent", "permanent"]
+
+
+# ---------- 边界 ----------
+
+def test_unconfigured_rejects_all_scopes():
+    """红线：未配置 policy 文件，三档全部拒绝，不创建文件。"""
+    store = PolicyStore(None)
+    for scope in ("permanent", "temporary", "session"):
+        out = store.add_rule("ECS:*=allow", scope=scope)
+        assert out.ok is False and "--policy" in (out.reason or "")
+    assert store.rules() == ()
+    assert store.list_rules() == []
+
+
+def test_hot_reload_keeps_overlay(tmp_path):
+    """外部改文件触发热重载，overlay 不丢；组合视图即时反映新文件规则。"""
+    p = tmp_path / "policy.json"
+    p.write_text('["*=deny"]', encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("ECS:ListServers=allow")            # session overlay
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True
+
+    p.write_text('["OBS:*=allow", "*=deny"]', encoding="utf-8")   # 外部编辑
+    assert policy.evaluate(store.rules(), "OBS", "GetObject") is True    # 文件新规则生效
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True  # overlay 未丢
+
+
+def test_unknown_scope_rejected(tmp_path):
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+
+    res = store.add_rule("ECS:*=allow", scope="once")
+    assert res.ok is False and "scope" in (res.reason or "")
+    assert store.rules() == tuple(policy.parse_policy(["*=deny"]))   # 状态未动
+
+
 # ---------- 并发一致性（进程内互斥） ----------
 
 def _disk_rule_tuples(path):
@@ -277,7 +477,7 @@ def test_concurrent_adds_all_persisted(tmp_path):
 
     def worker(line):
         barrier.wait()          # 最大化并发窗口
-        return store.add_rule(line)
+        return store.add_rule(line, scope="permanent")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(lines)) as ex:
         results = list(ex.map(worker, lines))
