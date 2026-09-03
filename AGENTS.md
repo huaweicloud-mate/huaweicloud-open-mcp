@@ -74,9 +74,9 @@
 | `src/common/elicit.py` | PolicyConsent：safety policy 变更的 elicitation 交互语义（offer_grant 拒绝提议授予（粗规则存在时三选一 GrantChoiceConfirm：api=最小 / product=产品级 session 档 / none） / gate_change 变更确认门 / fallback_hint 未问询路径拒绝兜底指引 / parse_elicit_mode / PolicyChangeConfirm+GrantChoiceConfirm 表单 schema / ElicitFn adapter 契约 + ctx_elicit_fn MCP Context 归一化 adapter（confirm/choice 独立归一）） | — | — |
 | `src/common/paths.py` | 项目根路径解析（统一 project_root） | — | — |
 | `src/common/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
-| `main.py` | CLI 入口（按 --mode 分发 openapi/discover 两条路径） | — | — |
+| `src/huaweicloud_open_mcp/` | server 入口包：`cli.py` CLI（按 --mode 分发 openapi/discover 两条路径）+ `__main__.py`（`python -m`）+ `__version__`（发布版本单一真值源，hatch dynamic version 读取） | — | — |
 | `benchmarks/` | LLM Agent 级工作流 benchmark（`openapi/cases/` 用例 + 旧 stub_server + scorer/report/trace/runner；`harbor/` Harbor 集成：`conventions.py` 路径常量单一真值源 + `build_agent_opencode_config`、`exporter.py`（render_task 纯核/export_dataset 薄壳）、`task_templates/` 模板组（stub_server/Dockerfile/task.toml/instruction/verifier/oracle/脚本）、`opencode_agent.py`（仅 harbor 运行时加载，本项目不声明 harbor 依赖）；`results/` 不入库，`baseline-*.json` 除外） | — | — |
-| `configs/` | safety policy 示例（含 server 规则）、`openapi-gate.example.json` 产品门栓示例、tag 中文→英文翻译映射、`mcp-server-catalog.example.json` 本地目录 | — | — |
+| `configs/` | safety policy 示例（含 server 规则）、`openapi-gate.example.json` 产品门栓示例、tag 中文→英文翻译映射、`mcp-server-catalog.example.json` 本地目录；发布时经 hatch force-include 打进 wheel（`huaweicloud_open_mcp/configs/` 包数据），运行时经 `common.paths.config_path` 解析（仓库根优先 → 安装态包内资源回退） | — | — |
 | `tests/` | TDD 测试（见「测试」章节） | — | — |
 | `datasets/` | Harbor 任务数据集（exporter 从 cases + task_templates 重建，不入库）；`datasets/mcp-regression/<case_id>/` 每目录一个自包含 Harbor task（instruction/task.toml/environment 内嵌 hwc 源码树+stub+fixtures/solution oracle/tests verifier 壳） | `python -m benchmarks.harbor.exporter`（经 export_dataset） | 是 |
 
@@ -89,7 +89,7 @@
 依赖严格单向、无环，自底向上四层：
 
 ```text
-第4层  src/main.py          入口，按 --mode 延迟 import 对应 server（避免同时装载两套）
+第4层  src/huaweicloud_open_mcp/  入口包，按 --mode 延迟 import 对应 server（避免同时装载两套）
            │
 第3层  src/mcp_openapi/       src/mcp_discover/
          ├ service            ├ service
@@ -116,7 +116,7 @@
 | `apie/` | → `common`（http/types/paths/logconf）；`catalog`→`live_fallback`→`convert_openapi2` 链、`memory_store`；`mock`→common.http/types |
 | `mcp_openapi/` | → `apie`（catalog/metadata/mock/memory_store）+ `safety` + `common`；`service`→`execute`+`execute_obs`+`signer.client`+`signer.obs`；`signer.client`→`signer.sign`；`execute_obs`→`execute`+`signer.obs`+`common` |
 | `mcp_discover/` | → `safety` + `common`（**不依赖 apie**）；`service`→`catalog/config/manager/sdk`；`manager`→`sdk` |
-| `main.py` | → `common.logconf` + 延迟 import `mcp_openapi.server/service`、`mcp_discover.server` |
+| `huaweicloud_open_mcp` | → `common.logconf` + 延迟 import `mcp_openapi.server/service`、`mcp_discover.server` |
 | `benchmarks/` | 与 `src/` 零耦合：经子进程 spawn console script `huaweicloud-open-mcp` 驱动，不 import src 任何包 |
 
 关键设计结论：
@@ -125,7 +125,7 @@
 - **`safety` + `common` 是两模式公共底座**，二者本身零内部依赖，为最底层可独立复用模块。
 - **`metadata.py` 归入 `apie`**：避免 `apie ↔ mcp_openapi` 循环依赖——`api_docs` CLI（apie 内）与 `mcp_openapi/service` 共用同一套 `metadata` 纯函数。
 - **`convert_openapi2` 在 apie 顶层**（非管道子目录）：同时被 `live_fallback`（运行时远端回退）与管道文件（离线 refresh）使用。
-- **`main.py` 延迟导入**：`mcp_openapi.server` / `mcp_discover.server` 在 `main()` 体内按 mode 分支导入。
+- **入口包化**：入口在 `src/huaweicloud_open_mcp/` 包（顶层 `main.py` 已废——site-packages 通用名冲突）；`mcp_openapi.server` / `mcp_discover.server` 在 `main()` 体内按 mode 分支导入。
 
 ## 命名约定
 
@@ -147,6 +147,15 @@ uv run pytest --cov=src/common --cov=src/apie --cov=src/safety --cov=src/mcp_ope
 uv run ruff check src tests              # lint（ruff，规则 E/F/W/I，line-length 120）
 uv run ruff check src tests --fix        # 自动修复可修问题
 uv run mypy src                          # 类型检查（全量类型标注）
+```
+
+构建与发布（PyPI）：
+
+```bash
+uv build                                 # 产出 dist/ 下 sdist + wheel（wheel 内嵌 configs 包数据）
+uvx twine check dist/*                   # 发布包元数据自检
+uv publish --publish-url https://test.pypi.org/legacy/   # TestPyPI 干跑（可选）
+uv publish                               # 正式发布（token 经 UV_PUBLISH_TOKEN 提供）
 ```
 
 CLI 入口（`pyproject.toml` 注册 console scripts）：
@@ -175,6 +184,8 @@ MCP server 启动（stdio，由 MCP 客户端拉起）：
 
 ```bash
 uv run huaweicloud-open-mcp                    # openapi 真实模式：AK/SK 签名直连华为云（默认）
+uvx huaweicloud-open-mcp                       # PyPI 安装态运行（uvx 自动拉取，入口包 huaweicloud_open_mcp）
+uv run python -m huaweicloud_open_mcp          # 等价入口（python -m 形态）
 uv run huaweicloud-open-mcp --mock             # mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）
 uv run huaweicloud-open-mcp --mode discover    # discover 模式：发现连接云端 MCP server（环境变量 HUAWEICLOUD_MCP_MODE）
 uv run huaweicloud-open-mcp --mock-base http://127.0.0.1:8000  # 自定义 mock 端点基础地址（benchmark 本地 stub 用；环境变量 HUAWEICLOUD_MCP_MOCK_BASE）
@@ -204,6 +215,7 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 
 | 接缝 | 内容 | 测试方式 | 独立真值 |
 | --- | --- | --- | --- |
+| S0 | `common.paths.config_path(name)` 配置资源解析（仓库根 configs/ 优先 → 安装态包内 configs 资源回退，wheel 由 hatch force-include 映射） | 纯函数单测（monkeypatch project_root + 真实仓库布局 cwd 无关断言） | tmp 目录文件系统状态 + 包内资源路径结构 |
 | S1 | `signer.sign(request) → Authorization 头` | 纯函数单测 | 华为云官方签名文档示例向量（先收集，不自行推导） |
 | S2 | `safety.evaluate(policy, product, api) → allow/deny` + `match_first`/`match_server_first`（first-match 命中规则对象，PolicyStore.authorize 的 internal seam） | 纯函数单测 | 手写策略文件 + 预期字面量 |
 | S2b | `safety/policy_store.py` PolicyStore（rules 热重载 / add_rule(scope, ttl_seconds) / remove_rule 跨层 / text / list_rules，文件↔内存双向同步 + 四档 scope overlay + `authorize`/`authorize_server` 原子授权门（once 用后即焚、并发恰一放行）） | 单测：tmp 文件注入 + 内容哈希 stat 替身 + 注入时钟（time_fn）；服务层「拒→add→同实例立即放行」 | 直接回读磁盘原始内容 + `parse_policy` 交叉验证 |

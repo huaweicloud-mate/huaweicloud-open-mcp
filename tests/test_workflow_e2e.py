@@ -29,7 +29,7 @@ def _require_openapi_data():
 class McpSession:
     def __init__(self):
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "main", "--mode", "openapi",
+            [sys.executable, "-m", "huaweicloud_open_mcp", "--mode", "openapi",
              "--mock", "--policy", "configs/safety-policy.example.json"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             cwd=str(PROOT),

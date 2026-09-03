@@ -8,11 +8,9 @@ import re
 import shutil
 from typing import Any, cast
 
-from common.paths import project_root
+from common.paths import config_path
 
 logger = logging.getLogger("apie.organize")
-
-TRANSLATIONS_FILE = str(project_root() / "configs" / "tag_translations.json")
 
 PRODUCT_CANONICAL: dict[str, str] = {
     "cloudtest": "CloudTest",
@@ -26,8 +24,9 @@ def sanitize_tag(name: str) -> str:
 
 
 def load_translations() -> dict[str, str]:
-    if os.path.exists(TRANSLATIONS_FILE):
-        with open(TRANSLATIONS_FILE, encoding="utf-8") as f:
+    file = config_path("tag_translations.json")
+    if file.exists():
+        with open(file, encoding="utf-8") as f:
             return cast(dict[str, str], json.load(f))
     return {}
 

@@ -1,9 +1,25 @@
 [project]
 name = "huaweicloud-open-mcp"
-version = "0.1.0"
-description = "华为云 MCP server：本地 stdio 通用网关（Core 模式），7 个核心工具编排触达华为云全量 OpenAPI"
+description = "华为云 MCP server：本地 stdio 通用网关，openapi 模式 7 工具直连华为云全量 OpenAPI，discover 模式 8 工具发现连接云端 MCP server"
 readme = "README.md"
 requires-python = ">=3.10"
+dynamic = ["version"]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "CheneyYin", email = "cheneyyin@hotmail.com" },
+]
+keywords = ["huaweicloud", "mcp", "mcp-server", "openapi", "model-context-protocol", "llm", "agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "mcp>=1.2.0",
     "jsonschema>=4.10",
@@ -11,17 +27,32 @@ dependencies = [
     "tabulate>=0.9.0",
 ]
 
+[project.urls]
+Repository = "https://gitcode.com/hd-vector/huaweicloud-open-mcp"
+Issues = "https://gitcode.com/hd-vector/huaweicloud-open-mcp/issues"
+
 [project.scripts]
 api-refresh = "apie.refresh:main"
 api-docs = "apie.api_docs:main"
-huaweicloud-open-mcp = "main:main"
+huaweicloud-open-mcp = "huaweicloud_open_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "src/huaweicloud_open_mcp/__init__.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/common", "src/safety", "src/apie", "src/mcp_openapi", "src/mcp_discover", "src/main.py"]
+packages = ["src/common", "src/safety", "src/apie", "src/mcp_openapi", "src/mcp_discover", "src/huaweicloud_open_mcp"]
+force-include = {"configs" = "huaweicloud_open_mcp/configs"}
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".agents",
+    "opencode.json",
+    "skills-lock.json",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -16,6 +16,9 @@ data/
 # 日志（不入库）
 logs/
 
+# 构建发布产物（可重建）
+dist/
+
 # benchmark 运行产物（原始数据不入库，基线保留用于回归对比）
 benchmarks/results/
 

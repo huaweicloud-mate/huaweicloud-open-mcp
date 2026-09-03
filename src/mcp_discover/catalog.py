@@ -9,13 +9,13 @@ import os
 from pathlib import Path
 from typing import Any, Protocol
 
-from common.paths import project_root
+from common.paths import config_path
 
 logger = logging.getLogger("mcp_discover.catalog")
 
 ENV_CATALOG = "HUAWEICLOUD_MCP_SERVER_CATALOG"
 ENV_CATALOG_URL = "HUAWEICLOUD_MCP_SERVER_CATALOG_URL"
-DEFAULT_CATALOG = "configs/mcp-server-catalog.example.json"
+DEFAULT_CATALOG = "mcp-server-catalog.example.json"
 
 
 class CatalogSource(Protocol):
@@ -33,7 +33,7 @@ class LocalCatalogSource:
 
     def __init__(self, path: str | None = None):
         if path is None:
-            path = os.environ.get(ENV_CATALOG) or str(project_root() / DEFAULT_CATALOG)
+            path = os.environ.get(ENV_CATALOG) or str(config_path(DEFAULT_CATALOG))
         self._path = Path(path)
         self._cache: list[dict[str, Any]] | None = None
         self._loaded_path: str | None = None

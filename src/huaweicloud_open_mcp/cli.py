@@ -8,7 +8,7 @@ from typing import Literal
 from common.elicit import parse_elicit_mode
 from common.logconf import configure_logging
 
-logger = logging.getLogger("main")
+logger = logging.getLogger(__name__)
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 

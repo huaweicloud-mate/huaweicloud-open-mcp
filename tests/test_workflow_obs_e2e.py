@@ -106,7 +106,7 @@ def session(tmp_path_factory):
         env.pop(key, None)
     env["HUAWEICLOUD_MCP_LOG_LEVEL"] = "DEBUG"
 
-    args = [sys.executable, "-m", "main", "--mode", "openapi",
+    args = [sys.executable, "-m", "huaweicloud_open_mcp", "--mode", "openapi",
             "--policy", str(policy), "--log-file", str(log), "--log-level", "DEBUG"]
     s = McpSession(args, env)
     s.init()

@@ -2,6 +2,15 @@
 
 本地 stdio 形态的华为云 Open MCP server（通用网关 Core 模式），供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用华为云服务。
 
+## 安装
+
+```bash
+uvx huaweicloud-open-mcp            # PyPI 安装态直接运行（uvx 自动拉取）
+pip install huaweicloud-open-mcp    # 或 pip 安装
+```
+
+仓库内开发运行：`uv sync && uv run huaweicloud-open-mcp`。configs（policy 示例、discover 目录、tag 翻译映射）随包分发：仓库根 `configs/` 优先，安装态使用包内资源。
+
 ## 运行模式（二选一）
 
 | 模式 | 启动 | 工具数 | 能力 |

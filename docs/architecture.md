@@ -55,7 +55,7 @@ flowchart TB
 
 | 层 | 模块 | 职责 | 依赖方向 |
 | --- | --- | --- | --- |
-| 网关 | `main.py` / `mcp_openapi/server.py` / `mcp_discover/server.py` | CLI 入口汇聚 + MCP 协议装配（stdio、工具 schema、instructions） | → service |
+| 网关 | `huaweicloud_open_mcp/cli.py` / `mcp_openapi/server.py` / `mcp_discover/server.py` | CLI 入口汇聚 + MCP 协议装配（stdio、工具 schema、instructions） | → service |
 | 编排 | `mcp_openapi/service.py` / `mcp_discover/service.py` | 数据加载、配置（region/mock/policy/凭证）、客户端工厂注入 | → 纯函数层 / apie / signer |
 | 纯函数 | `apie/metadata.py` `mcp_openapi/execute.py` | 元数据处理与请求构建/响应规范化，不碰磁盘、不碰 MCP 协议 | → types |
 | 安全 | `safety/policy.py` | policy 解析与匹配（PolicyRule dataclass，product + server 两类规则） | 无依赖 |
@@ -126,7 +126,7 @@ graph LR
 
 - **`apie` 是 `mcp_openapi` 独享依赖**：APIE 元数据层只服务 openapi 直连模式；`mcp_discover` 只依赖 `safety` + `common`，两模式互不 import。
 - **`safety` + `common` 是两模式公共底座**，二者本身零内部依赖。
-- **`main.py` 延迟导入**：`mcp_openapi.server` / `mcp_discover.server` 在 `main()` 体内按 mode 分支导入，避免同时装载两套。
+- **入口包化 + 延迟导入**：入口在 `src/huaweicloud_open_mcp/` 包（`cli.py`，消除 site-packages 顶层 `main.py` 通用名冲突）；`mcp_openapi.server` / `mcp_discover.server` 在 `main()` 体内按 mode 分支导入，避免同时装载两套。
 
 ### 类型设计（结果信封）
 

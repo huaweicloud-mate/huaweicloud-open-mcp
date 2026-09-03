@@ -99,7 +99,7 @@ def session(tmp_path_factory):
     env["HUAWEICLOUD_MCP_SERVER_CATALOG"] = str(cat)
     env["HUAWEICLOUD_MCP_LOG_LEVEL"] = "DEBUG"
     args = [
-        sys.executable, "-m", "main", "--mode", "discover",
+        sys.executable, "-m", "huaweicloud_open_mcp", "--mode", "discover",
         "--policy", str(policy),
         "--log-file", str(log),
     ]

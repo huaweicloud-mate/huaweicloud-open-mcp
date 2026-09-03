@@ -125,7 +125,7 @@ server:serverId:toolPattern=allow|deny  # 控制 call_server_tool（toolPattern 
   src/common/types.py               # 新 TypedDict 信封
   src/safety/policy.py              # PolicyRule.kind + evaluate_server/check_server
   src/safety/policy_store.py        # PolicyStore 热重载 + manage_policy 共用状态层（新增）
-  main.py                           # --mode + build_discover_app + INSTRUCTIONS
+  src/huaweicloud_open_mcp/cli.py   # --mode + build_discover_app + INSTRUCTIONS
   configs/safety-policy.example.json
   AGENTS.md
 ```
