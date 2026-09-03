@@ -8,6 +8,7 @@
 → ③ 临时桶自清理写链路：CreateBucket(XML body) → SetBucketTagging(嵌套 XML)
    → GetBucketTagging(子资源) → PutObject 强制预签发 URL 客户端直传
    → GetObject 预签发 URL 直连读回比对
+   → GetBucketAcl 取 Owner → SetObjectAcl（裸数组形状 + 布尔小写）→ GetObjectAcl 读回
    → finally 删除对象/标签/桶（失败也执行）
 → ④ policy 拒绝白名单外接口。
 
@@ -18,6 +19,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -37,6 +39,9 @@ POLICY_ALLOW = [
     "OBS:SetBucketTagging=allow",
     "OBS:GetBucketTagging=allow",
     "OBS:DeleteBucketTagging=allow",
+    "OBS:GetBucketAcl=allow",
+    "OBS:SetObjectAcl=allow",
+    "OBS:GetObjectAcl=allow",
     "OBS:PutObject=allow",
     "OBS:GetObject=allow",
     "OBS:DeleteObject=allow",
@@ -132,7 +137,8 @@ def test_obs_execute_list_buckets_real(session):
 
 def test_obs_write_chain_with_cleanup(session):
     """临时桶自清理式写链路：XML 根元素 / 嵌套 $ref / 子资源签名 /
-    对象数据面强制 presign（直传 PUT + 直拉 GET 比对 ETag）。"""
+    对象数据面强制 presign（直传 PUT + 直拉 GET 比对 ETag）/
+    ACL 容器数组序列化（SetObjectAcl 裸数组形状 + 布尔小写）。"""
     bucket = f"mcp-e2e-{int(time.time())}"
     created_objects: list[str] = []
 
@@ -183,6 +189,25 @@ def test_obs_write_chain_with_cleanup(session):
         with urllib.request.urlopen(r["presign"]["url"], timeout=60) as resp:
             got = resp.read()
         assert hashlib.md5(got).hexdigest() == etag, "回读内容与 ETag 不一致"
+
+        # ⑥ 对象 ACL：GetBucketAcl 取 Owner → SetObjectAcl（schema 裸数组形状 +
+        #    Delivered 布尔，self-grant FULL_CONTROL 最小风险）→ GetObjectAcl 读回
+        r = call("GetBucketAcl", {"bucket_name": bucket})
+        ok2xx(r, "GetBucketAcl")
+        m = re.search(r"<Owner>\s*<ID>([^<]+)</ID>", r["body"])
+        assert m, f"GetBucketAcl 响应缺 Owner/ID: {r['body'][:200]}"
+        owner_id = m.group(1)
+        r = call("SetObjectAcl", {
+            "bucket_name": bucket, "object_key": "hello.txt",
+            "body": {"Owner": {"ID": owner_id}, "Delivered": False,
+                     "AccessControlList": [
+                         {"Grantee": {"ID": owner_id},
+                          "Permission": "FULL_CONTROL"}]}})
+        ok2xx(r, "SetObjectAcl")
+        r = call("GetObjectAcl", {"bucket_name": bucket, "object_key": "hello.txt"})
+        ok2xx(r, "GetObjectAcl")
+        assert owner_id in r["body"] and "FULL_CONTROL" in r["body"], \
+            f"GetObjectAcl 读回缺授权内容: {r['body'][:300]}"
     finally:
         _cleanup()
 

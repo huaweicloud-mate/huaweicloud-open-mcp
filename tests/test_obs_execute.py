@@ -84,6 +84,157 @@ def test_serialize_body_xml_x_xml_root_after_convert():
                    "<Location>cn-north-4</Location></CreateBucketConfiguration>")
 
 
+# 真实 SetObjectAcl param 级元数据形状：AccessControlList 为裸数组，items 内联
+# （无 $ref、无 xml 名暗示），线上 item 元素名 Grant 由模块内登记表提供。
+# 注意：该接口元数据 x-xml-root 错标为 ObjectAccessControlPolicy（响应包装属性名
+# 混入，SetBucketAcl 元数据即正确标为 AccessControlPolicy），线上根元素以官方
+# x-request-examples 为准 —— AccessControlPolicy，由根元素纠偏登记表覆盖。
+ACL_OP = {
+    "parameters": [
+        {"in": "body", "name": "SetObjectAclRequestBody",
+         "schema": {
+             "required": ["Owner"],
+             "properties": {
+                 "Owner": {"$ref": "#/definitions/Owner"},
+                 "Delivered": {"type": "boolean"},
+                 "AccessControlList": {
+                     "type": "array",
+                     "items": {
+                         "properties": {
+                             "Grantee": {"$ref": "#/definitions/Grantee"},
+                             "Permission": {"type": "string"},
+                         },
+                     },
+                 },
+             },
+             "x-xml-root": "ObjectAccessControlPolicy",
+         }},
+    ],
+}
+ACL_DOC = {
+    "host": "obs.cn-north-4.myhuaweicloud.com",
+    "definitions": {
+        "Owner": {"properties": {"ID": {"type": "string"}}},
+        "Grantee": {"properties": {"ID": {"type": "string"},
+                                    "Canned": {"type": "string"}}},
+    },
+}
+ACL_XML_GOLD = (
+    '<AccessControlPolicy xmlns="http://obs.cn-north-4.myhuaweicloud.com/doc/2015-06-30/">'
+    "<Owner><ID>b4bf1b36d9ca43d984fbcb9491b6fce9</ID></Owner>"
+    "<AccessControlList>"
+    "<Grant><Grantee><ID>b4bf1b36d9ca43d984fbcb9491b6fce9</ID></Grantee>"
+    "<Permission>FULL_CONTROL</Permission></Grant>"
+    "<Grant><Grantee><Canned>Everyone</Canned></Grantee>"
+    "<Permission>READ</Permission></Grant>"
+    "</AccessControlList>"
+    "</AccessControlPolicy>")
+
+
+def test_serialize_body_xml_acl_array_wraps_container():
+    """裸数组形状（schema 忠实）：容器元素 AccessControlList 包裹逐个 Grant。
+
+    金标结构取自官方示例（Grantee 支持 ID / Canned 两种形态）；
+    修复前此形状把每个 Grant 渲染成 <AccessControlList>，服务端报 MalformedACLError。
+    """
+    body = {
+        "Owner": {"ID": "b4bf1b36d9ca43d984fbcb9491b6fce9"},
+        "AccessControlList": [
+            {"Grantee": {"ID": "b4bf1b36d9ca43d984fbcb9491b6fce9"},
+             "Permission": "FULL_CONTROL"},
+            {"Grantee": {"Canned": "Everyone"}, "Permission": "READ"},
+        ],
+    }
+    assert serialize_body_xml(ACL_OP, ACL_DOC, body) == ACL_XML_GOLD
+
+
+def test_serialize_body_xml_boolean_lowercase():
+    """XML Schema boolean 词法形：true/false 小写（Delivered/Quiet 等字段）。"""
+    body = {"Owner": {"ID": "d1"}, "Delivered": False,
+            "AccessControlList": [{"Grantee": {"ID": "d1"},
+                                   "Permission": "FULL_CONTROL"}]}
+    assert serialize_body_xml(ACL_OP, ACL_DOC, body) == (
+        '<AccessControlPolicy xmlns="http://obs.cn-north-4.myhuaweicloud.com/doc/2015-06-30/">'
+        "<Owner><ID>d1</ID></Owner>"
+        "<Delivered>false</Delivered>"
+        "<AccessControlList><Grant><Grantee><ID>d1</ID></Grantee>"
+        "<Permission>FULL_CONTROL</Permission></Grant></AccessControlList>"
+        "</AccessControlPolicy>")
+    body_true = {"Delivered": True, "AccessControlList": []}
+    assert serialize_body_xml(ACL_OP, ACL_DOC, body_true) == (
+        '<AccessControlPolicy xmlns="http://obs.cn-north-4.myhuaweicloud.com/doc/2015-06-30/">'
+        "<Delivered>true</Delivered>"
+        "<AccessControlList></AccessControlList>"
+        "</AccessControlPolicy>")
+
+
+def test_serialize_body_xml_root_override_for_wrong_metadata():
+    """根元素纠偏：SetObjectAcl 元数据 x-xml-root 错标 ObjectAccessControlPolicy
+    （e2e 实证服务端报 MalformedACLError），线上根以官方示例 AccessControlPolicy
+    为准；纠偏按元数据声明值命中，不影响正确元数据（SetBucketAcl 等）。"""
+    body = {"Owner": {"ID": "x"}, "AccessControlList": []}
+    xml = serialize_body_xml(ACL_OP, ACL_DOC, body) or ""
+    assert xml.startswith('<AccessControlPolicy xmlns=')
+    assert "ObjectAccessControlPolicy" not in xml
+
+
+def test_serialize_body_xml_acl_container_dict_shape_same_output():
+    """XML 形状 dict（容器对象 + Grant 键）与裸数组形状收敛到同一金标。"""
+    body = {
+        "Owner": {"ID": "b4bf1b36d9ca43d984fbcb9491b6fce9"},
+        "AccessControlList": {"Grant": [
+            {"Grantee": {"ID": "b4bf1b36d9ca43d984fbcb9491b6fce9"},
+             "Permission": "FULL_CONTROL"},
+            {"Grantee": {"Canned": "Everyone"}, "Permission": "READ"},
+        ]},
+    }
+    assert serialize_body_xml(ACL_OP, ACL_DOC, body) == ACL_XML_GOLD
+
+
+def test_serialize_body_xml_inline_array_keeps_repeat():
+    """反例回归：DeleteObjects 内联 Object 数组——item 元素名与属性名一致时
+    重复渲染、不包容器（definitions 形式 $ref 名 DeleteObject 不是线上元素名）。"""
+    op = {"parameters": [{"in": "body", "name": "DeleteObjectsRequestBody",
+                          "schema": {
+                              "properties": {
+                                  "Quiet": {"type": "boolean"},
+                                  "Object": {"type": "array", "items": {
+                                      "properties": {"Key": {"type": "string"},
+                                                      "VersionId": {"type": "string"}}}},
+                              },
+                              "x-xml-root": "Delete",
+                          }}]}
+    doc = {"definitions": {}}
+    body = {"Quiet": True,
+            "Object": [{"Key": "k1"}, {"Key": "k2", "VersionId": "v2"}]}
+    assert serialize_body_xml(op, doc, body) == (
+        "<Delete><Quiet>true</Quiet>"
+        "<Object><Key>k1</Key></Object>"
+        "<Object><Key>k2</Key><VersionId>v2</VersionId></Object>"
+        "</Delete>")
+
+
+def test_serialize_body_xml_scalar_array_repeat():
+    """标量数组（CORS AllowedMethod）：逐项重复属性名元素。"""
+    op = {"parameters": [{"in": "body", "name": "SetBucketCorsRequestBody",
+                          "schema": {
+                              "properties": {
+                                  "CORSRule": {"type": "array", "items": {
+                                      "properties": {
+                                          "AllowedOrigin": {"type": "string"},
+                                          "AllowedMethod": {"type": "array",
+                                                             "items": {"type": "string"}},
+                                      }}}},
+                              "x-xml-root": "CORSConfiguration",
+                          }}]}
+    doc = {"definitions": {}}
+    body = {"CORSRule": [{"AllowedOrigin": "*", "AllowedMethod": ["GET", "PUT"]}]}
+    assert serialize_body_xml(op, doc, body) == (
+        "<CORSConfiguration><CORSRule><AllowedOrigin>*</AllowedOrigin>"
+        "<AllowedMethod>GET</AllowedMethod><AllowedMethod>PUT</AllowedMethod>"
+        "</CORSRule></CORSConfiguration>")
+
+
 # ---------- S9c 桶寻址 ----------
 
 def test_build_obs_request_splits_params():

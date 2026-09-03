@@ -36,6 +36,18 @@ AUTO_SUBRESOURCES = frozenset({
     "torrent", "uploads", "versioning", "versions", "website",
 })
 
+# 数组容器登记表：OBS 元数据把 ACL 类容器建模为裸数组（type: array）且不携带
+# item 元素名；definitions 形式的 $ref 定义名不可作线上元素名（反例：DeleteObjects
+# 的 Object 为 array of $ref DeleteObject，线上元素仍是 <Object>）。此处按官方
+# 文档线上格式显式登记 item 元素名；未登记的数组沿用属性名重复渲染。
+ARRAY_ITEM_ELEMENT_NAMES = {"AccessControlList": "Grant"}
+
+# 根元素纠偏表：个别接口元数据 x-xml-root 错标（SetObjectAcl 标成响应包装属性名
+# ObjectAccessControlPolicy，e2e 实证服务端报 MalformedACLError；同族 SetBucketAcl
+# 即正确标为 AccessControlPolicy）。线上根以官方 x-request-examples 为准，按元数据
+# 声明值命中纠偏，不影响元数据正确的接口。
+ROOT_ELEMENT_OVERRIDES = {"ObjectAccessControlPolicy": "AccessControlPolicy"}
+
 
 def is_obs(product: str, doc: dict[str, Any]) -> bool:
     """判定接口是否走 OBS 执行 lane：按产品名，host 以 obs. 开头兜底。"""
@@ -95,8 +107,10 @@ def serialize_body_xml(op: dict[str, Any], doc: dict[str, Any],
                        body: Any) -> str | None:
     """把 body dict 按 op 的 body 参数 schema 序列化为 OBS XML 字符串。
 
-    根元素名取 xml.name/x-xml-root，并按官方示例注入默认命名空间
-    （服务端 schema 校验要求，缺省报 MalformedXML）。
+    根元素名取 xml.name/x-xml-root（错标经 ROOT_ELEMENT_OVERRIDES 纠偏），并按
+    官方示例注入默认命名空间（服务端 schema 校验要求，缺省报 MalformedXML）。
+    数组 item 元素名推导见 _array_item_element_name（登记表覆盖 ACL 容器）；
+    布尔标量按 XML Schema 词法形输出 true/false。
     """
     if body is None:
         return None
@@ -104,6 +118,8 @@ def serialize_body_xml(op: dict[str, Any], doc: dict[str, Any],
                        if isinstance(p, dict) and p.get("in") == "body"), None)
     schema = _resolve((body_param or {}).get("schema") or {}, doc)
     root_name = _root_element_name(schema)
+    if root_name:
+        root_name = ROOT_ELEMENT_OVERRIDES.get(root_name, root_name)
     if not root_name:
         root_name = (body_param or {}).get("name") or "Body"
     xmlns = _obs_xmlns(doc)
@@ -111,12 +127,30 @@ def serialize_body_xml(op: dict[str, Any], doc: dict[str, Any],
     return _node_to_xml(root_name, schema, body, doc, open_tag=open_tag)
 
 
+def _array_item_element_name(prop_name: str, items: Any,
+                             doc: dict[str, Any]) -> str:
+    """数组 item 的线上元素名：items xml 名暗示 → 登记表 → 属性名兜底。
+
+    不采用 definitions $ref 定义名——元数据定义名与线上元素名无可靠对应
+    （DeleteObjects 的 DeleteObject 即反例）。
+    """
+    resolved = _resolve(items, doc) if isinstance(items, dict) else items
+    hint = _root_element_name(resolved)
+    if hint:
+        return hint
+    return ARRAY_ITEM_ELEMENT_NAMES.get(prop_name, prop_name)
+
+
 def _node_to_xml(name: str, schema: Any, value: Any, doc: dict[str, Any],
                  open_tag: str | None = None) -> str:
     schema = _resolve(schema, doc)
     if isinstance(value, list):
         items = (schema or {}).get("items") if isinstance(schema, dict) else None
-        return "".join(_node_to_xml(name, items or {}, item, doc) for item in value)
+        item_name = _array_item_element_name(name, items, doc)
+        if item_name == name:
+            return "".join(_node_to_xml(name, items or {}, item, doc) for item in value)
+        inner = "".join(_node_to_xml(item_name, items or {}, item, doc) for item in value)
+        return f"<{name}>{inner}</{name}>"
     if isinstance(value, dict):
         props = (schema.get("properties") if isinstance(schema, dict) else None) or {}
         inner = ""
@@ -131,6 +165,8 @@ def _node_to_xml(name: str, schema: Any, value: Any, doc: dict[str, Any],
         close = f"</{name}>"
         start = open_tag if open_tag else f"<{name}>"
         return f"{start}{inner}{close}"
+    if isinstance(value, bool):
+        return f"<{name}>{'true' if value else 'false'}</{name}>"
     return f"<{name}>{_xml_escape(str(value))}</{name}>"
 
 
