@@ -87,10 +87,11 @@ def change_message(action: str, line: str) -> str:
 
 
 def denial_message(offer: DenialOffer) -> str:
-    """拒绝路径提议授予弹窗文案（缺省授予会话内规则，不落盘）。"""
+    """拒绝路径提议授予弹窗文案（授予一次性规则：仅放行下一次执行，用后即焚）。"""
     return (f"{offer.reason}\n\n"
             f"是否授予最小规则 '{offer.rule}' 放行 {offer.subject}？"
-            "规则仅在当前会话内生效（重启即失，无需回收）。")
+            "规则为一次性授权：仅放行下一次执行，用后即焚"
+            "（重启即失，无需回收；需持久授权请经 manage_policy 显式授予）。")
 
 
 class PolicyConsent:
@@ -134,7 +135,8 @@ class PolicyConsent:
             logger.info("grant accepted: %s", offer.rule)
             return {**denial, "granted_rule": offer.rule,
                     "reason": (f"{denial.get('reason', '')}"
-                               f"；用户已通过确认授予规则 {offer.rule}（热生效），请重新调用")}
+                               f"；用户已通过确认授予一次性规则 {offer.rule}"
+                               f"（用后即焚，热生效），请重新调用")}
         reason = result.get("reason") or "未知原因"
         logger.warning("grant failed: %s: %s", offer.rule, reason)
         return {**denial,

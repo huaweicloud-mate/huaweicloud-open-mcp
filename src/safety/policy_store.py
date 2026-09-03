@@ -5,11 +5,12 @@
   文件被外部编辑即时生效，无需重启。
 - 内存 → 文件：add/remove 先校验、原子落盘（tmp + os.replace）、再刷新内存，
   静止态恒满足 memory == file。
-- 三档 scope：permanent（文件真值源，跨重启）/ temporary（内存 overlay + TTL，
-  到期自动剪枝）/ session（内存 overlay，进程存活期，缺省档）。
+- 三档 scope + 一次性：permanent（文件真值源，跨重启）/ temporary（内存 overlay
+  + TTL，到期自动剪枝）/ session（内存 overlay，进程存活期，缺省档）/
+  once（内存 overlay，用后即焚——authorize 首次放行即焚毁）。
   生效规则 = overlay（插入序）++ 文件规则，整体行序 first-match；overlay allow
   穿透文件具体 deny 与兜底 deny（与落盘插位语义一致），overlay deny 可临时收紧。
-  overlay 仅内存态，重启即失；未配置路径（path=None）三档全拒（红线不变）。
+  overlay 仅内存态，重启即失；未配置路径（path=None）全档全拒（红线不变）。
 - 插入不变量：新 allow 规则插在首个会遮蔽它的 deny 规则之前
   （典型形态即 `*=deny` 兜底行之前），保证行序 first-match 语义下新增规则真实生效。
 - 运行时降级：运行期文件被写坏/短暂消失时沿用最近合法版本并记 WARNING；
@@ -18,6 +19,7 @@
 依赖边界：仅依赖标准库与本包 policy.py 纯函数，保持 safety 最底层零外部依赖。
 """
 
+import dataclasses
 import fnmatch
 import json
 import logging
@@ -36,7 +38,7 @@ NOT_CONFIGURED_REASON = (
     "未配置 safety policy 文件，manage_policy 不可用"
     "（启动参数 --policy 或环境变量 HUAWEICLOUD_MCP_POLICY_FILE）")
 
-SCOPES: tuple[str, ...] = ("permanent", "temporary", "session")
+SCOPES: tuple[str, ...] = ("permanent", "temporary", "session", "once")
 DEFAULT_SCOPE = "session"
 DEFAULT_TTL_SECONDS = 3600
 
@@ -110,14 +112,22 @@ def _shadows(rule: safety_policy.PolicyRule,
 
 @dataclass(frozen=True)
 class _OverlayEntry:
-    """内存规则（session/temporary）：仅进程内存活，永不落盘。
+    """内存规则（session/temporary/once）：仅进程内存活，永不落盘。
 
-    expire_at=None 为 session（无 TTL）；否则为 temporary 的到期时刻。
+    expire_at=None 为 session/once（无 TTL）；否则为 temporary 的到期时刻。
+    once 由 rule.once 标记（authorize 首次放行即焚毁）。
     """
 
     line: str
     rule: safety_policy.PolicyRule
     expire_at: float | None = None
+
+
+def _overlay_scope(entry: _OverlayEntry) -> str:
+    """overlay 条目所属档位：once / temporary / session。"""
+    if entry.rule.once:
+        return "once"
+    return "temporary" if entry.expire_at is not None else "session"
 
 
 class PolicyStore:
@@ -257,6 +267,8 @@ class PolicyStore:
             expire_at = ((self._time_fn() + (ttl_seconds if ttl_seconds is not None
                                              else DEFAULT_TTL_SECONDS))
                          if scope == "temporary" else None)
+            if scope == "once":
+                rule = dataclasses.replace(rule, once=True)
             pos = self._overlay_insert_position(rule)
             self._overlay.insert(pos, _OverlayEntry(line=line.strip(), rule=rule,
                                                     expire_at=expire_at))
@@ -298,7 +310,7 @@ class PolicyStore:
             target = _rule_key(rule)
             for i, entry in enumerate(self._overlay):
                 if _rule_key(entry.rule) == target:
-                    scope = "temporary" if entry.expire_at is not None else "session"
+                    scope = _overlay_scope(entry)
                     del self._overlay[i]
                     logger.info("policy remove_rule %s scope=%s -> ok", line.strip(), scope)
                     return MutationResult(ok=True, scope=scope)
@@ -326,16 +338,62 @@ class PolicyStore:
             now = self._time_fn()
             infos: list[RuleInfo] = []
             for entry in self._overlay:
-                scope = "temporary" if entry.expire_at is not None else "session"
                 expires_in = (max(0, int(entry.expire_at - now))
                               if entry.expire_at is not None else None)
-                infos.append(RuleInfo(line=entry.line, scope=scope,
+                infos.append(RuleInfo(line=entry.line, scope=_overlay_scope(entry),
                                       expires_in=expires_in))
             if self._entries:
                 for i in _semantic_positions(self._entries):
                     infos.append(RuleInfo(line=self._entries[i].strip(),
                                           scope="permanent"))
             return infos
+
+    # ---------- 原子授权门（dispatch 前） ----------
+
+    def authorize(self, product: str, api: str) -> str | None:
+        """dispatch 前的原子授权门：评估与 once 焚毁在同一临界区内完成。
+
+        interface 契约与 check 同构：None=放行（allow 与 allow_once 对调用方
+        不可区分，焚毁仅记 store 内部 INFO）；str=拒绝原因（复用 check 文案）。
+        调用顺序约束：早检 check 先行（廉价拒绝，元数据拉取之前）；本方法须在
+        每次 dispatch 尝试前恰好调用一次——check 与 authorize 之间 once 规则
+        被并发消费时，本方法落 deny（并发下恰一个请求放行）。
+        deny 路径永不焚毁；未配置路径恒 deny（红线）。
+        """
+        if self.path is None:
+            return safety_policy.check(None, product, api)
+        with self._lock:
+            self._refresh()
+            self._prune_expired()
+            rules = tuple(entry.rule for entry in self._overlay) + self._rules
+            hit = safety_policy.match_first(rules, product, api)
+            if hit is None or not hit.allow:
+                return safety_policy.check(rules, product, api)
+            if hit.once:
+                self._overlay = [e for e in self._overlay if e.rule is not hit]
+                logger.info("policy authorize %s:%s once 规则已消费", product, api)
+            return None
+
+    def authorize_server(self, server: str, tool: str | None = None) -> str | None:
+        """authorize 的 server 规则版（discover call_tool / connect 前调用）。
+
+        契约同 authorize：None=放行；str=拒绝原因（复用 check_server 文案）。
+        connect（tool=None）与调用级（tool 非空）once 规则均首次放行即焚毁。
+        """
+        if self.path is None:
+            return safety_policy.check_server(None, server, tool)
+        with self._lock:
+            self._refresh()
+            self._prune_expired()
+            rules = tuple(entry.rule for entry in self._overlay) + self._rules
+            hit = safety_policy.match_server_first(rules, server, tool)
+            if hit is None or not hit.allow:
+                return safety_policy.check_server(rules, server, tool)
+            if hit.once:
+                self._overlay = [e for e in self._overlay if e.rule is not hit]
+                logger.info("policy authorize_server %s:%s once 规则已消费",
+                            server, tool or "-")
+            return None
 
     # ---------- 持久化 ----------
 

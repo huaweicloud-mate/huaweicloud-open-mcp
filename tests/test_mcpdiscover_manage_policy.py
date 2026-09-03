@@ -96,3 +96,49 @@ def test_policy_denial_offer_server_none_cases(tmp_path):
     # reason 不一致（门栓外的其它拒绝）→ 不提议
     assert svc.policy_denial_offer("@huaweicloud/ecs", "list*",
                                    denial_reason="其它原因") is None
+
+
+# ---------- 一次性授权（once，call_tool dispatch 前） ----------
+
+class FakeSession:
+    """最小 SessionClient 替身：记录调用台账。"""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    async def connect(self, endpoint: str):
+        self.calls.append(("connect", endpoint))
+        return {"protocol_version": "1.0",
+                "server_info": {"name": "fake", "version": "1.0"}}
+
+    async def list_tools(self):
+        self.calls.append(("list_tools", ()))
+        return []
+
+    async def call_tool(self, tool: str, arguments: dict):
+        self.calls.append(("call_tool", tool, arguments))
+        return {"ok": True}
+
+    async def disconnect(self):
+        self.calls.append(("disconnect", ()))
+
+
+def test_call_tool_once_rule_allows_first_call_only(tmp_path):
+    """server 工具规则 once：首次 call_tool 放行并焚毁，二次拒绝；代发仅一次。"""
+    import asyncio
+
+    from mcp_discover.manager import SessionManager
+
+    svc, _ = make_service(tmp_path, ["*=deny"])
+    fake = FakeSession()
+    svc.manager = SessionManager(client_factory=lambda: fake)
+    asyncio.run(svc.manager.connect("srv1", "http://s/mcp"))
+    assert svc.manage_policy("add", "server:srv1:call*=allow", scope="once")["ok"] is True
+
+    first = asyncio.run(svc.call_tool("srv1", "callThing", {"a": 1}))
+    assert first["ok"] is True
+    second = asyncio.run(svc.call_tool("srv1", "callThing", {"a": 1}))
+    assert second["ok"] is False
+    assert "safety policy 拒绝调用" in (second.get("reason") or "")
+    tool_calls = [c for c in fake.calls if c[0] == "call_tool"]
+    assert tool_calls == [("call_tool", "callThing", {"a": 1})]

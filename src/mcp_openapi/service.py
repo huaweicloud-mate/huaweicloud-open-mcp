@@ -134,6 +134,17 @@ class ToolService:
         """检查 safety policy，返回错误描述或 None（放行）。"""
         return safety_policy.check(self._effective_policy_rules(), product, api)
 
+    def _authorize(self, product: str, api: str) -> str | None:
+        """dispatch 前的原子授权门（once 规则首次放行即焚毁）。
+
+        委托 PolicyStore.authorize（RLock 内评估+焚毁一体）；无 store
+        （启动快照模式）时直通——once 规则只存在于 store overlay。
+        """
+        store = self.config.policy_store
+        if store is None:
+            return None
+        return store.authorize(product, api)
+
     def policy_denial_offer(self, product: str, api: str,
                             denial_reason: str | None = None) -> DenialOffer | None:
         """policy 拒绝且可授予时构造 elicitation 提议；其余返回 None。
@@ -158,8 +169,9 @@ class ToolService:
                       ttl_seconds: int | None = None) -> dict[str, Any]:
         """管理 safety policy（list/add/remove），改动即时生效无需重启。
 
-        三档 scope：permanent（写策略文件，跨重启）/ temporary（内存 + TTL 自动
-        过期，ttl_seconds 缺省 3600）/ session（内存，进程存活期，缺省档）。
+        四档 scope：permanent（写策略文件，跨重启）/ temporary（内存 + TTL 自动
+        过期，ttl_seconds 缺省 3600）/ session（内存，进程存活期，缺省档）/
+        once（内存，一次性——首次放行即焚毁）。
         remove 跨层先 overlay 后文件并回报 scope；不接受 scope/ttl_seconds。
         安全约定：调用方（Agent）应先向用户确认再 add/remove；审计日志强制记录。
         """
@@ -296,6 +308,10 @@ class ToolService:
     def execute_api(self, product: str, api: str, region: str | None = None,
                     params: dict[str, Any] | None = None) -> ExecuteResult:
         """执行 API。产品门栓先粗滤，safety policy 再细检，mock/real 分支共享。"""
+        if (api or "").strip() == "manage_policy":
+            return {"ok": False, "reason": (
+                "manage_policy 是 server 内置控制面工具，请直接调用 manage_policy 工具"
+                "（不经 execute_api 路由）")}
         region = region or self.config.region
         gated = self._check_gate(product)
         if gated:
@@ -322,6 +338,12 @@ class ToolService:
             if not execute_obs.is_obs(product, doc):
                 return {"ok": False,
                         "reason": "_presign 仅支持 OBS 产品（其余服务无预签发语义）"}
+            gate_err = self._authorize(product, api)   # 预签发前消费一次性授权
+            if gate_err:
+                logger.warning("execute %s:%s region=%s mode=%s policy=%s",
+                               product, api, region,
+                               "mock" if self.config.mock else "real", "deny")
+                return {"ok": False, "reason": gate_err}
             return execute_obs.execute_presign_api(
                 doc, path, method, op, product, api, region, params,
                 credentials=self.config.credentials)
@@ -334,6 +356,14 @@ class ToolService:
             if err:
                 logger.warning("execute %s:%s schema=reject reason=%s", product, api, err)
                 return {"ok": False, "reason": err}
+
+        # dispatch 前原子授权门：once 规则首次放行即焚毁（校验失败不会到达此处）
+        gate_err = self._authorize(product, api)
+        if gate_err:
+            logger.warning("execute %s:%s region=%s mode=%s policy=%s",
+                           product, api, region,
+                           "mock" if self.config.mock else "real", "deny")
+            return {"ok": False, "reason": gate_err}
 
         logger.info("execute %s:%s region=%s mode=%s policy=allow",
                     product, api, region,

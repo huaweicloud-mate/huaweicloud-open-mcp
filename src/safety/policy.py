@@ -25,6 +25,7 @@ class PolicyRule:
     allow: bool
     kind: str = field(default="product")
     connect_only: bool = field(default=False)
+    once: bool = field(default=False)
 
     def __post_init__(self) -> None:
         if self.kind not in ("product", "server"):
@@ -118,6 +119,45 @@ def evaluate_server(rules: Sequence[PolicyRule], server: str, tool: str | None =
                 continue
             return rule.allow
     return False
+
+
+def match_first(rules: Sequence[PolicyRule], product: str, api: str) -> PolicyRule | None:
+    """按行序返回首个命中的 product 类规则；无匹配返回 None。
+
+    internal seam：供 PolicyStore.authorize 与测试消费，服务层不接触规则对象。
+    匹配口径与 evaluate 完全一致（大小写不敏感；仅 kind="product"）。
+    """
+    for rule in rules:
+        if rule.kind != "product":
+            continue
+        if rule.product != "*" and rule.product.lower() != product.lower():
+            continue
+        if fnmatch.fnmatch(api.lower(), rule.api_pattern.lower()):
+            return rule
+    return None
+
+
+def match_server_first(rules: Sequence[PolicyRule], server: str,
+                       tool: str | None = None) -> PolicyRule | None:
+    """按行序返回首个命中的 server 类规则；无匹配返回 None。
+
+    匹配口径与 evaluate_server 完全一致（tool=None 匹配 connect 级规则）。
+    """
+    for rule in rules:
+        if rule.kind != "server":
+            continue
+        if rule.product != "*" and rule.product.lower() != server.lower():
+            continue
+        if tool is not None:
+            if rule.connect_only:
+                continue
+            if fnmatch.fnmatch(tool.lower(), rule.api_pattern.lower()):
+                return rule
+        else:
+            if not rule.connect_only:
+                continue
+            return rule
+    return None
 
 
 def check(rules: Sequence[PolicyRule] | None, product: str, api: str) -> str | None:

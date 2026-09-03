@@ -31,6 +31,5 @@
   "# server:@huaweicloud/vpc:*=allow",
   "",
   "OBS:ListBuckets=allow",
-  "CES:ShowMetricData=allow",
   "*=deny"
 ]

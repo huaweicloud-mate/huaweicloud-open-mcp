@@ -88,6 +88,16 @@ class DiscoverService:
     def _check_policy(self, server: str, tool: str | None = None) -> str | None:
         return safety_policy.check_server(self._effective_policy_rules(), server, tool)
 
+    def _authorize(self, server: str, tool: str | None = None) -> str | None:
+        """dispatch 前的原子授权门（once 规则首次放行即焚毁）。
+
+        委托 PolicyStore.authorize_server；无 store（启动快照模式）时直通。
+        """
+        store = self.config.policy_store
+        if store is None:
+            return None
+        return store.authorize_server(server, tool)
+
     def policy_denial_offer(self, server: str, tool: str | None = None,
                             denial_reason: str | None = None) -> DenialOffer | None:
         """server 规则拒绝且可授予时构造 elicitation 提议；其余返回 None。
@@ -112,8 +122,9 @@ class DiscoverService:
                       ttl_seconds: int | None = None) -> dict[str, Any]:
         """管理 safety policy（list/add/remove），改动即时生效无需重启。
 
-        三档 scope：permanent（写策略文件，跨重启）/ temporary（内存 + TTL 自动
-        过期，ttl_seconds 缺省 3600）/ session（内存，进程存活期，缺省档）。
+        四档 scope：permanent（写策略文件，跨重启）/ temporary（内存 + TTL 自动
+        过期，ttl_seconds 缺省 3600）/ session（内存，进程存活期，缺省档）/
+        once（内存，一次性——首次放行即焚毁）。
         remove 跨层先 overlay 后文件并回报 scope；不接受 scope/ttl_seconds。
         安全约定：调用方（Agent）应先向用户确认再 add/remove；审计日志强制记录。
         """
@@ -278,6 +289,11 @@ class DiscoverService:
         if err:
             logger.warning("call_tool %s:%s policy=deny", server, tool)
             return {"ok": False, "reason": err}
+
+        gate_err = self._authorize(server, tool)   # 代发前消费一次性授权
+        if gate_err:
+            logger.warning("call_tool %s:%s policy=deny", server, tool)
+            return {"ok": False, "reason": gate_err}
 
         try:
             result = await self.manager.call_tool(server, tool, arguments or {})

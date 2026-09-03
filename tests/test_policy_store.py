@@ -367,6 +367,127 @@ def test_ttl_only_valid_with_temporary(tmp_path):
     assert resn.ok is False
 
 
+# ---------- 一次性（once，用后即焚） ----------
+
+def test_once_rule_allows_then_burns(tmp_path):
+    """scope=once：authorize 首次放行并焚毁，二次落兜底 deny；文件字节恒不动。"""
+    p = tmp_path / "policy.txt"
+    before = "*=deny\n"
+    p.write_text(before, encoding="utf-8")
+    store = make_store(p)
+
+    res = store.add_rule("OBS:GetObject=allow", scope="once")
+    assert res.ok is True and res.scope == "once"
+    assert store.authorize("OBS", "GetObject") is None            # 首次放行（放行即焚）
+    err = store.authorize("OBS", "GetObject")
+    assert err is not None and "拒绝" in err                       # 已焚毁 → 兜底 deny
+    assert read_disk(p) == before                                  # 从不落盘
+    assert policy.evaluate(store.rules(), "OBS", "GetObject") is False
+
+
+def test_once_rule_not_burned_by_non_matching_calls(tmp_path):
+    """authorize 的 deny 路径永不焚毁：未命中调用不消耗 once 授权。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("OBS:GetObject=allow", scope="once")
+
+    assert store.authorize("OBS", "PutObject") is not None         # 未命中
+    assert store.authorize("ECS", "GetObject") is not None         # 未命中
+    assert store.authorize("OBS", "GetObject") is None             # 仍放行
+
+
+def test_authorize_repeatable_for_non_once_rules(tmp_path):
+    """文件层 / session 层 allow 经 authorize 反复放行（无焚毁、零回归）。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:List*=allow\n*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("ECS:GetServer=allow")                          # session 层
+
+    for _ in range(2):
+        assert store.authorize("ECS", "ListServers") is None
+        assert store.authorize("ECS", "GetServer") is None
+    assert store.authorize("ECS", "DeleteServer") is not None
+
+
+def test_once_with_ttl_rejected(tmp_path):
+    """once 与 ttl_seconds 互斥。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    res = store.add_rule("ECS:*=allow", scope="once", ttl_seconds=60)
+    assert res.ok is False
+
+
+def test_once_list_rules_reports_scope(tmp_path):
+    """list_rules 回报 scope=once、expires_in=None。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("ECS:List*=allow", scope="once")
+    infos = store.list_rules()
+    assert infos[0].scope == "once"
+    assert infos[0].expires_in is None
+    assert infos[0].line == "ECS:List*=allow"
+
+
+def test_remove_once_rule_reports_scope(tmp_path):
+    """remove 跨层回收 once 规则并回报 scope=once。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("ECS:List*=allow", scope="once")
+    res = store.remove_rule("ECS:List*=allow")
+    assert res.ok is True and res.scope == "once"
+    assert store.authorize("ECS", "ListServers") is not None       # 已移除 → deny
+
+
+def test_authorize_server_once_burns(tmp_path):
+    """discover 调用级 server 规则 once 版同样用后即焚；connect 级授权不受影响。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+
+    store.add_rule("server:srv1:list*=allow", scope="once")
+    assert store.authorize_server("srv1", "listTools") is None     # 首次放行
+    assert store.authorize_server("srv1", "listTools") is not None  # 已焚毁
+    store.add_rule("server:srv2=allow", scope="once")
+    assert store.authorize_server("srv2", None) is None            # connect 级首次放行
+    assert store.authorize_server("srv2", None) is not None        # 已焚毁
+
+
+def test_authorize_unconfigured_still_denies():
+    """未配置路径（path=None）恒 deny，红线不变。"""
+    store = PolicyStore(None)
+    assert store.authorize("ECS", "ListServers") is not None
+    assert store.authorize_server("srv1", "listTools") is not None
+
+
+def test_authorize_once_concurrent_only_one_passes(tmp_path):
+    """并发授权同一 once 规则：RLock 内评估+焚毁原子，恰有一个放行。"""
+    import threading
+
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("OBS:GetObject=allow", scope="once")
+
+    results: list[str | None] = []
+    barrier = threading.Barrier(8)
+
+    def probe():
+        barrier.wait()
+        results.append(store.authorize("OBS", "GetObject"))
+
+    threads = [threading.Thread(target=probe) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results.count(None) == 1                                # 恰一次放行
+    assert len(results) == 8
+
+
 # ---------- remove 跨层 + list_rules ----------
 
 def test_remove_searches_overlay_before_file(tmp_path):
@@ -452,7 +573,7 @@ def test_unknown_scope_rejected(tmp_path):
     p.write_text("*=deny\n", encoding="utf-8")
     store = make_store(p)
 
-    res = store.add_rule("ECS:*=allow", scope="once")
+    res = store.add_rule("ECS:*=allow", scope="forever")
     assert res.ok is False and "scope" in (res.reason or "")
     assert store.rules() == tuple(policy.parse_policy(["*=deny"]))   # 状态未动
 

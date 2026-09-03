@@ -516,7 +516,7 @@ def test_manage_policy_invalid_scope_and_ttl(tmp_path):
     p = _policy_file(tmp_path, ["*=deny"])
     svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
 
-    assert svc.manage_policy("add", "ECS:*=allow", scope="once")["ok"] is False
+    assert svc.manage_policy("add", "ECS:*=allow", scope="forever")["ok"] is False
     assert svc.manage_policy("add", "ECS:*=allow", ttl_seconds=60)["ok"] is False  # ttl 仅 temporary
     assert svc.manage_policy("add", "ECS:*=allow", scope="session")["ok"] is True
 
@@ -600,6 +600,99 @@ def test_presign_flow_after_policy_grant(tmp_path):
     assert out2["presign"]["expires_in"] == 300
     assert "AccessKeyId=CRED-AK&Expires=" in out2["presign"]["url"]
     assert out2["presign"]["url"].startswith("https://bkt.obs.cn-north-4.myhuaweicloud.com/k.txt?")
+
+
+# ---------- 一次性授权（once，dispatch 前用后即焚） ----------
+
+def test_execute_once_rule_allows_first_call_only(tmp_path, monkeypatch):
+    """once 规则：首次 execute 放行并焚毁，二次拒绝；客户端只收到一次调用。"""
+    from safety.policy_store import PolicyStore
+
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
+    p = _policy_file(tmp_path, ["*=deny"])
+    mock_client = StubMockClient()
+    svc = ToolService(store=_prep_store(products=False, apis=False), config=ServiceConfig(
+        mock=True, policy_store=PolicyStore(str(p)),
+        mock_client_factory=lambda: mock_client))
+    assert svc.manage_policy("add", "ECS:*=allow", scope="once")["ok"] is True
+
+    first = svc.execute_api("ECS", "ListServersDetails", params={"_status_code": 200})
+    assert first["ok"] is True
+    second = svc.execute_api("ECS", "ListServersDetails", params={"_status_code": 200})
+    assert second["ok"] is False
+    assert "safety policy 拒绝执行" in (second.get("reason") or "")
+    assert len(mock_client.calls) == 1
+
+
+def test_execute_once_rule_not_burned_by_schema_reject(tmp_path, monkeypatch):
+    """参数校验失败不烧授权：自纠后重试仍放行，仅真实执行消耗 once 授权。"""
+    from safety.policy_store import PolicyStore
+
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
+    p = _policy_file(tmp_path, ["*=deny"])
+    http_client = StubHttpClient()
+    svc = ToolService(store=_prep_store(products=False, apis=False), config=ServiceConfig(
+        policy_store=PolicyStore(str(p)),
+        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"),
+        http_client_factory=lambda: http_client))
+    assert svc.manage_policy("add", "ECS:*=allow", scope="once")["ok"] is True
+
+    bad = svc.execute_api("ECS", "ListServersDetails", params={"limit": "abc"})
+    assert bad["ok"] is False
+    good = svc.execute_api("ECS", "ListServersDetails", params={"limit": 1})
+    assert good["ok"] is True
+    exhausted = svc.execute_api("ECS", "ListServersDetails", params={"limit": 1})
+    assert exhausted["ok"] is False
+    assert "safety policy 拒绝执行" in (exhausted.get("reason") or "")
+    assert len(http_client.calls) == 1
+
+
+def test_execute_once_rule_not_burned_by_missing_doc(tmp_path, monkeypatch):
+    """接口未找到不烧授权（远端回退已封死：NopeApi 恒 miss）。"""
+    from safety.policy_store import PolicyStore
+
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
+    p = _policy_file(tmp_path, ["*=deny"])
+    mock_client = StubMockClient()
+    svc = ToolService(store=_prep_store(products=False, apis=False), config=ServiceConfig(
+        mock=True, policy_store=PolicyStore(str(p)),
+        mock_client_factory=lambda: mock_client))
+    assert svc.manage_policy("add", "ECS:*=allow", scope="once")["ok"] is True
+
+    assert svc.execute_api("ECS", "NopeApi")["ok"] is False          # 文档未命中
+    assert svc.execute_api("ECS", "ListServersDetails",
+                           params={"_status_code": 200})["ok"] is True
+    assert svc.execute_api("ECS", "ListServersDetails",
+                           params={"_status_code": 200})["ok"] is False
+    assert len(mock_client.calls) == 1
+
+
+def test_execute_once_presign_branch_burns(tmp_path, monkeypatch):
+    """显式 _presign 分支同样在真实预签发前消费授权；非 OBS 拒绝不焚毁。"""
+    from common.auth.credentials import Credentials
+    from safety.policy_store import PolicyStore
+
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(
+        store=_prep_obs_store(),
+        config=ServiceConfig(policy_store=PolicyStore(str(p)),
+                             credentials=Credentials(ak="CRED-AK", sk="SK-TEST")))
+    assert svc.manage_policy("add", "OBS:GetObject=allow", scope="once")["ok"] is True
+
+    presign = {"bucket_name": "bkt", "object_key": "k.txt", "_presign": True}
+    assert svc.execute_api("OBS", "GetObject", params=presign)["ok"] is True
+    out = svc.execute_api("OBS", "GetObject", params=presign)
+    assert out["ok"] is False
+    assert "safety policy 拒绝执行" in (out.get("reason") or "")
+
+
+def test_execute_manage_policy_misuse_guidance():
+    """execute_api 误路由 manage_policy 返回引导文案，而非策略拒绝。"""
+    svc = ToolService(store=MemoryStore(), config=ServiceConfig(mock=True))
+    out = svc.execute_api("ECS", "manage_policy")
+    assert out["ok"] is False
+    assert "manage_policy" in (out.get("reason") or "")
 
 
 # ---------- 对象数据面强制 presign（单口径） ----------

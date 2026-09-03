@@ -51,12 +51,15 @@ INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现
   授予最小规则（如 "server:@huaweicloud/ecs=allow"），规则热生效后重试即可通过；
   部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
   经 MCP elicitation 向用户弹窗提议授予，结果携带 `granted_rule` 字段；
+  elicitation 对 call_server_tool 提议授予的是一次性规则（scope=once）：一次确认
+  仅放行下一次代发调用，用后即焚，再次执行需再次确认（connect 授予为会话内）；
 - 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
   （--elicitation off）无弹窗，务必先向用户确认再调用；开启 elicitation 后
   add/remove 由服务端先经 elicitation 向用户确认；
-- 规则三档 scope：`session` 会话内（缺省，进程存活期，重启即失、无需回收）/
+- 规则四档 scope：`once` 一次性（仅放行下一次执行，用后即焚，重启即失）/
+  `session` 会话内（缺省，进程存活期，重启即失、无需回收）/
   `temporary` 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ `permanent` 永久
-  （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用会话内/临时；
+  （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内/临时；
   `remove` 跨层回收（先会话/临时后文件，首个语义命中移除）。
 
 ## 其它
@@ -99,9 +102,11 @@ def build_discover_app(config: DiscoverConfig, *,
                        instructions=INSTRUCTIONS_DISCOVER,
                        log_level=log_level)  # type: ignore[arg-type]
 
-    def _consent(ctx: Context | None) -> PolicyConsent:
+    def _consent(ctx: Context | None, grant_scope: str = "session") -> PolicyConsent:
         assert ctx is not None, "Context injected by MCP framework"
-        grant = functools.partial(ds.manage_policy, "add")
+        # connect 授予为会话内（连接是持续态）；call_tool 授予为一次性（scope=once，
+        # 一次用户确认只放行一次代发调用）
+        grant = functools.partial(ds.manage_policy, "add", scope=grant_scope)
         return PolicyConsent(consent_mode, ctx_elicit_fn(ctx), grant)
 
     @server.tool()
@@ -173,7 +178,8 @@ def build_discover_app(config: DiscoverConfig, *,
 
         arguments 为工具参数 dict；policy 匹配 server:serverId:toolPattern=allow|deny。
         被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户提议授予最小工具规则（用户确认后热生效并携带 granted_rule）。
+        向用户提议授予最小工具规则（用户确认后热生效并携带 granted_rule；
+        提议授予为一次性规则，仅放行下一次代发调用，用后即焚）。
         """
         logger.info("call_server_tool server=%s tool=%s", server, tool)
         result = await ds.call_tool(server, tool, arguments=arguments)
@@ -182,7 +188,7 @@ def build_discover_app(config: DiscoverConfig, *,
                                            denial_reason=result.get("reason"))
             if offer is not None:
                 result = cast(McpCallResult,
-                              await _consent(ctx).offer_grant(offer, result))
+                              await _consent(ctx, grant_scope="once").offer_grant(offer, result))
         return result
 
     @server.tool()
@@ -201,7 +207,8 @@ def build_discover_app(config: DiscoverConfig, *,
                             ctx: Context | None = None) -> dict[str, Any]:
         """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
 
-        三档 scope：session 会话内（缺省，进程存活期，重启即失、无需回收）/
+        四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
+        session 会话内（缺省，进程存活期，重启即失、无需回收）/
         temporary 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ permanent 永久
         （写入策略文件，跨重启）。仅 permanent 落盘。
         action=list 查看当前全部规则（结构化 rules 含 scope/expires_in + 文件全文）；

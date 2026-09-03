@@ -71,3 +71,43 @@ def test_load_policy_file_text_lines(tmp_path):
     p.write_text("# 白名单\nECS:*Show*=allow\n*=deny\n", encoding="utf-8")
     rules = policy.load_policy_file(str(p))
     assert len(rules) == 2
+
+
+# ---------- match_first / match_server_first（S2：first-match 命中规则对象） ----------
+
+def test_match_first_returns_first_matching_rule():
+    rules = policy.parse_policy(["ECS:*Show*=allow", "*=deny"])
+    hit = policy.match_first(rules, "ECS", "ShowServers")
+    assert hit is rules[0]
+    miss = policy.match_first(rules, "ECS", "DeleteServers")
+    assert miss is rules[1]
+
+
+def test_match_first_no_match_returns_none():
+    rules = policy.parse_policy(["ECS:List*=allow"])
+    assert policy.match_first(rules, "ECS", "CreateServers") is None
+
+
+def test_match_first_case_insensitive_and_ignores_server_rules():
+    rules = policy.parse_policy(
+        ["server:srv1=allow", "ecs:list*=allow"])
+    hit = policy.match_first(rules, "ECS", "ListServers")
+    assert hit is rules[1]
+    assert hit.allow is True
+
+
+def test_match_server_first_returns_matching_rule():
+    rules = policy.parse_policy(
+        ["server:srv1:list*=allow", "server:srv1=deny", "ECS:*=allow"])
+    hit_tool = policy.match_server_first(rules, "SRV1", "listTools")
+    assert hit_tool is rules[0]
+    hit_connect = policy.match_server_first(rules, "srv1", None)
+    assert hit_connect is rules[1]
+    assert hit_connect.allow is False
+
+
+def test_match_server_first_no_match_returns_none():
+    rules = policy.parse_policy(["server:srv1:list*=allow"])
+    assert policy.match_server_first(rules, "srv1", "callTool") is None
+    assert policy.match_server_first(rules, "srv1", None) is None
+    assert policy.match_server_first(rules, "other", "listTools") is None
