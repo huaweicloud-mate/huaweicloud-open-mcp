@@ -42,18 +42,21 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 - `execute_api` 执行前强制过 safety policy（allowlist/denylist 白名单）；
 - 未配置 policy 时所有执行被拒绝；
 - 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口；
-- 被拒接口确属任务必需时：先向用户确认，再调用 `manage_policy(action="add", line=...)`
-  授予最小规则（如 "OBS:GetObject=allow"），规则热生效后重试即可通过；
+- 被拒接口确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认，再调用
+  `manage_policy(action="add", line=...)` 授予规则（如 "OBS:GetObject=allow"，
+  或产品级 "VPC:*=allow"），规则热生效后重试即可通过；问询按三选一口径：
+  api=最小规则（一次性，用后即焚）/ product=产品级规则（会话内，覆盖该产品全部
+  API，重启即失）/ none=不授予；
   部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
-  经 MCP elicitation 向用户弹窗提议授予，结果携带 `granted_rule` 字段；
-  elicitation 提议授予的是一次性规则（scope=once）：一次确认仅放行下一次执行，
-  用后即焚，再次执行需再次确认；
+  经 MCP elicitation 弹出同样的三选一提议（结果携带 `granted_rule` 字段）；
+  默认 off 或客户端不支持 elicitation 时，拒绝原因会附带同样的兜底指引，
+  按指引问询确认后再授予；
 - 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
   （--elicitation off）无弹窗，务必先向用户确认再调用；开启 elicitation 后
   add/remove 由服务端先经 elicitation 向用户确认；注意 `manage_policy` 是
   server 内置控制面工具，直接调用即可，不要经 execute_api 路由；
 - 规则四档 scope：`once` 一次性（仅放行下一次执行，用后即焚，重启即失）/
-  `session` 会话内（缺省，进程存活期，重启即失、无需回收）/
+  `session` 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
   `temporary` 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ `permanent` 永久
   （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内/临时；
   `remove` 跨层回收（先会话/临时后文件，首个语义命中移除）。
@@ -119,8 +122,9 @@ def build_openapi_app(service: ToolService | None = None, *,
 
     def _consent(ctx: Context | None) -> PolicyConsent:
         assert ctx is not None, "Context injected by MCP framework"
-        # 拒绝路径提议授予为一次性规则（scope=once）：一次用户确认只放行一次执行
-        grant = functools.partial(svc.manage_policy, "add", scope="once")
+        # choice→scope 映射内聚于 PolicyConsent：api=一次性（scope=once，一次用户
+        # 确认只放行一次执行）/ product=产品级（scope=session，会话内生效）
+        grant = functools.partial(svc.manage_policy, "add")
         return PolicyConsent(consent_mode, ctx_elicit_fn(ctx), grant)
 
     @server.tool()
@@ -192,8 +196,11 @@ def build_openapi_app(service: ToolService | None = None, *,
         （信封 note 字段给出警示口径）。桶管理类接口仍由 gateway 直连执行。
 
         被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户提议授予最小规则（用户确认后热生效并携带 granted_rule；
-        提议授予为一次性规则，仅放行下一次执行，用后即焚）；
+        向用户弹窗三选一提议授予（用户确认后热生效并携带 granted_rule）：
+        api=最小规则（一次性，用后即焚）/ product=产品级规则如 "VPC:*=allow"
+        （会话内放行该产品全部 API，重启即失）/ none=不授予；
+        默认 off 或客户端不支持 elicitation 时，拒绝原因附带同样的兜底指引
+        （先经交互式问询向用户确认，再经 manage_policy 授予）；
         亦可经 manage_policy 授予（add/remove 前服务端先 elicit 确认）。
 
         授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
@@ -215,14 +222,15 @@ def build_openapi_app(service: ToolService | None = None, *,
         """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
 
         四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
-        session 会话内（缺省，进程存活期，重启即失、无需回收）/
+        session 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
         temporary 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ permanent 永久
         （写入策略文件，跨重启）。仅 permanent 落盘。
         action=list 查看当前全部规则（结构化 rules 含 scope/expires_in + 文件全文）；
         action=add 新增规则（自动插到会遮蔽它的 deny 规则之前，如 "OBS:GetObject=allow"）；
         action=remove 按语义移除首个匹配规则（跨层：先会话/临时后文件；不接受
-        scope/ttl_seconds）。安全约定：add/remove 由服务端先经 elicitation
-        向用户确认，授予最小规则；客户端不支持 elicitation 时退回约定由调用方先行确认。
+        scope/ttl_seconds）。
+        安全约定：先经交互式问询（如 question 工具）向用户确认再 add/remove；开启
+        elicitation 时由服务端弹窗确认，未开启/客户端不支持时由调用方自行完成问询确认。
         未配置 policy 文件时本工具拒绝执行（不创建文件）。
         """
         if ((action or "").strip().lower() in ("add", "remove")

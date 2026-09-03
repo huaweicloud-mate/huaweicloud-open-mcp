@@ -31,7 +31,7 @@ class ExecuteResult(TypedDict, total=False):
     api: str | None
     headers: dict[str, str] | None
     presign: "PresignInfo | None"
-    granted_rule: str | None  # policy 拒绝经用户 elicitation 确认后授予的最小规则
+    granted_rule: str | None  # policy 拒绝经用户 elicitation 确认后授予的规则（最小或产品级）
 
 
 class PresignInfo(TypedDict):

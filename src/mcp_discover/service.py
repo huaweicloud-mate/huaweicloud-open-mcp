@@ -105,6 +105,9 @@ class DiscoverService:
         未配置 policy store（无可写文件）或放行 → None；
         denial_reason 非空时须与本方法复查结果一致（确保被增强的确实是
         policy 拒绝），不一致 → None。
+        coarse_rule 仅 call_tool 路径提供（服务级全工具规则 server:X:*=allow，
+        session 档授予选项）；connect 路径为 None——call 级规则匹配不到
+        connect 检查，授予无意义。
         """
         if self.config.policy_store is None:
             return None
@@ -115,7 +118,9 @@ class DiscoverService:
             return None
         return DenialOffer(
             subject=f"{server}:{tool}" if tool else server,
-            rule=safety_policy.grant_server_rule(server, tool), reason=err)
+            rule=safety_policy.grant_server_rule(server, tool), reason=err,
+            coarse_rule=(safety_policy.grant_server_rule(server, "*")
+                         if tool is not None else None))
 
     def manage_policy(self, action: str, line: str | None = None,
                       scope: str | None = None,
@@ -123,10 +128,12 @@ class DiscoverService:
         """管理 safety policy（list/add/remove），改动即时生效无需重启。
 
         四档 scope：permanent（写策略文件，跨重启）/ temporary（内存 + TTL 自动
-        过期，ttl_seconds 缺省 3600）/ session（内存，进程存活期，缺省档）/
-        once（内存，一次性——首次放行即焚毁）。
+        过期，ttl_seconds 缺省 3600）/ session（内存，缺省档——本次 code agent
+        会话，stdio 单进程下等价进程存活期，重启即失；非远端连接会话，断开/回收
+        后授权仍在）/ once（内存，一次性——首次放行即焚毁）。
         remove 跨层先 overlay 后文件并回报 scope；不接受 scope/ttl_seconds。
-        安全约定：调用方（Agent）应先向用户确认再 add/remove；审计日志强制记录。
+        安全约定：调用方（Agent）应先经交互式问询（如 question 工具）向用户
+        确认再 add/remove；审计日志强制记录。
         """
         action = (action or "").strip().lower()
         logger.info("manage_policy action=%s line=%s scope=%s ttl=%s",

@@ -838,6 +838,7 @@ def test_policy_denial_offer_constructed_for_policy_denial(tmp_path):
     assert offer.subject == "ECS:ListServersDetails"
     assert offer.rule == "ECS:ListServersDetails=allow"
     assert offer.reason == denial["reason"]
+    assert offer.coarse_rule == "ECS:*=allow"   # 产品级授予选项（session 档）
 
 
 def test_policy_denial_offer_none_when_allowed_or_unconfigured(tmp_path):

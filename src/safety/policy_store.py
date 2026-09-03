@@ -6,8 +6,9 @@
 - 内存 → 文件：add/remove 先校验、原子落盘（tmp + os.replace）、再刷新内存，
   静止态恒满足 memory == file。
 - 三档 scope + 一次性：permanent（文件真值源，跨重启）/ temporary（内存 overlay
-  + TTL，到期自动剪枝）/ session（内存 overlay，进程存活期，缺省档）/
-  once（内存 overlay，用后即焚——authorize 首次放行即焚毁）。
+  + TTL，到期自动剪枝）/ session（内存 overlay，缺省档——本次 code agent 会话，
+  stdio 单进程下等价进程存活期）/ once（内存 overlay，用后即焚——authorize 首次
+  放行即焚毁）。
   生效规则 = overlay（插入序）++ 文件规则，整体行序 first-match；overlay allow
   穿透文件具体 deny 与兜底 deny（与落盘插位语义一致），overlay deny 可临时收紧。
   overlay 仅内存态，重启即失；未配置路径（path=None）全档全拒（红线不变）。

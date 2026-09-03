@@ -181,12 +181,19 @@ def check_server(rules: Sequence[PolicyRule] | None, server: str, tool: str | No
 
 
 def grant_rule(product: str, api: str) -> str:
-    """构造最小 product allow 规则文本（拒绝后的提议授予用）。"""
+    """构造最小 product allow 规则文本（拒绝后的提议授予用）。
+
+    api 传 "*" 即产品级规则（如 VPC:*=allow，放行该产品全部 API）。
+    """
     return f"{product}:{api}=allow"
 
 
 def grant_server_rule(server: str, tool: str | None = None) -> str:
-    """构造最小 server allow 规则文本：tool=None 为连接级，否则为调用级。"""
+    """构造最小 server allow 规则文本：tool=None 为连接级，否则为调用级。
+
+    tool 传 "*" 为服务级全工具规则（server:X:*=allow，connect_only=False，
+    匹配全部工具调用；与连接级 server:X=allow 天然区分）。
+    """
     if tool is None:
         return f"server:{server}=allow"
     return f"server:{server}:{tool}=allow"

@@ -24,6 +24,8 @@ from safety.policy_store import PolicyStore
 ACCEPT = ElicitResult(action="accept", content={"confirm": True})
 REFUSE = ElicitResult(action="accept", content={"confirm": False})
 DECLINE = ElicitResult(action="decline")
+ACCEPT_API = ElicitResult(action="accept", content={"choice": "api"})
+ACCEPT_PRODUCT = ElicitResult(action="accept", content={"choice": "product"})
 
 _OPENAPI_DOC = {
     "swagger": "2.0",
@@ -39,10 +41,31 @@ _OPENAPI_DOC = {
                 ],
                 "responses": {"200": {"description": "OK"}},
             }
-        }
+        },
+        "/v1/{project_id}/cloudservers": {
+            "get": {
+                "operationId": "ListServers",
+                "parameters": [
+                    {"name": "project_id", "in": "path", "type": "string",
+                     "required": True},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            }
+        },
     },
     "definitions": {},
 }
+
+
+def _cache_entries(store):
+    """两个 ECS 接口入缓存（产品级规则跨 API 放行验证用）。"""
+    doc = _OPENAPI_DOC
+    for path, method, api in (
+            ("/v1/{project_id}/cloudservers/detail", "get", "ListServersDetails"),
+            ("/v1/{project_id}/cloudservers", "get", "ListServers")):
+        op = doc["paths"][path][method]
+        store.set_api_cache(
+            ("ecs", api, "cn-north-4"), (doc, path, method, op))
 
 
 class _StubMockClient:
@@ -93,11 +116,7 @@ def make_openapi(tmp_path, mode):
     p = tmp_path / "policy.json"
     p.write_text('["*=deny"]', encoding="utf-8")
     store = MemoryStore()
-    op = _OPENAPI_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]
-    store.set_api_cache(
-        ("ecs", "ListServersDetails", "cn-north-4"),
-        (_OPENAPI_DOC, "/v1/{project_id}/cloudservers/detail", "get", op),
-    )
+    _cache_entries(store)
     svc = ToolService(store=store, config=ServiceConfig(
         mock=True, policy_store=PolicyStore(str(p)),
         mock_client_factory=_StubMockClient))
@@ -113,7 +132,7 @@ def run(coro):
 def test_openapi_execute_denied_accept_grants_rule(tmp_path, monkeypatch):
     app, p = make_openapi(tmp_path, "auto")
     monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
-    seen, script = [], [ACCEPT, DECLINE]
+    seen, script = [], [ACCEPT_API, DECLINE]
 
     async def _run():
         async with InMemoryTransport(app) as (r, w):
@@ -148,7 +167,7 @@ def test_openapi_grant_is_once_scoped_restart_equivalent(tmp_path, monkeypatch):
 
     async def _granted_run():
         async with InMemoryTransport(app) as (r, w):
-            async with ClientSession(r, w, elicitation_callback=script_client([ACCEPT, DECLINE], [])) as s:
+            async with ClientSession(r, w, elicitation_callback=script_client([ACCEPT_API, DECLINE], [])) as s:
                 await s.initialize()
                 first = result_dict(await s.call_tool(
                     "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
@@ -214,6 +233,10 @@ def test_openapi_mode_off_never_elicits(tmp_path, monkeypatch):
     exec_res, mp_res = run(_run())
     assert seen == []                                     # 从未发起 elicitation
     assert exec_res.get("granted_rule") is None
+    # 兜底指引直达 LLM：拒绝 reason 附带 question 问询 + manage_policy 授予口径
+    assert "manage_policy" in exec_res["reason"]
+    assert "question" in exec_res["reason"]
+    assert "ECS:*=allow" in exec_res["reason"]            # 与三选一表单语义对齐
     assert mp_res["ok"] is True                           # off 模式直接放行
     assert mp_res["scope"] == "session"                   # 默认会话内
     assert "ECS:ListServers=allow" not in policy_lines(p)  # 不落盘
@@ -305,6 +328,58 @@ def test_openapi_required_unsupported_blocks_manage_policy(tmp_path):
     assert "OBS:GetObject=allow" not in policy_lines(p)   # 未落盘
 
 
+def test_openapi_execute_denied_product_choice_grants_session(tmp_path, monkeypatch):
+    """choice=product：授予产品级会话内规则（ECS:*=allow），同产品另一 API
+    直接放行且不再发起 elicitation；授予不落盘（session 档）。"""
+    app, p = make_openapi(tmp_path, "auto")
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
+    seen, script = [], [ACCEPT_PRODUCT]
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client(script, seen)) as s:
+                await s.initialize()
+                first = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+                second = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+                other = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServers"}))
+                return first, second, other
+
+    first, second, other = run(_run())
+    assert first["ok"] is False
+    assert first["granted_rule"] == "ECS:*=allow"
+    assert "会话内产品级规则" in first["reason"]
+    assert "请重新调用" in first["reason"]
+    assert "ECS:*=allow" in seen[0]                       # 弹窗并列产品级选项
+    assert "ECS:*=allow" not in policy_lines(p)           # session 档不落盘
+    assert second["ok"] is True                           # 会话内持续放行（不焚毁）
+    assert other["ok"] is True                            # 同产品另一 API 免确认放行
+    assert len(seen) == 1                                 # 未再发起 elicitation
+
+
+def test_openapi_execute_denied_api_choice_message_lists_three_options(tmp_path, monkeypatch):
+    """coarse 提议弹窗文案并列三选项（api/product/none）与各自 scope 语义。"""
+    app, _ = make_openapi(tmp_path, "auto")
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
+    seen, script = [], [ACCEPT_API]
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client(script, seen)) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+
+    out = run(_run())
+    assert out["granted_rule"] == "ECS:ListServersDetails=allow"
+    msg = seen[0]
+    assert "ECS:ListServersDetails=allow" in msg and "ECS:*=allow" in msg
+    assert "- api：" in msg and "- product：" in msg and "- none：" in msg
+    assert "一次性" in msg and "会话" in msg
+
+
 # ---------- discover 模式 ----------
 
 CATALOG_ENTRY = {
@@ -362,7 +437,7 @@ def test_discover_call_tool_denied_accept_grants_once(tmp_path):
         app, p = make_discover_with_endpoint(
             tmp_path, "auto", stub.endpoint,
             ["server:@huaweicloud/ecs=allow", "*=deny"])
-        seen, script = [], [ACCEPT, DECLINE]
+        seen, script = [], [ACCEPT_API, DECLINE]
 
         async def _run():
             async with InMemoryTransport(app) as (r, w):
@@ -403,3 +478,79 @@ def test_discover_manage_policy_decline_keeps_file(tmp_path):
     out = run(_run())
     assert out["ok"] is False and "未确认" in out["reason"]
     assert "server:@huaweicloud/ecs=allow" not in policy_lines(p)
+
+
+def test_discover_call_tool_denied_product_choice_grants_session(tmp_path):
+    """choice=product：授予服务级全工具规则（server:X:*=allow，session 档），
+    换一工具直接放行且不再发起 elicitation；connect 路径不受影响（无 coarse 选项）。"""
+    from tests.fixtures.mcp_stub import StubMcpServer
+
+    with StubMcpServer() as stub:
+        app, p = make_discover_with_endpoint(
+            tmp_path, "auto", stub.endpoint,
+            ["server:@huaweicloud/ecs=allow", "*=deny"])
+        seen, script = [], [ACCEPT_PRODUCT]
+
+        async def _run():
+            async with InMemoryTransport(app) as (r, w):
+                async with ClientSession(r, w,
+                                         elicitation_callback=script_client(script, seen)) as s:
+                    await s.initialize()
+                    conn = result_dict(await s.call_tool(
+                        "connect_mcp_server", {"server": "@huaweicloud/ecs"}))
+                    assert conn["ok"] is True
+                    first = result_dict(await s.call_tool("call_server_tool", {
+                        "server": "@huaweicloud/ecs", "tool": "list_servers",
+                        "arguments": {}}))
+                    second = result_dict(await s.call_tool("call_server_tool", {
+                        "server": "@huaweicloud/ecs", "tool": "get_server",
+                        "arguments": {"server_id": "srv-1"}}))
+                    return first, second
+
+        first, second = run(_run())
+    assert first["ok"] is False
+    assert first["granted_rule"] == "server:@huaweicloud/ecs:*=allow"
+    assert "会话内产品级规则" in first["reason"]
+    assert "server:@huaweicloud/ecs:*=allow" in seen[0]       # 弹窗并列服务级选项
+    assert ("server:@huaweicloud/ecs:*=allow" not in policy_lines(p))  # session 档不落盘
+    assert second["ok"] is True                               # 换工具免确认放行
+    assert len(seen) == 1                                     # 未再发起 elicitation
+
+
+def test_discover_connect_message_has_no_product_option(tmp_path):
+    """connect 提议无产品级选项：文案不出现三选项清单，仍是单一确认。"""
+    app, _ = make_discover(tmp_path, "auto")
+    seen = []
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client([DECLINE], seen)) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool(
+                    "connect_mcp_server", {"server": "@huaweicloud/ecs"}))
+
+    run(_run())
+    msg = seen[0]
+    assert "server:@huaweicloud/ecs=allow" in msg
+    assert "- product：" not in msg and "- none：" not in msg
+
+
+def test_discover_off_denial_carries_fallback_hint(tmp_path):
+    """off 模式 connect 拒绝：reason 附带兜底指引（单一选项口径）且从不弹窗。"""
+    app, _ = make_discover(tmp_path, "off")
+    seen = []
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client([], seen)) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool(
+                    "connect_mcp_server", {"server": "@huaweicloud/ecs"}))
+
+    out = run(_run())
+    assert seen == []                                     # 从未发起 elicitation
+    assert out.get("granted_rule") is None
+    assert "safety policy 拒绝连接" in out["reason"]
+    assert "manage_policy" in out["reason"] and "question" in out["reason"]
+    assert "server:@huaweicloud/ecs=allow" in out["reason"]
+    assert "product" not in out["reason"]                 # connect 无产品级选项

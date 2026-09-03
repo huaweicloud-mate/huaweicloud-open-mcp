@@ -76,6 +76,7 @@ def test_policy_denial_offer_server_constructed(tmp_path):
     assert isinstance(offer, DenialOffer)
     assert offer.subject == "@huaweicloud/ecs"
     assert offer.rule == "server:@huaweicloud/ecs=allow"
+    assert offer.coarse_rule is None   # connect 无产品级对应物（call 级规则匹配不到 connect 检查）
 
     call_reason = "safety policy 拒绝调用 @huaweicloud/ecs:ListInstances"
     offer = svc.policy_denial_offer("@huaweicloud/ecs", "ListInstances",
@@ -83,6 +84,7 @@ def test_policy_denial_offer_server_constructed(tmp_path):
     assert offer is not None
     assert offer.rule == "server:@huaweicloud/ecs:ListInstances=allow"
     assert offer.subject == "@huaweicloud/ecs:ListInstances"
+    assert offer.coarse_rule == "server:@huaweicloud/ecs:*=allow"  # 服务级全工具（session 档）
 
 
 def test_policy_denial_offer_server_none_cases(tmp_path):

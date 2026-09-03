@@ -47,20 +47,27 @@ INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现
 - `connect_mcp_server` 和 `call_server_tool` 执行前强制过 safety policy；
 - 未配置 policy 时所有连接与调用被拒绝；
 - 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的 server/tool；
-- 被拒连接/调用确属任务必需时：先向用户确认，再调用 `manage_policy(action="add", line=...)`
-  授予最小规则（如 "server:@huaweicloud/ecs=allow"），规则热生效后重试即可通过；
+- 被拒连接/调用确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认，再调用
+  `manage_policy(action="add", line=...)` 授予规则（如 "server:@huaweicloud/ecs=allow"，
+  或服务级全工具 "server:@huaweicloud/ecs:*=allow"），规则热生效后重试即可通过；
+  call_tool 问询按三选一口径：api=最小工具规则（一次性，用后即焚）/
+  product=服务级全工具规则（会话内，覆盖该 server 全部工具，重启即失）/ none=不授予；
+  connect 为单一确认（会话内连接级授予）；
   部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
-  经 MCP elicitation 向用户弹窗提议授予，结果携带 `granted_rule` 字段；
-  elicitation 对 call_server_tool 提议授予的是一次性规则（scope=once）：一次确认
-  仅放行下一次代发调用，用后即焚，再次执行需再次确认（connect 授予为会话内）；
+  经 MCP elicitation 弹出同样的提议（结果携带 `granted_rule` 字段）；
+  默认 off 或客户端不支持 elicitation 时，拒绝原因会附带同样的兜底指引，
+  按指引问询确认后再授予；
 - 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
   （--elicitation off）无弹窗，务必先向用户确认再调用；开启 elicitation 后
   add/remove 由服务端先经 elicitation 向用户确认；
 - 规则四档 scope：`once` 一次性（仅放行下一次执行，用后即焚，重启即失）/
-  `session` 会话内（缺省，进程存活期，重启即失、无需回收）/
+  `session` 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
   `temporary` 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ `permanent` 永久
   （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内/临时；
   `remove` 跨层回收（先会话/临时后文件，首个语义命中移除）。
+  注意「会话内」指 code agent 会话（AI 客户端与 gateway 的一次连接），**非**到远端
+  MCP server 的连接会话——远端连接由空闲回收/LRU 管理，断开或回收后 session 档
+  授权仍在，直到本次 code agent 会话结束。
 
 ## 其它
 
@@ -102,12 +109,15 @@ def build_discover_app(config: DiscoverConfig, *,
                        instructions=INSTRUCTIONS_DISCOVER,
                        log_level=log_level)  # type: ignore[arg-type]
 
-    def _consent(ctx: Context | None, grant_scope: str = "session") -> PolicyConsent:
+    def _consent(ctx: Context | None, minimal_scope: str = "session") -> PolicyConsent:
         assert ctx is not None, "Context injected by MCP framework"
-        # connect 授予为会话内（连接是持续态）；call_tool 授予为一次性（scope=once，
-        # 一次用户确认只放行一次代发调用）
-        grant = functools.partial(ds.manage_policy, "add", scope=grant_scope)
-        return PolicyConsent(consent_mode, ctx_elicit_fn(ctx), grant)
+        # choice→scope 映射内聚于 PolicyConsent；minimal_scope 由调用点注入：
+        # connect 授予为会话内（连接是持续态）；call_tool 传 once（一次性，
+        # 一次用户确认只放行一次代发调用）。product 选择恒为 session（服务级
+        # 全工具规则 server:X:*=allow，会话内生效）。
+        grant = functools.partial(ds.manage_policy, "add")
+        return PolicyConsent(consent_mode, ctx_elicit_fn(ctx), grant,
+                             minimal_scope=minimal_scope)
 
     @server.tool()
     def list_mcp_servers(category: str | None = None,
@@ -137,7 +147,9 @@ def build_discover_app(config: DiscoverConfig, *,
         policy 匹配 server 连接规则：server:serverId=allow|deny；
         真实模式 endpoint 严格取自目录；mock 模式指向 --mock-base。
         被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户提议授予最小连接规则（用户确认后热生效并携带 granted_rule）。
+        向用户提议授予最小连接规则（用户确认后热生效并携带 granted_rule）；
+        未开启 elicitation 时拒绝原因附带兜底指引（先经交互式问询向用户
+        确认，再经 manage_policy 授予）。
         """
         logger.info("connect_mcp_server server=%s", server)
         result = await ds.connect(server)
@@ -178,8 +190,12 @@ def build_discover_app(config: DiscoverConfig, *,
 
         arguments 为工具参数 dict；policy 匹配 server:serverId:toolPattern=allow|deny。
         被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户提议授予最小工具规则（用户确认后热生效并携带 granted_rule；
-        提议授予为一次性规则，仅放行下一次代发调用，用后即焚）。
+        向用户弹窗三选一提议授予（用户确认后热生效并携带 granted_rule）：
+        api=最小工具规则（一次性，用后即焚）/ product=服务级全工具规则如
+        "server:@huaweicloud/ecs:*=allow"（会话内放行该 server 全部工具，
+        重启即失）/ none=不授予；默认 off 或客户端不支持 elicitation 时，
+        拒绝原因附带同样的兜底指引（先经交互式问询向用户确认，再经
+        manage_policy 授予）。
         """
         logger.info("call_server_tool server=%s tool=%s", server, tool)
         result = await ds.call_tool(server, tool, arguments=arguments)
@@ -188,7 +204,7 @@ def build_discover_app(config: DiscoverConfig, *,
                                            denial_reason=result.get("reason"))
             if offer is not None:
                 result = cast(McpCallResult,
-                              await _consent(ctx, grant_scope="once").offer_grant(offer, result))
+                              await _consent(ctx, minimal_scope="once").offer_grant(offer, result))
         return result
 
     @server.tool()
@@ -208,15 +224,17 @@ def build_discover_app(config: DiscoverConfig, *,
         """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
 
         四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
-        session 会话内（缺省，进程存活期，重启即失、无需回收）/
+        session 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
         temporary 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ permanent 永久
-        （写入策略文件，跨重启）。仅 permanent 落盘。
+        （写入策略文件，跨重启）。仅 permanent 落盘。「会话内」指 code agent 会话
+        （AI 客户端与 gateway 的一次连接），非到远端 MCP server 的连接会话——远端
+        连接断开或空闲回收后 session 档授权仍在。
         action=list 查看当前全部规则（结构化 rules 含 scope/expires_in + 文件全文）；
         action=add 新增规则（自动插到会遮蔽它的 deny 规则之前，如
         "server:@huaweicloud/ecs=allow"）；action=remove 按语义移除首个匹配规则
         （跨层：先会话/临时后文件；不接受 scope/ttl_seconds）。
-        安全约定：add/remove 由服务端先经 elicitation 向用户确认，授予最小规则；
-        客户端不支持 elicitation 时退回约定由调用方先行确认。
+        安全约定：先经交互式问询（如 question 工具）向用户确认再 add/remove；开启
+        elicitation 时由服务端弹窗确认，未开启/客户端不支持时由调用方自行完成问询确认。
         未配置 policy 文件时本工具拒绝执行（不创建文件）。
         """
         if ((action or "").strip().lower() in ("add", "remove")
