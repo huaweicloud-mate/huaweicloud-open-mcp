@@ -88,6 +88,93 @@ def test_normalize_response_truncates_oversized():
     assert out["truncated"] is True
 
 
+# ---------- normalize_response：错误体形状兼容（矩阵经单一接口断言） ----------
+
+def test_normalize_response_error_body_always_present():
+    # 错误分支 body 恒透出（真值源兜底），不再丢弃
+    out = execute.normalize_response({"status": 400, "headers": {},
+                                      "body": {"error_code": "E.400", "error_msg": "bad"}})
+    assert out["body"] == {"error_code": "E.400", "error_msg": "bad"}
+
+
+def test_normalize_response_iam_nested_error():
+    # IAM v3/Keystone 嵌套形态：{"error": {"code", "message", "title"}}（数字 code → str）
+    body = {"error": {"code": 403,
+                      "message": "You are not authorized to perform the requested action.",
+                      "title": "Forbidden"}}
+    out = execute.normalize_response({"status": 403, "headers": {}, "body": body})
+    assert out["status"] == 403
+    assert out["error_code"] == "403"
+    assert out["error_msg"] == "You are not authorized to perform the requested action."
+    assert out["body"] == body
+
+
+def test_normalize_response_nova_single_key_wrapper():
+    # OpenStack nova 系单键包装：{"badRequest": {"code", "message"}}
+    out = execute.normalize_response({"status": 400, "headers": {},
+                                      "body": {"badRequest": {"code": 400,
+                                                              "message": "Malformed request URL"}}})
+    assert out["error_code"] == "400"
+    assert out["error_msg"] == "Malformed request URL"
+
+
+def test_normalize_response_errors_list():
+    # SWR/Docker registry v2：{"errors": [{...}]} 取首元素
+    out = execute.normalize_response({"status": 404, "headers": {},
+                                      "body": {"errors": [{"code": "CRT.0001",
+                                                           "message": "image not found"}]}})
+    assert out["error_code"] == "CRT.0001"
+    assert out["error_msg"] == "image not found"
+
+
+def test_normalize_response_flat_code_message():
+    # 平坦 code/message 形态
+    out = execute.normalize_response({"status": 400, "headers": {},
+                                      "body": {"code": "LMS.0001", "message": "quota exceeded"}})
+    assert out["error_code"] == "LMS.0001"
+    assert out["error_msg"] == "quota exceeded"
+
+
+def test_normalize_response_msg_only():
+    # 仅 msg 键：code 为 null
+    out = execute.normalize_response({"status": 404, "headers": {},
+                                      "body": {"message": "not found"}})
+    assert out["error_code"] is None
+    assert out["error_msg"] == "not found"
+
+
+def test_normalize_response_bare_code_only():
+    # 孤键 code（无 msg）：采纳 code，msg 为 null，body 兜底
+    out = execute.normalize_response({"status": 403, "headers": {}, "body": {"code": 403}})
+    assert out["error_code"] == "403"
+    assert out["error_msg"] is None
+
+
+def test_normalize_response_error_string_direct():
+    # {"error": "<str>"} 字符串直取作 msg
+    out = execute.normalize_response({"status": 500, "headers": {},
+                                      "body": {"error": "internal failure"}})
+    assert out["error_code"] is None
+    assert out["error_msg"] == "internal failure"
+
+
+def test_normalize_response_unknown_shape_nulls_with_body():
+    # 未知 dict 形状：双 null，body 原始体兜底
+    body = {"foo": {"bar": 1}}
+    out = execute.normalize_response({"status": 418, "headers": {}, "body": body})
+    assert out["error_code"] is None
+    assert out["error_msg"] is None
+    assert out["body"] == body
+
+
+def test_normalize_response_non_scalar_code_rejected():
+    # code/msg 值非标量（dict/bool/空串）不采纳，落到下层形状
+    out = execute.normalize_response({"status": 400, "headers": {},
+                                      "body": {"code": {"nested": 1}, "message": True, "error": 0}})
+    assert out["error_code"] is None
+    assert out["error_msg"] is None
+
+
 # ---------- execute_api ----------
 
 def test_execute_missing_doc_host_returns_error(mini_detail):

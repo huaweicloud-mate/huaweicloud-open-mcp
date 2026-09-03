@@ -189,34 +189,103 @@ def build_request(op: dict[str, Any], path: str, params: dict[str, Any],
     return filled, query, body, headers, None
 
 
+def _render_body(raw: Any) -> tuple[Any, bool]:
+    """响应体渲染（成功/错误分支共用）：超限截断。返回 (body, truncated)。"""
+    if raw is None:
+        return None, False
+    text = json.dumps(raw, ensure_ascii=False) if not isinstance(raw, str) else raw
+    if len(text) > MAX_RESPONSE_CHARS:
+        if isinstance(raw, str):
+            return raw[:MAX_RESPONSE_CHARS], True
+        return {"truncated": True,
+                "note": f"响应超过 {MAX_RESPONSE_CHARS} 字符，已截断",
+                "raw_size": len(text)}, True
+    return raw, False
+
+
 def normalize_response(resp: ClientResponse) -> ExecuteResult:
-    """把客户端响应规范化为结构化输出。"""
+    """把客户端响应规范化为结构化输出。
+
+    2xx：body 恒透出（超限截断）。非 2xx：error_code/error_msg 为尽力规范化字段
+    （多形态兼容抽取，不命中保持 null）；body 恒透出原始体（真值源兜底）。
+    """
     status = resp.get("status", 0)
-    raw = resp.get("body")
+    body, truncated = _render_body(resp.get("body"))
+    out: ExecuteResult = {"status": status, "body": body}
+    if truncated:
+        out["truncated"] = True
     if 200 <= status < 300:
-        out: ExecuteResult = {"status": status}
-        if raw is None:
-            out["body"] = None
-        else:
-            text = json.dumps(raw, ensure_ascii=False) if not isinstance(raw, str) else raw
-            if len(text) > MAX_RESPONSE_CHARS:
-                out["truncated"] = True
-                if isinstance(raw, str):
-                    out["body"] = raw[:MAX_RESPONSE_CHARS]
-                else:
-                    out["body"] = {"truncated": True,
-                                   "note": f"响应超过 {MAX_RESPONSE_CHARS} 字符，已截断",
-                                   "raw_size": len(text)}
-            else:
-                out["body"] = raw
         return out
-    out = {"status": status}
+    raw = resp.get("body")
     if isinstance(raw, dict):
-        out["error_code"] = raw.get("error_code")
-        out["error_msg"] = raw.get("error_msg") or raw.get("message")
+        out["error_code"], out["error_msg"] = _extract_error_fields(raw)
     else:
         out["error_msg"] = str(raw)[:1000] if raw else f"HTTP {status}"
     return out
+
+
+# ---------- 错误体形状兼容抽取（仅非 2xx；body 原始体恒透出兜底） ----------
+
+# 华为云各服务错误体形态不一：平坦 error_code/error_msg 为标准，另有 IAM v3/Keystone
+# 嵌套 error、OpenStack nova 系单键包装、SWR/Docker registry v2 errors 列表、平坦
+# code/message 变体。分层 first-hit：code 候选 error_code 优先于 code，msg 候选独立匹配。
+_ERROR_CODE_KEYS = ("error_code", "code", "errorCode")
+_ERROR_MSG_KEYS = ("error_msg", "message", "errorMsg", "msg", "error_description")
+_MAX_ERROR_DEPTH = 3
+
+
+def _scalar_text(value: Any) -> str | None:
+    """错误字段标量过滤：非空 str / 非 bool int（→str）采纳，其余不采纳。"""
+    if isinstance(value, str) and value.strip():
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return None
+
+
+def _first_text(d: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    """按候选键序首个标量值（值非标量/缺省时跳过该键继续）。"""
+    for key in keys:
+        text = _scalar_text(d.get(key))
+        if text is not None:
+            return text
+    return None
+
+
+def _extract_error_dict(d: dict[str, Any], depth: int) -> tuple[str | None, str | None]:
+    if depth > _MAX_ERROR_DEPTH:
+        return None, None
+    for key in _ERROR_CODE_KEYS:
+        code = _scalar_text(d.get(key))
+        if code is not None:
+            return code, _first_text(d, _ERROR_MSG_KEYS)
+    msg = _first_text(d, _ERROR_MSG_KEYS)
+    if msg is not None:
+        return None, msg
+    error = d.get("error")
+    if isinstance(error, dict):
+        return _extract_error_dict(error, depth + 1)
+    if isinstance(error, str) and error:
+        return None, error
+    errors = d.get("errors")
+    if isinstance(errors, list) and errors:
+        first = errors[0]
+        if isinstance(first, dict):
+            return _extract_error_dict(first, depth + 1)
+        if isinstance(first, str) and first:
+            return None, first
+    if len(d) == 1:
+        only = next(iter(d.values()))
+        if isinstance(only, dict):
+            return _extract_error_dict(only, depth + 1)
+    return None, None
+
+
+def _extract_error_fields(raw: Any) -> tuple[str | None, str | None]:
+    """错误体形状兼容抽取 → (error_code, error_msg)；不识别返回 (None, None)。"""
+    if isinstance(raw, dict):
+        return _extract_error_dict(raw, 0)
+    return None, None
 
 
 def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
