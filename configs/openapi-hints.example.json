@@ -1,0 +1,12 @@
+{
+  "instructions": "本部署面向运维巡检场景：批量查询资源状态优先用 *List*/Show* 接口，避免逐个 Get* 逐台查询。",
+  "products": {
+    "ECS": {
+      "notes": "查询云服务器列表优先用 ListServersDetails（分页更全），不要用 ListCloudServers。",
+      "apis": {
+        "ResizeServer": "变更规格前先用 ListFlavors 确认目标规格在目标 AZ 售罄情况。"
+      }
+    },
+    "OBS": "对象上传/下载恒走 presign 信封直连，网关不经手字节流。"
+  }
+}

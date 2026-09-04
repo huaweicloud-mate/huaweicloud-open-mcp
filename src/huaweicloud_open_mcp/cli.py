@@ -36,6 +36,9 @@ def main() -> None:
                         help="审计事件 NDJSON 文件路径（环境变量 HUAWEICLOUD_MCP_AUDIT_FILE）")
     parser.add_argument("--gate", default=None,
                         help="openapi 产品门栓配置文件路径（环境变量 HUAWEICLOUD_MCP_OPENAPI_GATE）")
+    parser.add_argument("--hints", default=None,
+                        help="openapi 自定义提示注入配置文件路径"
+                             "（环境变量 HUAWEICLOUD_MCP_OPENAPI_HINTS）")
     parser.add_argument("--region", default=None, help="默认 region（openapi 模式，默认 cn-north-4）")
     parser.add_argument("--log-level", default=None, help="日志级别（默认 INFO）")
     parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")

@@ -4,6 +4,7 @@ import argparse
 
 from apie import mock as apie_mock
 from mcp_openapi.gate import Gate, parse_gate
+from mcp_openapi.hints import Hints, parse_hints
 from mcp_openapi.server import build_app, build_config, build_instructions
 from mcp_openapi.service import ServiceConfig, ToolService
 from safety import policy
@@ -179,3 +180,48 @@ def test_discover_manage_policy_description_notes_confirm():
     desc = app._tool_manager._tools["manage_policy"].description
     assert "向用户确认" in desc
     assert "session" in desc and "temporary" in desc and "permanent" in desc
+
+
+# ---------- 提示注入（hints） ----------
+
+def test_build_instructions_appends_global_hints():
+    h = parse_hints({"instructions": "全局指引"})
+    s = build_instructions(Gate.unrestricted(), h)
+    assert "部署自定义指引" in s
+    assert "全局指引" in s
+    assert "产品授权范围" in s
+
+
+def test_build_instructions_without_hints_no_section():
+    assert "部署自定义指引" not in build_instructions(Gate.unrestricted())
+    assert "部署自定义指引" not in build_instructions(Gate.unrestricted(), Hints.empty())
+
+
+def test_build_config_hints_arg(tmp_path):
+    p = tmp_path / "h.json"
+    p.write_text('{"instructions": "g", "products": {"ECS": "n"}}', encoding="utf-8")
+    cfg = build_config(argparse.Namespace(
+        mock=True, policy=None, region=None, mock_base=None, hints=str(p)))
+    assert cfg.hints.instructions == "g"
+    assert cfg.hints.product_notes("ECS") == "n"
+
+
+def test_build_config_hints_env(monkeypatch, tmp_path):
+    p = tmp_path / "h.json"
+    p.write_text('{"instructions": "g2"}', encoding="utf-8")
+    monkeypatch.setenv("HUAWEICLOUD_MCP_OPENAPI_HINTS", str(p))
+    cfg = build_config(_args())
+    assert cfg.hints.instructions == "g2"
+
+
+def test_build_config_hints_default_empty(monkeypatch):
+    monkeypatch.delenv("HUAWEICLOUD_MCP_OPENAPI_HINTS", raising=False)
+    cfg = build_config(_args())
+    assert cfg.hints.instructions is None
+    assert cfg.hints.product_notes("ECS") is None
+
+
+def test_server_instructions_carry_hints():
+    svc = ToolService(ServiceConfig(hints=parse_hints({"instructions": "全局指引"})))
+    app = build_app(svc)
+    assert "全局指引" in app.instructions

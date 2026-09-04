@@ -24,6 +24,7 @@ from common.types import (
 from safety.policy_store import PolicyStore
 
 from .gate import Gate, load_gate_file
+from .hints import Hints, load_hints_file
 from .service import ServiceConfig, ToolService
 
 INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模式）
@@ -77,12 +78,15 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 """
 
 
-def build_instructions(gate: Gate) -> str:
-    """按门栓生成 instructions：基础指引 + 产品授权范围。"""
+def build_instructions(gate: Gate, hints: Hints | None = None) -> str:
+    """按门栓生成 instructions：基础指引 + 产品授权范围 + 部署自定义指引段。"""
     text = INSTRUCTIONS_OPENAPI + "\n## 产品授权范围\n\n- " + gate.describe() + "。\n"
     if gate.restrict:
         text += ("\n当用户请求的产品不在上述授权范围内时，不要调用任何工具，"
                  "直接回复该产品不在授权范围内。\n")
+    global_text = (hints.instructions if hints is not None else None)
+    if global_text:
+        text += ("\n## 部署自定义指引\n\n" + global_text.strip() + "\n")
     return text
 
 
@@ -96,6 +100,7 @@ def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
                         else os.environ.get("HUAWEICLOUD_MCP_MOCK_PASSTHROUGH", "")
                         in ("1", "true", "yes"))
     gate_file = getattr(args, "gate", None) or os.environ.get("HUAWEICLOUD_MCP_OPENAPI_GATE")
+    hints_file = getattr(args, "hints", None) or os.environ.get("HUAWEICLOUD_MCP_OPENAPI_HINTS")
     audit_file = (getattr(args, "audit_file", None)
                   or os.environ.get("HUAWEICLOUD_MCP_AUDIT_FILE"))
     policy_store = PolicyStore(policy_file) if policy_file else None
@@ -108,6 +113,7 @@ def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
         mock_base=mock_base or apie_mock.MOCK_BASE,
         mock_passthrough=mock_passthrough,
         gate=load_gate_file(gate_file) if gate_file else Gate.unrestricted(),
+        hints=load_hints_file(hints_file),
         audit_sink=sink_from_path(audit_file),
     )
 
@@ -118,7 +124,7 @@ def build_openapi_app(service: ToolService | None = None, *,
     svc = service or ToolService()
     consent_mode = elicit_mode
     server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
-                       instructions=build_instructions(svc.config.gate),
+                       instructions=build_instructions(svc.config.gate, svc.config.hints),
                        log_level=log_level)  # type: ignore[arg-type]
 
     def _consent(ctx: Context | None) -> PolicyConsent:

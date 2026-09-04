@@ -209,6 +209,32 @@ A policy file is a JSON array (or plain text) of rules, evaluated top-down, firs
 
 A richer example ships with the package: `configs/safety-policy.example.json`.
 
+## Custom hints (optional)
+
+A hints file lets a deployment inject its own guidance into the discovery chain: a global `instructions` block appended to the server instructions, plus per-product `notes` and per-API texts attached to discovery results (`list_products` / `get_product` / `list_apis` / `get_api`).
+
+```json
+{
+  "instructions": "This deployment targets ops inspection: prefer List*/Show* APIs for batch lookups.",
+  "products": {
+    "ECS": {
+      "notes": "Prefer ListServersDetails for listing servers.",
+      "apis": {
+        "ResizeServer": "Check flavor availability with ListFlavors first."
+      }
+    },
+    "OBS": "Object upload/download always returns a presign envelope; the gateway never moves bytes."
+  }
+}
+```
+
+- Official metadata is never replaced — hints ride along in an extra `hints` field (product + API notes are merged, product first).
+- Injected only on successful discovery results, never on denials (gate/policy rejections stay untouched); `get_api_examples` and `execute_api` are never annotated.
+- Product keys and `apis` keys are case-insensitive; a product value may be a plain string (product note only) or an object with `notes` / `apis`.
+- Loaded at startup (no hot reload); invalid configs fail fast at startup. Without `--hints`, behavior is byte-for-byte unchanged.
+
+Example: `configs/openapi-hints.example.json`.
+
 ## Configuration
 
 ### CLI flags
@@ -219,6 +245,7 @@ A richer example ships with the package: `configs/safety-policy.example.json`.
 | `--policy <file>` | — | Safety policy file; missing → all executions denied |
 | `--region <id>` | `cn-north-4` | Default region |
 | `--gate <file>` | — | Optional product gate (allowlist; unlisted products are hidden from the agent) |
+| `--hints <file>` | — | Optional custom-hints file (deploy-side guidance injected into instructions and discovery results) |
 | `--elicitation auto\|required\|off` | `off` | MCP-elicitation confirmation for policy changes |
 | `--audit-file <file>` | disabled | Audit trail (NDJSON): one `{ts, tool, input, ok}` line per tool call |
 | `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | Logging (rotating file; stderr mirrors WARNING+) |
@@ -233,6 +260,7 @@ A richer example ships with the package: `configs/safety-policy.example.json`.
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | Optional; loaded for global-level services (full support in progress) |
 | `HUAWEICLOUD_MCP_POLICY_FILE` | Same as `--policy` |
 | `HUAWEICLOUD_MCP_OPENAPI_GATE` | Same as `--gate` |
+| `HUAWEICLOUD_MCP_OPENAPI_HINTS` | Same as `--hints` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | Same as `--audit-file` |
 | `HUAWEICLOUD_MCP_MOCK_BASE` | Mock endpoint base URL override |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | Same as `--log-level` / `--log-file` |

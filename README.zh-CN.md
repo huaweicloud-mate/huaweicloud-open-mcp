@@ -210,6 +210,32 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 
 包内附带更丰富的示例：`configs/safety-policy.example.json`。
 
+## 自定义提示注入（可选）
+
+hints 配置文件允许部署方向发现链注入自有指引：全局 `instructions` 追加到 server instructions 末尾，产品级 `notes` 与 API 级文案附加到发现结果（`list_products` / `get_product` / `list_apis` / `get_api`）。
+
+```json
+{
+  "instructions": "本部署面向运维巡检场景：批量查询优先用 List*/Show* 接口。",
+  "products": {
+    "ECS": {
+      "notes": "查询云服务器列表优先用 ListServersDetails。",
+      "apis": {
+        "ResizeServer": "变更规格前先用 ListFlavors 确认售罄情况。"
+      }
+    },
+    "OBS": "对象上传/下载恒返回 presign 信封，网关不经手字节流。"
+  }
+}
+```
+
+- 官方元数据永不被替换 —— 提示以独立 `hints` 字段伴随返回（产品级 + API 级合并，产品在前）。
+- 仅注入成功发现结果，拒绝路径（门栓/policy）永不注入；`get_api_examples` 与 `execute_api` 恒不注入。
+- 产品键与 `apis` 键均大小写不敏感；产品值可以是纯字符串（仅产品提示）或含 `notes` / `apis` 的对象。
+- 启动时加载（无热更新）；配置非法启动即快速失败。未配置 `--hints` 时行为与现状完全一致。
+
+示例：`configs/openapi-hints.example.json`。
+
 ## 配置
 
 ### CLI 参数
@@ -220,6 +246,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 | `--policy <file>` | — | safety policy 文件；缺失 → 全部执行被拒 |
 | `--region <id>` | `cn-north-4` | 默认 region |
 | `--gate <file>` | — | 可选产品门栓（allowlist；未列出产品对 Agent 隐藏） |
+| `--hints <file>` | — | 可选自定义提示注入配置（部署侧指引注入 instructions 与发现结果） |
 | `--elicitation auto\|required\|off` | `off` | policy 变更的 MCP elicitation 确认 |
 | `--audit-file <file>` | disabled | 审计落盘（NDJSON）：每次工具调用一行 `{ts, tool, input, ok}` |
 | `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | 日志（轮转文件；stderr 同步 WARNING+） |
@@ -234,6 +261,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | 可选；为全局级服务预留（完整支持开发中） |
 | `HUAWEICLOUD_MCP_POLICY_FILE` | 等价 `--policy` |
 | `HUAWEICLOUD_MCP_OPENAPI_GATE` | 等价 `--gate` |
+| `HUAWEICLOUD_MCP_OPENAPI_HINTS` | 等价 `--hints` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | 等价 `--audit-file` |
 | `HUAWEICLOUD_MCP_MOCK_BASE` | mock 端点基础地址覆盖 |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | 等价 `--log-level` / `--log-file` |

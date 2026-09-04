@@ -9,7 +9,7 @@ import inspect
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence, TypeVar
+from typing import Any, Callable, Sequence, TypeVar, cast
 
 from apie import catalog, metadata
 from apie import mock as apie_mock
@@ -32,6 +32,7 @@ from safety.policy_store import PolicyStore
 from . import execute, execute_obs
 from .execute_obs import ObsHttpClient
 from .gate import Gate
+from .hints import Hints
 from .signer.client import HttpClient
 
 logger = logging.getLogger("mcp_openapi.service")
@@ -54,6 +55,7 @@ class ServiceConfig:
     mock_client_factory: Callable[[], apie_mock.MockApiClient] | None = None
     obs_client_factory: Callable[[], execute_obs.ObsClient] | None = None
     gate: Gate = Gate.unrestricted()
+    hints: Hints = Hints.empty()
     audit_sink: AuditSink | None = None
 
 
@@ -227,6 +229,39 @@ class ToolService:
             return
         sink.record(build_audit_event(tool, input_args, result))
 
+    # ---------- 提示注入（Hints：配置驱动塑形与 gate 同层，copy-on-write） ----------
+
+    def _with_product_hints(self, out: Any, product: str) -> Any:
+        """顶层附加产品级提示（未配置时不加字段）。"""
+        notes = self.config.hints.product_notes(product)
+        return {**out, "hints": notes} if notes else out
+
+    def _with_combined_hints(self, out: Any, product: str, api: str) -> Any:
+        """get_api 顶层附加合并提示（产品在前、API 在后；合并策略内聚 Hints）。"""
+        notes = self.config.hints.combined_notes(product, api)
+        return {**out, "hints": notes} if notes else out
+
+    def _annotate_product_items(self, out: Any) -> Any:
+        """list_products 条目级：配置了 notes 的产品条目附加 hints。"""
+        hints = self.config.hints
+        items = out.get("products") or []
+        annotated = [(p, hints.product_notes(p.get("product", ""))) for p in items]
+        if not any(notes for _, notes in annotated):
+            return out
+        return {**out, "products": [
+            {**p, "hints": notes} if notes else p for p, notes in annotated]}
+
+    def _annotate_list_apis(self, out: Any, product: str) -> Any:
+        """list_apis：顶层产品级提示 + 当前页条目级 API 级提示。"""
+        hints = self.config.hints
+        new_out = self._with_product_hints(out, product)
+        items = new_out.get("apis") or []
+        annotated = [(a, hints.api_notes(product, a.get("name", ""))) for a in items]
+        if not any(text for _, text in annotated):
+            return new_out
+        return {**new_out, "apis": [
+            {**a, "hints": text} if text else a for a, text in annotated]}
+
     # ---------- 元数据工具 ----------
 
     @_audited
@@ -238,8 +273,9 @@ class ToolService:
             logger.warning("list_products metadata=missing")
             return {"ok": False, "reason": "产品列表不可用（远端拉取失败）"}
         groups = self.config.gate.filter_products(groups)
-        return metadata.list_products(groups, counts=catalog.get_api_counts(self.store),
-                                      category=category, keyword=keyword)
+        out = metadata.list_products(groups, counts=catalog.get_api_counts(self.store),
+                                     category=category, keyword=keyword)
+        return cast(ProductListResult, self._annotate_product_items(out))
 
     @_audited
     def get_product(self, product: str) -> ProductResult | ToolError:
@@ -256,7 +292,7 @@ class ToolService:
         if out is None:
             logger.warning("get_product product=%s result=not_found", product)
             return {"ok": False, "reason": f"产品 {product} 未找到"}
-        return out
+        return cast(ProductResult, self._with_product_hints(out, product))
 
     @_audited
     def list_apis(self, product: str, tag: str | None = None, search: str | None = None,
@@ -271,7 +307,9 @@ class ToolService:
         if apis is None:
             logger.warning("list_apis product=%s metadata=missing", product)
             return {"ok": False, "reason": "接口索引不可用（远端拉取失败）"}
-        return metadata.list_apis(apis, product, tag=tag, search=search, limit=limit, offset=offset)
+        out = metadata.list_apis(apis, product, tag=tag, search=search,
+                                 limit=limit, offset=offset)
+        return cast(ApiListResult, self._annotate_list_apis(out, product))
 
     @_audited
     def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
@@ -286,7 +324,8 @@ class ToolService:
             logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
-        return metadata.format_api_detail(doc, product, path, method, op)
+        out = metadata.format_api_detail(doc, product, path, method, op)
+        return cast(ApiDetailResult, self._with_combined_hints(out, product, api))
 
     @_audited
     def get_api_examples(self, product: str, api: str,

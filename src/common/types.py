@@ -66,6 +66,7 @@ class ProductItem(TypedDict):
     api_count: int
     is_global: bool | None
     link: str | None
+    hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
 
 
 class ApiItem(TypedDict):
@@ -74,6 +75,7 @@ class ApiItem(TypedDict):
     summary: str
     tags: str
     info_version: str
+    hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中 API 时附加）
 
 
 class TagGroup(TypedDict):
@@ -102,6 +104,7 @@ class ProductResult(TypedDict):
     api_count: int
     is_global: bool | None
     link: str | None
+    hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
 
 
 class ApiListResult(TypedDict):
@@ -112,6 +115,7 @@ class ApiListResult(TypedDict):
     limit: int
     apis: list[ApiItem]
     tag_groups: list[TagGroup]
+    hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
 
 
 # 函数式语法：允许非标识符键（x-constraint）
@@ -130,6 +134,7 @@ ApiDetailResult = TypedDict(
         "parameters": list[dict[str, Any]],
         "responses": dict[str, dict[str, Any]],
         "definitions": dict[str, Any],
+        "hints": NotRequired[str],  # 部署侧提示注入（产品级+API 级合并文案）
     },
 )
 
