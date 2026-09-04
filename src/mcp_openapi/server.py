@@ -44,11 +44,12 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 - 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口；
 - 被拒接口确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认，再调用
   `manage_policy(action="add", line=...)` 授予规则（如 "OBS:GetObject=allow"，
-  或产品级 "VPC:*=allow"），规则热生效后重试即可通过；问询按三选一口径：
-  api=最小规则（一次性，用后即焚）/ product=产品级规则（会话内，覆盖该产品全部
+  或产品级 "VPC:*=allow"），规则热生效后重试即可通过；问询按四选一口径：
+  api=最小规则（一次性，用后即焚）/ api_session=最小规则（会话内，本次会话内
+  持续放行该 API，重启即失）/ product=产品级规则（会话内，覆盖该产品全部
   API，重启即失）/ none=不授予；
   部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
-  经 MCP elicitation 弹出同样的三选一提议（结果携带 `granted_rule` 字段）；
+  经 MCP elicitation 弹出同样的四选一提议（结果携带 `granted_rule` 字段）；
   默认 off 或客户端不支持 elicitation 时，拒绝原因会附带同样的兜底指引，
   按指引问询确认后再授予；
 - 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
@@ -123,7 +124,8 @@ def build_openapi_app(service: ToolService | None = None, *,
     def _consent(ctx: Context | None) -> PolicyConsent:
         assert ctx is not None, "Context injected by MCP framework"
         # choice→scope 映射内聚于 PolicyConsent：api=一次性（scope=once，一次用户
-        # 确认只放行一次执行）/ product=产品级（scope=session，会话内生效）
+        # 确认只放行一次执行）/ api_session=最小规则会话内（scope=session）/
+        # product=产品级（scope=session，会话内生效）
         grant = functools.partial(svc.manage_policy, "add")
         return PolicyConsent(consent_mode, ctx_elicit_fn(ctx), grant)
 
@@ -196,8 +198,9 @@ def build_openapi_app(service: ToolService | None = None, *,
         （信封 note 字段给出警示口径）。桶管理类接口仍由 gateway 直连执行。
 
         被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户弹窗三选一提议授予（用户确认后热生效并携带 granted_rule）：
-        api=最小规则（一次性，用后即焚）/ product=产品级规则如 "VPC:*=allow"
+        向用户弹窗四选一提议授予（用户确认后热生效并携带 granted_rule）：
+        api=最小规则（一次性，用后即焚）/ api_session=最小规则（会话内，本次
+        会话内持续放行该 API，重启即失）/ product=产品级规则如 "VPC:*=allow"
         （会话内放行该产品全部 API，重启即失）/ none=不授予；
         默认 off 或客户端不支持 elicitation 时，拒绝原因附带同样的兜底指引
         （先经交互式问询向用户确认，再经 manage_policy 授予）；

@@ -35,6 +35,8 @@ logger = logging.getLogger("common.elicit")
 ElicitMode = Literal["auto", "required", "off"]
 ELICIT_MODES: tuple[ElicitMode, ...] = ("auto", "required", "off")
 
+GrantChoice = Literal["api", "api_session", "product", "none"]
+
 
 class PolicyChangeConfirm(BaseModel):
     """elicitation 表单 schema：仅 primitive 字段（MCP spec 限制）。"""
@@ -43,13 +45,14 @@ class PolicyChangeConfirm(BaseModel):
 
 
 class GrantChoiceConfirm(BaseModel):
-    """拒绝提议三选一表单 schema：api=最小规则 / product=产品级规则 / none=不授予。
+    """拒绝提议四选一表单 schema：api=最小规则（一次性）/ api_session=最小规则
+    （会话内）/ product=产品级规则（会话内）/ none=不授予。
 
     仅 primitive 枚举字段（MCP spec 限制）；拒绝路径独用，
     manage_policy 确认门仍用 PolicyChangeConfirm。
     """
 
-    choice: Literal["api", "product", "none"]
+    choice: GrantChoice
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,7 @@ class ElicitOutcome:
 
     action: Literal["accept", "decline", "cancel"]
     confirm: bool | None = None
-    choice: Literal["api", "product", "none"] | None = None
+    choice: GrantChoice | None = None
 
 
 ElicitFn: TypeAlias = Callable[[str, type[BaseModel]], Awaitable[ElicitOutcome | None]]
@@ -108,15 +111,17 @@ def change_message(action: str, line: str) -> str:
 def denial_message(offer: DenialOffer) -> str:
     """拒绝路径提议授予弹窗文案。
 
-    有 coarse_rule：并列 api/product/none 三选项（api=一次性最小规则，
-    product=会话内产品级规则，none=不授予）；无 coarse_rule：单一最小规则
-    二选一确认（一次性语义，与历史文案一致）。
+    有 coarse_rule：并列 api/api_session/product/none 四选项（api=一次性最小规则，
+    api_session=会话内最小规则，product=会话内产品级规则，none=不授予）；
+    无 coarse_rule：单一最小规则二选一确认（一次性语义，与历史文案一致）。
     """
     if offer.coarse_rule:
         return (f"{offer.reason}\n\n"
                 f"是否授予规则放行 {offer.subject}？\n"
                 f"- api：仅授予最小规则 '{offer.rule}'"
                 "（一次性：仅放行下一次执行，用后即焚）\n"
+                f"- api_session：授予最小规则 '{offer.rule}'"
+                "（会话内：本次会话内持续放行该目标，重启即失）\n"
                 f"- product：授予产品级规则 '{offer.coarse_rule}'"
                 "（会话内生效，覆盖该产品全部 API，重启即失；"
                 "需持久授权请经 manage_policy 显式授予）\n"
@@ -131,13 +136,15 @@ def fallback_hint(offer: DenialOffer) -> str:
     """未发生问询路径（off 档 / 客户端不支持）的拒绝兜底指引。
 
     prompt 约定（软兜底）：引导调用方 LLM 经对话/交互式问询（如 question 工具）
-    向用户确认后经 manage_policy 授予；选项语义与 elicitation 三选一表单一致
-    （coarse 存在时 api/product/none，否则仅最小规则），不提及协议级 elicitation。
+    向用户确认后经 manage_policy 授予；选项语义与 elicitation 四选一表单一致
+    （coarse 存在时 api/api_session/product/none，否则仅最小规则），
+    不提及协议级 elicitation。
     """
     base = ("；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认后，"
             "调用 manage_policy 授予：")
     if offer.coarse_rule:
         return (base + f"api=最小规则 '{offer.rule}'（一次性）/"
+                f"api_session=最小规则 '{offer.rule}'（会话内）/"
                 f"product=产品级规则 '{offer.coarse_rule}'（会话内）/none=不授予")
     return base + f"规则 '{offer.rule}'"
 
@@ -146,13 +153,14 @@ class PolicyConsent:
     """safety policy 变更的确认机制：何时问、怎么问、如何解释回答。
 
     offer_grant 用于拒绝路径（accept → 自动授予并增强 denial；coarse_rule
-    存在时三选一——api=最小规则、product=产品级规则（固定 session 档）、
-    none=不授予）；gate_change 用于 manage_policy add/remove（check 习语：
-    None=放行）。
+    存在时四选一——api=最小规则（minimal_scope 档）、api_session=最小规则
+    （固定 session 档）、product=产品级规则（固定 session 档）、none=不授予）；
+    gate_change 用于 manage_policy add/remove（check 习语：None=放行）。
 
     scope 知识内聚于本模块：choice→scope 映射（api→minimal_scope，
-    product→session）是接口不变量，调用方仅经 minimal_scope 注入最小授予档
-    （openapi execute/discover call_tool 缺省 once；discover connect 传 session）。
+    api_session/product→session）是接口不变量，调用方仅经 minimal_scope 注入
+    最小授予档（openapi execute/discover call_tool 缺省 once；discover connect
+    传 session）。
     session 档 = 本次 code agent 会话（进程存活期），非 discover 到远端 MCP
     server 的连接会话（断开/空闲回收后 session 档授权仍在）。
     """
@@ -171,7 +179,7 @@ class PolicyConsent:
 
         增强 result 为 dict（原 denial 键集 + granted_rule/reason 增强）；
         其余路径原样返回入参对象。coarse_rule 存在时以 GrantChoiceConfirm
-        三选一问询，否则以 PolicyChangeConfirm 单一确认（向后兼容）。
+        四选一问询，否则以 PolicyChangeConfirm 单一确认（向后兼容）。
         未发生问询即保持拒绝的路径（off 档 / 客户端不支持）——reason 追加
         ``fallback_hint`` 兜底指引（prompt 约定，经交互式问询后 manage_policy
         授予）；decline/cancel/refuse 与授予路径不加（用户已表态或已入流程）。
@@ -205,9 +213,13 @@ class PolicyConsent:
         result = grant(rule, scope)
         if result.get("ok"):
             logger.info("grant accepted: %s (scope=%s)", rule, scope)
-            coarse = (scope == "session" and offer.coarse_rule is not None
-                      and rule == offer.coarse_rule)
-            kind = "会话内产品级规则" if coarse else "一次性规则"
+            if (scope == "session" and offer.coarse_rule is not None
+                    and rule == offer.coarse_rule):
+                kind = "会话内产品级规则"
+            elif scope == "session":
+                kind = "会话内最小规则"
+            else:
+                kind = "一次性规则"
             return {**denial, "granted_rule": rule,
                     "reason": (f"{denial.get('reason', '')}"
                                f"；用户已通过确认授予{kind} {rule}"
@@ -226,13 +238,15 @@ class PolicyConsent:
     @staticmethod
     def _pick_coarse(outcome: ElicitOutcome,
                      offer: DenialOffer) -> tuple[str, str] | None:
-        """解释 coarse 三选一回答 → (规则文本, scope)；不授予返回 None。"""
+        """解释 coarse 四选一回答 → (规则文本, scope)；不授予返回 None。"""
         choice = outcome.choice
         if choice == "api":
             return offer.rule, "once"
+        if choice == "api_session":
+            return offer.rule, "session"
         if choice == "product" and offer.coarse_rule:
             return offer.coarse_rule, "session"
-        if choice not in ("api", "product", "none"):
+        if choice not in ("api", "api_session", "product", "none"):
             logger.warning("grant offer: unknown choice %r, keeping denial", choice)
         return None
 
@@ -280,7 +294,8 @@ def ctx_elicit_fn(ctx: ElicitContext) -> ElicitFn:
             return ElicitOutcome(
                 action="accept",
                 confirm=bool(confirm) if confirm is not None else None,
-                choice=choice if choice in ("api", "product", "none") else None)
+                choice=choice if choice in ("api", "api_session", "product", "none")
+                else None)
         if action == "decline":
             return ElicitOutcome(action="decline")
         return ElicitOutcome(action="cancel")

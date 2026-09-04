@@ -25,6 +25,7 @@ ACCEPT = ElicitResult(action="accept", content={"confirm": True})
 REFUSE = ElicitResult(action="accept", content={"confirm": False})
 DECLINE = ElicitResult(action="decline")
 ACCEPT_API = ElicitResult(action="accept", content={"choice": "api"})
+ACCEPT_API_SESSION = ElicitResult(action="accept", content={"choice": "api_session"})
 ACCEPT_PRODUCT = ElicitResult(action="accept", content={"choice": "product"})
 
 _OPENAPI_DOC = {
@@ -359,8 +360,41 @@ def test_openapi_execute_denied_product_choice_grants_session(tmp_path, monkeypa
     assert len(seen) == 1                                 # 未再发起 elicitation
 
 
-def test_openapi_execute_denied_api_choice_message_lists_three_options(tmp_path, monkeypatch):
-    """coarse 提议弹窗文案并列三选项（api/product/none）与各自 scope 语义。"""
+def test_openapi_execute_denied_api_session_choice_grants_minimal_session(
+        tmp_path, monkeypatch):
+    """choice=api_session：授予最小规则（session 档）——同 API 会话内持续放行且
+    不再发起 elicitation；同产品另一 API 仍被拒（单功能粒度，与 product 区分）；
+    授予不落盘。换 API 的再拒经 decline 收场（脚本第二项）。"""
+    app, p = make_openapi(tmp_path, "auto")
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
+    seen, script = [], [ACCEPT_API_SESSION, DECLINE]
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client(script, seen)) as s:
+                await s.initialize()
+                first = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+                second = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+                other = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServers"}))
+                return first, second, other
+
+    first, second, other = run(_run())
+    assert first["ok"] is False
+    assert first["granted_rule"] == "ECS:ListServersDetails=allow"
+    assert "会话内最小规则" in first["reason"]
+    assert "请重新调用" in first["reason"]
+    assert "ECS:ListServersDetails=allow" not in policy_lines(p)   # session 档不落盘
+    assert second["ok"] is True                            # 同 API 会话内持续放行（不焚毁）
+    assert other["ok"] is False                            # 单功能粒度：另一 API 仍被拒
+    assert "safety policy 拒绝执行" in other["reason"]
+    assert len(seen) == 2                                  # 授予一次 + 换 API 拒绝提议一次（decline）
+
+
+def test_openapi_execute_denied_api_choice_message_lists_four_options(tmp_path, monkeypatch):
+    """coarse 提议弹窗文案并列四选项（api/api_session/product/none）与各自 scope 语义。"""
     app, _ = make_openapi(tmp_path, "auto")
     monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
     seen, script = [], [ACCEPT_API]
@@ -376,7 +410,8 @@ def test_openapi_execute_denied_api_choice_message_lists_three_options(tmp_path,
     assert out["granted_rule"] == "ECS:ListServersDetails=allow"
     msg = seen[0]
     assert "ECS:ListServersDetails=allow" in msg and "ECS:*=allow" in msg
-    assert "- api：" in msg and "- product：" in msg and "- none：" in msg
+    assert ("- api：" in msg and "- api_session：" in msg
+            and "- product：" in msg and "- none：" in msg)
     assert "一次性" in msg and "会话" in msg
 
 
@@ -515,6 +550,45 @@ def test_discover_call_tool_denied_product_choice_grants_session(tmp_path):
     assert ("server:@huaweicloud/ecs:*=allow" not in policy_lines(p))  # session 档不落盘
     assert second["ok"] is True                               # 换工具免确认放行
     assert len(seen) == 1                                     # 未再发起 elicitation
+
+
+def test_discover_call_tool_denied_api_session_choice_grants_session(tmp_path):
+    """choice=api_session：授予最小工具规则（session 档）——同工具会话内持续放行，
+    换工具仍被拒（单功能粒度，与 product 服务级全工具区分）；授予不落盘。"""
+    from tests.fixtures.mcp_stub import StubMcpServer
+
+    with StubMcpServer() as stub:
+        app, p = make_discover_with_endpoint(
+            tmp_path, "auto", stub.endpoint,
+            ["server:@huaweicloud/ecs=allow", "*=deny"])
+        seen, script = [], [ACCEPT_API_SESSION, DECLINE]
+
+        async def _run():
+            async with InMemoryTransport(app) as (r, w):
+                async with ClientSession(r, w,
+                                         elicitation_callback=script_client(script, seen)) as s:
+                    await s.initialize()
+                    conn = result_dict(await s.call_tool(
+                        "connect_mcp_server", {"server": "@huaweicloud/ecs"}))
+                    assert conn["ok"] is True
+                    call = {"server": "@huaweicloud/ecs", "tool": "list_servers",
+                            "arguments": {}}
+                    first = result_dict(await s.call_tool("call_server_tool", call))
+                    second = result_dict(await s.call_tool("call_server_tool", call))
+                    other = result_dict(await s.call_tool("call_server_tool", {
+                        "server": "@huaweicloud/ecs", "tool": "get_server",
+                        "arguments": {"server_id": "srv-1"}}))
+                    return first, second, other
+
+        first, second, other = run(_run())
+    assert first["ok"] is False
+    assert first["granted_rule"] == "server:@huaweicloud/ecs:list_servers=allow"
+    assert "会话内最小规则" in first["reason"]
+    assert ("server:@huaweicloud/ecs:list_servers=allow"
+            not in policy_lines(p))                             # session 档不落盘
+    assert second["ok"] is True                                 # 同工具会话内持续放行（不焚毁）
+    assert other["ok"] is False                                 # 单功能粒度：换工具仍被拒
+    assert len(seen) == 2                                       # 授予一次 + 换工具拒绝提议一次
 
 
 def test_discover_connect_message_has_no_product_option(tmp_path):

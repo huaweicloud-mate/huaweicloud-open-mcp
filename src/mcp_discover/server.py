@@ -50,7 +50,8 @@ INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现
 - 被拒连接/调用确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认，再调用
   `manage_policy(action="add", line=...)` 授予规则（如 "server:@huaweicloud/ecs=allow"，
   或服务级全工具 "server:@huaweicloud/ecs:*=allow"），规则热生效后重试即可通过；
-  call_tool 问询按三选一口径：api=最小工具规则（一次性，用后即焚）/
+  call_tool 问询按四选一口径：api=最小工具规则（一次性，用后即焚）/
+  api_session=最小工具规则（会话内，本次会话内持续放行该工具，重启即失）/
   product=服务级全工具规则（会话内，覆盖该 server 全部工具，重启即失）/ none=不授予；
   connect 为单一确认（会话内连接级授予）；
   部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
@@ -113,8 +114,9 @@ def build_discover_app(config: DiscoverConfig, *,
         assert ctx is not None, "Context injected by MCP framework"
         # choice→scope 映射内聚于 PolicyConsent；minimal_scope 由调用点注入：
         # connect 授予为会话内（连接是持续态）；call_tool 传 once（一次性，
-        # 一次用户确认只放行一次代发调用）。product 选择恒为 session（服务级
-        # 全工具规则 server:X:*=allow，会话内生效）。
+        # 一次用户确认只放行一次代发调用）。api_session 与 product 选择恒为
+        # session（api_session=最小工具规则会话内；product=服务级全工具规则
+        # server:X:*=allow，会话内生效）。
         grant = functools.partial(ds.manage_policy, "add")
         return PolicyConsent(consent_mode, ctx_elicit_fn(ctx), grant,
                              minimal_scope=minimal_scope)
@@ -190,8 +192,9 @@ def build_discover_app(config: DiscoverConfig, *,
 
         arguments 为工具参数 dict；policy 匹配 server:serverId:toolPattern=allow|deny。
         被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户弹窗三选一提议授予（用户确认后热生效并携带 granted_rule）：
-        api=最小工具规则（一次性，用后即焚）/ product=服务级全工具规则如
+        向用户弹窗四选一提议授予（用户确认后热生效并携带 granted_rule）：
+        api=最小工具规则（一次性，用后即焚）/ api_session=最小工具规则（会话内，
+        本次会话内持续放行该工具，重启即失）/ product=服务级全工具规则如
         "server:@huaweicloud/ecs:*=allow"（会话内放行该 server 全部工具，
         重启即失）/ none=不授予；默认 off 或客户端不支持 elicitation 时，
         拒绝原因附带同样的兜底指引（先经交互式问询向用户确认，再经

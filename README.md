@@ -205,7 +205,7 @@ A policy file is a JSON array (or plain text) of rules, evaluated top-down, firs
 - No `--policy` configured → every execution denied.
 - Grant scopes (via `manage_policy` add): `once` (single execution, burned after use) · `session` (default; this agent session only) · `temporary` (TTL) · `permanent` (written to the policy file).
 - Hot everywhere: external edits to the file apply immediately; add/remove via `manage_policy` too. Grant minimal rules first (`once`/`session`), product-wide only when justified.
-- Denials return an actionable reason; with `--elicitation auto|required` the server proposes a minimal grant over MCP elicitation. Default is `off` for predictable cross-client behavior.
+- Denials return an actionable reason; with `--elicitation auto|required` the server proposes a grant over MCP elicitation (four choices: `api` = minimal rule, one-shot / `api_session` = minimal rule, session-scoped / `product` = product-wide, session-scoped / `none`). Default is `off` for predictable cross-client behavior.
 
 A richer example ships with the package: `configs/safety-policy.example.json`.
 

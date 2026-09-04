@@ -41,6 +41,7 @@ DECLINE = ElicitOutcome(action="decline")
 CANCEL = ElicitOutcome(action="cancel")
 UNSUPPORTED = None
 ACCEPT_API = ElicitOutcome(action="accept", choice="api")
+ACCEPT_API_SESSION = ElicitOutcome(action="accept", choice="api_session")
 ACCEPT_PRODUCT = ElicitOutcome(action="accept", choice="product")
 CHOICE_NONE = ElicitOutcome(action="accept", choice="none")
 
@@ -165,20 +166,20 @@ def test_server_wildcard_rule_covers_all_tools_not_connect():
     assert policy.evaluate_server(rules, "@huaweicloud/ecs") is False  # connect 不匹配
 
 
-# ---------- GrantChoiceConfirm 表单 schema（拒绝提议三选一） ----------
+# ---------- GrantChoiceConfirm 表单 schema（拒绝提议四选一） ----------
 
 def test_grant_choice_confirm_schema_is_primitive_enum():
-    """三选一表单：单 primitive 枚举字段（MCP spec 兼容），无嵌套结构。"""
+    """四选一表单：单 primitive 枚举字段（MCP spec 兼容），无嵌套结构。"""
     schema = GrantChoiceConfirm.model_json_schema()
     props = schema["properties"]
     assert set(props) == {"choice"}
     choice = props["choice"]
-    assert choice.get("enum") == ["api", "product", "none"]
+    assert choice.get("enum") == ["api", "api_session", "product", "none"]
     assert choice.get("type") == "string"
     assert schema.get("required") == ["choice"]
 
 
-@pytest.mark.parametrize("picked", ["api", "product", "none"])
+@pytest.mark.parametrize("picked", ["api", "api_session", "product", "none"])
 def test_grant_choice_confirm_parses_each_value(picked):
     form = GrantChoiceConfirm(choice=picked)  # type: ignore[arg-type]
     assert form.choice == picked
@@ -201,11 +202,12 @@ def assert_hint_enhanced(out: Mapping, denial: dict, offer: DenialOffer) -> None
     assert "manage_policy" in out["reason"] and "question" in out["reason"]
 
 
-def test_fallback_hint_coarse_lists_three_options():
-    """有 coarse_rule：指引并列三选项与各自 scope 语义，点名 manage_policy。"""
+def test_fallback_hint_coarse_lists_four_options():
+    """有 coarse_rule：指引并列四选项与各自 scope 语义，点名 manage_policy。"""
     hint = fallback_hint(COARSE_OFFER)
     assert "VPC:CreateVpc=allow" in hint and "VPC:*=allow" in hint
-    assert "api" in hint and "product" in hint and "none" in hint
+    assert ("api" in hint and "api_session" in hint
+            and "product" in hint and "none" in hint)
     assert "一次性" in hint and "会话" in hint
     assert "manage_policy" in hint
     assert "question" in hint          # 通用问询表述（对话/交互式问询）
@@ -263,8 +265,23 @@ def test_offer_grant_coarse_product_choice_grants_session():
     out = run(consent.offer_grant(COARSE_OFFER, dict(DENIAL_VPC)))
     assert grant.calls == [("VPC:*=allow", "session")]  # type: ignore[attr-defined]
     assert out["granted_rule"] == "VPC:*=allow"
+    assert "会话内产品级规则" in out["reason"]
     assert "请重新调用" in out["reason"]
     assert "会话" in out["reason"]
+    assert out["reason"].startswith(DENIAL_VPC["reason"])
+
+
+def test_offer_grant_coarse_api_session_choice_grants_minimal_session():
+    """choice=api_session：授予最小规则（单目标粒度不变），scope 固定 session
+    （会话内持续放行该目标，重启即失）。"""
+    elicit = make_elicit(ACCEPT_API_SESSION)
+    grant = make_grant()
+    consent = PolicyConsent("auto", elicit, grant)
+    out = run(consent.offer_grant(COARSE_OFFER, dict(DENIAL_VPC)))
+    assert grant.calls == [("VPC:CreateVpc=allow", "session")]  # type: ignore[attr-defined]
+    assert out["granted_rule"] == "VPC:CreateVpc=allow"   # 规则仍是最小规则，非产品级
+    assert "会话内最小规则" in out["reason"]               # kind 文案与 product 选项区分
+    assert "请重新调用" in out["reason"]
     assert out["reason"].startswith(DENIAL_VPC["reason"])
 
 
@@ -426,14 +443,15 @@ def test_denial_message_minimal_only_when_no_coarse():
     assert "VPC:*=allow" not in msg
 
 
-def test_denial_message_presents_three_options_when_coarse():
-    """有 coarse_rule：文案并列 api/product/none 三选项并声明各自 scope 语义。"""
+def test_denial_message_presents_four_options_when_coarse():
+    """有 coarse_rule：文案并列 api/api_session/product/none 四选项并声明各自 scope 语义。"""
     msg = denial_message(COARSE_OFFER)
-    assert "VPC:CreateVpc=allow" in msg       # 最小规则
+    assert "VPC:CreateVpc=allow" in msg       # 最小规则（api 与 api_session 同一规则）
     assert "VPC:*=allow" in msg               # 产品级规则
-    assert "api" in msg and "product" in msg  # 选项名可被表单 choice 对应
+    assert ("- api：" in msg and "- api_session：" in msg
+            and "- product：" in msg and "- none：" in msg)  # 选项名可被表单 choice 对应
     assert "一次性" in msg and "用后即焚" in msg   # api 选项语义
-    assert "会话" in msg and "重启" in msg         # product 选项语义
+    assert "会话" in msg and "重启" in msg         # api_session/product 选项语义
     assert "不授予" in msg or "none" in msg
 
 
@@ -503,6 +521,13 @@ def test_ctx_elicit_fn_normalizes_choice_and_keeps_confirm_independent():
 
     out = run(ctx_elicit_fn(FakeCtx([AcceptedApiChoice()]))("m", GrantChoiceConfirm))
     assert out == ElicitOutcome(action="accept", choice="api")
+
+    class AcceptedApiSessionChoice:
+        action = "accept"
+        data = GrantChoiceConfirm(choice="api_session")
+
+    out = run(ctx_elicit_fn(FakeCtx([AcceptedApiSessionChoice()]))("m", GrantChoiceConfirm))
+    assert out == ElicitOutcome(action="accept", choice="api_session")
 
 
 def test_ctx_elicit_fn_maps_failure_to_unsupported():

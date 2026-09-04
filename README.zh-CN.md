@@ -206,7 +206,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 - 未配置 `--policy` → 全部执行被拒。
 - `manage_policy` add 的授予档位：`once`（一次性，用后即焚）· `session`（缺省；仅本次 Agent 会话）· `temporary`（TTL 自动过期）· `permanent`（写入 policy 文件）。
 - 一切热生效：外部编辑文件即时生效；经 `manage_policy` 增删亦然。优先授予最小规则（`once`/`session`），产品级仅在确有必要时使用。
-- 拒绝结果附可操作原因；开启 `--elicitation auto|required` 后，server 会经 MCP elicitation 提议最小授予。默认 `off`，保证跨客户端行为可预期。
+- 拒绝结果附可操作原因；开启 `--elicitation auto|required` 后，server 会经 MCP elicitation 提议授予（四选一：api=最小规则（一次性）/ api_session=最小规则（会话内）/ product=产品级规则（会话内）/ none=不授予）。默认 `off`，保证跨客户端行为可预期。
 
 包内附带更丰富的示例：`configs/safety-policy.example.json`。
 
