@@ -2,22 +2,26 @@
 
 ## 项目上下文
 
-本项目实现华为云 Open MCP server：本地 stdio 形态的通用网关（Core 模式），openapi 模式用 7 个核心工具、discover 模式用 8 个发现连接工具，触达华为云全量 OpenAPI / 云端 MCP server，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用华为云服务。同类产品参考阿里云 OpenAPI MCP Server（Core 模式）与 AWS Labs MCP。
+本项目实现华为云 Open MCP server：本地 stdio 形态的通用网关（Core 模式），openapi 模式用 7 个核心工具、discover 模式用 8 个发现连接工具、data 模式用 1 个本地分析工具（DataFusion 只读 SQL），触达华为云全量 OpenAPI / 云端 MCP server / 本地数据，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询、调用与分析华为云服务。同类产品参考阿里云 OpenAPI MCP Server（Core 模式）与 AWS Labs MCP。
 
-支持两种运行模式（`--mode` 二选一，工具集互斥）：
+支持三种运行模式（`--mode` 可逗号组合混用，单 server 同时注册所选模式工具集）：
 - **openapi**（默认）：7 工具直连华为云 OpenAPI
 - **discover**：8 工具发现连接云端华为云 MCP server，Agent 决策连接目标、gateway 代发调用
+- **data**：1 工具 `query_data`（DataFusion 引擎对 inline/本地文件执行只读 SQL 聚合分析；不访问云、不需要凭证、不受 safety policy 约束）。典型闭环（openapi,data 混装）：execute_api 拉大数据 → 落地文件 → query_data 聚合，仅聚合结果进上下文
 
-三层架构（两模式共用，discover 模式多一层代理连接）：
+三层架构（模式共用，discover 模式多一层代理连接，data 模式独立于云侧执行层）：
 
 ```text
-┌─ MCP 网关层  src/mcp_openapi/ + src/mcp_discover/
+┌─ MCP 网关层  src/mcp_openapi/ + src/mcp_discover/ + src/mcp_data/
 │     [openapi]   list_products / get_product / list_apis / get_api /
 │                 get_api_examples / execute_api / manage_policy
 │     [discover]  list_mcp_servers / get_mcp_server / connect_mcp_server /
 │                 list_server_tools / get_server_tool / call_server_tool /
 │                 disconnect_mcp_server / manage_policy
-│        ↓ execute/call 前强制过 safety policy；拒绝时经 elicitation 提议授予 / manage_policy 前 elicitation 确认（热更新策略）
+│     [data]      query_data（DataFusion 只读 SQL；不经 gate/policy，无 manage_policy——
+│                 混装时 manage_policy 由 openapi/discover 侧提供且全局只注册一次）
+│        ↓ openapi/discover 工具 execute/call 前强制过 safety policy；拒绝时经 elicitation 提议授予 / manage_policy 前 elicitation 确认（热更新策略）
+│        ↓ data 工具无 policy 门（口径见「校验规则」）；仅只读守卫 + 双重截断
 ├─ 连接代理层（discover 模式）  src/mcp_discover/
 │     catalog.py  目录源（本地文件起步，预留官方端点）
 │     sdk.py      SessionClient 协议 + mcp SDK 适配器
@@ -41,7 +45,7 @@
 - 文件为主：默认 `logs/{program}.log`（RotatingFileHandler 10MB×5），stderr 同步 WARNING+；logging 挂 root logger 接管全部模块命名空间（main/common.*/safety.*/mcp_openapi.*、mcp_discover.*/apie.* 等），三方噪音库（httpx/httpcore）固定 WARNING；`--log-level`/`--log-file` 或环境变量 `HUAWEICLOUD_MCP_LOG_LEVEL/FILE` 覆盖；`logs/` 不入库。
 - stdio 协议安全：MCP server 的 stdout 是 JSON-RPC 通道，任何日志禁止写 stdout。
 - 脱敏红线：`Authorization`/`X-Security-Token`/AK/SK 永不入日志；响应 body 仅 DEBUG 且截断。
-- 审计：execute_api 的 policy 决策与执行结果记 INFO（`execute {product}:{api} region=.. mode=.. policy=..`）；元数据工具调用记 INFO（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples` + 参数，失败路径 WARNING）。
+- 审计：execute_api 的 policy 决策与执行结果记 INFO（`execute {product}:{api} region=.. mode=.. policy=..`）；元数据工具调用记 INFO（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples` + 参数，失败路径 WARNING）；data 模式 query_data 记 INFO（`query_data tables=.. max_rows=.. sql=..` 前 120 字符，失败路径 WARNING）。
 
 核心原则：
 
@@ -70,7 +74,8 @@
 | `src/safety/` | safety policy 解析与匹配（PolicyRule 含 kind=product/server 与 once 标记；支持 `product:apiPattern=` 与 `server:serverId[:toolPattern]=` 两种规则前缀）+ `policy_store.py` PolicyStore（策略状态层：文件↔内存双向同步、mtime 热重载、原子落盘、四档 scope——permanent 落盘 / temporary 内存+TTL 惰性剪枝 / session 内存 overlay（code-agent 会话档，stdio 下等价进程存活期）/ once 一次性用后即焚，`authorize`/`authorize_server` dispatch 前原子授权门，生效规则=overlay 前置++文件规则整体 first-match，供 manage_policy 与运行时热更新共用） | — | — |
 | `src/mcp_openapi/` | openapi 模式（metadata/execute 纯函数 + `gate.py` 产品门栓 + `hints.py` 自定义提示注入 + service 编排层 + server 装配；配置/客户端工厂注入；元数据加载委托 apie.catalog；service 层 7 个工具方法经 `_audited` 装饰器统一写审计事件，`build_audit_event` 定义对 verifier 的已发布 payload 契约 `tool/input/ok`） | — | — |
 | `src/mcp_discover/` | discover 模式（catalog.py 目录源 + config.py + sdk.py SessionClient 协议 + manager.py session 注册表 + service.py + server.py） | — | — |
-| `src/common/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封 + MCP discover 结果信封（McpServerItem/*Result） | — | — |
+| `src/mcp_data/` | data 模式（engine.py DataFusion 惰性封装：表注册/只读守卫/规范化/双重截断 + service.py DataService audit 信封 + server.py 装配；datafusion 为 optional extra `[datafusion]`，未安装返回友好错误） | — | — |
+| `src/common/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封 + MCP discover 结果信封（McpServerItem/*Result）+ QueryDataResult/QueryColumn（data 工具信封） | — | — |
 | `src/common/elicit.py` | PolicyConsent：safety policy 变更的 elicitation 交互语义（offer_grant 拒绝提议授予（粗规则存在时四选一 GrantChoiceConfirm：api=最小 / api_session=最小 session 档 / product=产品级 session 档 / none） / gate_change 变更确认门 / fallback_hint 未问询路径拒绝兜底指引 / parse_elicit_mode / PolicyChangeConfirm+GrantChoiceConfirm 表单 schema / ElicitFn adapter 契约 + ctx_elicit_fn MCP Context 归一化 adapter（confirm/choice 独立归一）） | — | — |
 | `src/common/paths.py` | 项目根路径解析（统一 project_root） | — | — |
 | `src/common/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
@@ -84,24 +89,27 @@
 
 数据流（end-to-end discover 模式）：`configs/mcp-server-catalog.example.json → list_mcp_servers/get_mcp_server → connect_mcp_server → safety 检查 → Streamable HTTP client（mcp SDK）→ 云端 MCP server → list_server_tools/get_server_tool → call_server_tool → safety 检查 → 代发调用`。
 
+数据流（end-to-end data 模式）：`tables 映射（inline 对象数组 / 本地文件 csv|parquet|ndjson）→ 一次性 SessionContext 注册 → 只读 SQL 守卫（sqlparse 语句分型白名单）→ DataFusion 执行 → JSON-safe 规范化（时间→ISO/Decimal→str/bytes→占位）→ 双重截断（行数默认 100 上限 1000 + 200k 字符预算）→ QueryDataResult 信封`。不访问网络、不需要凭证、不经 gate/policy。
+
 ## 模块依赖关系
 
 依赖严格单向、无环，自底向上四层：
 
 ```text
-第4层  src/huaweicloud_open_mcp/  入口包，按 --mode 延迟 import 对应 server（避免同时装载两套）
+第4层  src/huaweicloud_open_mcp/  入口包，按 --mode（可逗号组合）延迟 import 对应 server
+           │                      + composite.py（混装装配：共享 store/sink + manage_policy 去重）
            │
-第3层  src/mcp_openapi/       src/mcp_discover/
-         ├ service            ├ service
-         ├ execute            ├ catalog
-         ├ server             ├ config
+第3层  src/mcp_openapi/       src/mcp_discover/       src/mcp_data/
+         ├ service            ├ service               ├ service（audit 信封 + DataError 翻译）
+         ├ execute            ├ catalog               ├ engine（datafusion 惰性封装）
+         ├ server             ├ config                └ server
          └ signer/sign+client ├ manager → sdk
                               └ server
-           │                        │
-第2层  src/safety/policy       src/apie/
-         + policy_store
+           │                        │                     │
+第2层  src/safety/policy       src/apie/                  │
+         + policy_store                                  │
           （纯函数零依赖；        ├ catalog → live_fallback → convert_openapi2
-            store 仅依赖 policy）
+            store 仅依赖 policy）│                          │
                               ├ memory_store（纯内存缓存，零内部依赖）
                               ├ metadata / mock / api_docs(CLI)
                               └ 管道文件（fetch/split/merge/organize/validate/refresh/retry）
@@ -116,23 +124,26 @@
 | `apie/` | → `common`（http/types/paths/logconf）；`catalog`→`live_fallback`→`convert_openapi2` 链、`memory_store`；`mock`→common.http/types |
 | `mcp_openapi/` | → `apie`（catalog/metadata/mock/memory_store）+ `safety` + `common`；`service`→`execute`+`execute_obs`+`signer.client`+`signer.obs`；`signer.client`→`signer.sign`；`execute_obs`→`execute`+`signer.obs`+`common` |
 | `mcp_discover/` | → `safety` + `common`（**不依赖 apie**）；`service`→`catalog/config/manager/sdk`；`manager`→`sdk` |
-| `huaweicloud_open_mcp` | → `common.logconf` + 延迟 import `mcp_openapi.server/service`、`mcp_discover.server` |
+| `mcp_data/` | → 仅 `common`（audit/types；**不依赖 safety/apie**——query_data 无 policy 门）；`engine` 运行时惰性 import `datafusion`/`pyarrow`/`sqlparse`（optional extra） |
+| `huaweicloud_open_mcp` | → `common.logconf` + 延迟 import `mcp_openapi.server/service`、`mcp_discover.server`、`mcp_data.server`；`composite`→三模式 server/config + `safety.policy_store` |
 | `benchmarks/` | 与 `src/` 零耦合：经子进程 spawn console script `huaweicloud-open-mcp` 驱动，不 import src 任何包 |
 
 关键设计结论：
 
 - **`apie` 是 `mcp_openapi` 独享依赖**：APIE 元数据层只服务 openapi 直连模式；`mcp_discover` 只依赖 `safety` + `common`，两模式互不 import。
-- **`safety` + `common` 是两模式公共底座**，二者本身零内部依赖，为最底层可独立复用模块。
+- **`mcp_data` 只依赖 `common`**：data 模式是纯本地计算（无云交互、无 policy 门），engine 的 datafusion 运行时为 optional extra 惰性加载，base 安装不携带。
+- **`safety` + `common` 是各模式公共底座**，二者本身零内部依赖，为最底层可独立复用模块。
 - **`metadata.py` 归入 `apie`**：避免 `apie ↔ mcp_openapi` 循环依赖——`api_docs` CLI（apie 内）与 `mcp_openapi/service` 共用同一套 `metadata` 纯函数。
 - **`convert_openapi2` 在 apie 顶层**（非管道子目录）：同时被 `live_fallback`（运行时远端回退）与管道文件（离线 refresh）使用。
-- **入口包化**：入口在 `src/huaweicloud_open_mcp/` 包（顶层 `main.py` 已废——site-packages 通用名冲突）；`mcp_openapi.server` / `mcp_discover.server` 在 `main()` 体内按 mode 分支导入。
+- **`audited`/`build_audit_event` 归入 `common.audit`**：审计装饰器与事件 payload 契约的第二消费方（mcp_data service）出现后从 mcp_openapi.service 下沉（原位置无 re-export；verifier 契约是 NDJSON payload 形状，不受模块路径影响）。
+- **入口包化**：入口在 `src/huaweicloud_open_mcp/` 包（顶层 `main.py` 已废——site-packages 通用名冲突）；单模式时 `main()` 体内按 mode 分支导入对应 server；混装经 `composite.build_composite_app`（共享 PolicyStore/AuditSink、合并 instructions、manage_policy 全局注册一次，归属优先级 openapi > discover）。
 
 ## 命名约定
 
 - **产品名**：以 `raw/apis_detail.json` 的驼峰 `product_short` 为准（如 `ECS`）；与 apis 项目的大小写去重映射保持一致。
 - **tag 文件名**：英文 PascalCase，中文→英文映射维护在 `configs/tag_translations.json`；`sanitize_tag` 用 `_` 替换空格与 `/`。
-- **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api`/`manage_policy`）；discover 模式工具（`list_mcp_servers`/`get_mcp_server`/`connect_mcp_server`/`list_server_tools`/`get_server_tool`/`call_server_tool`/`disconnect_mcp_server`/`manage_policy`）。
-- **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`、`HUAWEICLOUD_MCP_OPENAPI_GATE`（产品门栓）、`HUAWEICLOUD_MCP_OPENAPI_HINTS`（自定义提示注入配置）、`HUAWEICLOUD_MCP_AUDIT_FILE`（审计 NDJSON 落盘路径）、`HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`（mock 模式转发业务参数）、`HUAWEICLOUD_MCP_ELICIT`（policy 变更 elicitation 确认模式 auto/required/off，默认 off））。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
+- **工具名**：snake_case（`list_products`/`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api`/`manage_policy`）；discover 模式工具（`list_mcp_servers`/`get_mcp_server`/`connect_mcp_server`/`list_server_tools`/`get_server_tool`/`call_server_tool`/`disconnect_mcp_server`/`manage_policy`）；data 模式工具（`query_data`）。
+- **环境变量**：遵循华为云 SDK 惯例——`HUAWEICLOUD_SDK_AK`/`HUAWEICLOUD_SDK_SK`/`HUAWEICLOUD_SDK_SECURITY_TOKEN`/`HUAWEICLOUD_SDK_PROJECT_ID`；MCP 自身配置用 `HUAWEICLOUD_MCP_*` 前缀（如 `HUAWEICLOUD_MCP_MOCK`、`HUAWEICLOUD_MCP_POLICY_FILE`、`HUAWEICLOUD_MCP_OPENAPI_GATE`（产品门栓）、`HUAWEICLOUD_MCP_OPENAPI_HINTS`（自定义提示注入配置）、`HUAWEICLOUD_MCP_AUDIT_FILE`（审计 NDJSON 落盘路径）、`HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`（mock 模式转发业务参数）、`HUAWEICLOUD_MCP_ELICIT`（policy 变更 elicitation 确认模式 auto/required/off，默认 off））。discover 模式新增：`HUAWEICLOUD_MCP_MODE`（运行模式，可逗号组合：openapi/discover/data，如 `openapi,data`）、`HUAWEICLOUD_MCP_SERVER_CATALOG`（目录文件路径）、`HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT`、`HUAWEICLOUD_MCP_MAX_SESSIONS`。
 - **region**：默认 `cn-north-4` 平铺，非默认 region 带 `{region}` 目录/后缀（沿用 apis 的 region 目录规则）。
 
 ## 构建与运行命令
@@ -140,10 +151,11 @@
 项目用 uv 管理（`pyproject.toml` + `.venv`）：
 
 ```bash
-uv sync                                  # 安装依赖（含 dev）
+uv sync                                  # 安装依赖（含 dev，dev 组含 datafusion/sqlparse）
+uv sync --extra datafusion               # data 模式运行时依赖（发布态：pip install "huaweicloud-open-mcp[datafusion]"）
 uv run pytest                            # 跑全部测试（默认跳过 e2e）
 uv run pytest -m e2e                     # 真实数据/凭证 E2E（需 AK/SK）
-uv run pytest --cov=src/common --cov=src/apie --cov=src/safety --cov=src/mcp_openapi --cov=src/mcp_discover  # 覆盖率
+uv run pytest --cov=src/common --cov=src/apie --cov=src/safety --cov=src/mcp_openapi --cov=src/mcp_discover --cov=src/mcp_data  # 覆盖率
 uv run ruff check src tests              # lint（ruff，规则 E/F/W/I，line-length 120）
 uv run ruff check src tests --fix        # 自动修复可修问题
 uv run mypy src                          # 类型检查（全量类型标注）
@@ -188,6 +200,8 @@ uvx huaweicloud-open-mcp                       # PyPI 安装态运行（uvx 自�
 uv run python -m huaweicloud_open_mcp          # 等价入口（python -m 形态）
 uv run huaweicloud-open-mcp --mock             # mock 模式：execute_api 指向 API Explorer mock 端点（无需凭证）
 uv run huaweicloud-open-mcp --mode discover    # discover 模式：发现连接云端 MCP server（环境变量 HUAWEICLOUD_MCP_MODE）
+uv run huaweicloud-open-mcp --mode data        # data 模式：DataFusion 只读 SQL 本地分析（需 [datafusion] extra）
+uv run huaweicloud-open-mcp --mode openapi,data  # 混装：单 server 同时注册所选模式工具集（manage_policy 只注册一次）
 uv run huaweicloud-open-mcp --mock-base http://127.0.0.1:8000  # 自定义 mock 端点基础地址（benchmark 本地 stub 用；环境变量 HUAWEICLOUD_MCP_MOCK_BASE）
 uv run huaweicloud-open-mcp --mock --mock-passthrough   # mock 模式转发 execute 业务参数到端点（环境变量 HUAWEICLOUD_MCP_MOCK_PASSTHROUGH）
 uv run huaweicloud-open-mcp --audit-file /tmp/hwc_audit.jsonl   # 审计事件 NDJSON 落盘（环境变量 HUAWEICLOUD_MCP_AUDIT_FILE）
@@ -237,13 +251,14 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | S9e | `is_obs` 路由谓词 + `OBJECT_DATA_APIS` 名单判定 + `execute_obs_api` 编排 + `ObsHttpClient` 签名发送 + `service` OBS 分派（对象数据面强制 presign） | 单测注入 OBS client 工厂 | 手写字面量 + 注入 client |
 | S9f | 预签发 URL（`signer.obs.url_string_to_sign` / `sign_obs_url` / `build_presign_base` + `execute_presign_api` 编排 + service 对象数据面自动 presign / 显式 `_presign` 分派与热更新协同） | 纯函数单测 + service 注入凭证 | 官方《URL中携带签名》表4/5 结构原文 + openssl 口径金标 |
 | S10 | `mcp_openapi/hints.py` 自定义提示注入（parse_hints/load_hints_file + Hints 值对象 product_notes/api_notes/combined_notes 合并策略）+ `ServiceConfig.hints` service 注入（list_products 条目级、get_product/list_apis 顶层、list_apis 条目级 API 级、get_api 顶层合并；拒绝路径与 get_api_examples/execute_api 恒不注入）+ server `build_instructions` 部署自定义指引段 + `--hints`/env 装配 | 纯函数单测（键归一化经 lookup 方法验证，不 peek 字段内部）+ service 注入 Hints 信封断言 + 装配断言 | 手写字面量 + 未配置（empty）时结果与现状逐字段一致的回归红线 |
+| S11 | data 模式：`mcp_data/engine.py`（外部接缝 `run_query` 单函数：表注册/只读守卫/执行/JSON-safe 规范化/双重截断；内部接缝纯函数 `assert_readonly_sql`/`json_safe`/`truncate_rows`；datafusion 惰性 import 未安装→`DataError` 安装指引）+ `mcp_data/service.py` DataService（audit 信封 + DataError→ToolError 翻译，engine 可调用注入）+ `mcp_data/server.py` 装配（单 data 模式工具集恰 `{query_data}`）+ `huaweicloud_open_mcp/composite.py` 混装（工具集并集/manage_policy 去重/instructions 合并/共享 store）+ `cli.parse_modes` 逗号多值 | engine 纯函数单测（手写字面量矩阵）+ 真 datafusion 集成（inline/csv/parquet/ndjson/join/聚合/COPY 拒绝，无网络）+ service 注入 engine 替身 + InMemoryTransport e2e | 手写字面量 + Python 独立重算的聚合真值 + monkeypatch `sys.modules["datafusion"]=None` 模拟未安装 |
 | E1 | `common/elicit.py` PolicyConsent（parse_elicit_mode / offer_grant / gate_change / fallback_hint / ctx_elicit_fn 归一化）+ `safety/policy.py` grant_rule/grant_server_rule | 纯函数单测，脚本化 ElicitFn + 记录型 grant 注入 | 手写字面量 + `parse_policy` 交叉验证规则文本 |
 | E2 | elicitation 端到端：两模式 server 装配（execute_api/call_server_tool/connect/manage_policy 的 PolicyConsent 接线 + `build_*_app(elicit_mode)`；openapi execute 与 discover call_tool 最小授予 api 选择 scope=once、api_session/product 选择恒 session，connect 为 session） | 真 mcp SDK client + InMemoryTransport 内存回环（脚本化 elicitation callback；`common.http.fetch_json` monkeypatch 封死元数据网络） | tmp policy 文件回读 + 结构化结果断言（granted_rule/一次性规则用后即焚、api_session 与产品级会话内持续放行、重启等价失效；显式 scope=permanent 才落盘） |
 
 分层与纪律：
 
-- **单元测试**（`tests/test_signer.py`、`tests/test_obs_signer.py`、`tests/test_obs_execute.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`、`tests/test_gate.py`、`tests/test_bench_*.py`、`tests/test_mcp_discover_*.py`）：纯函数，不联网、不碰真实数据；service 层用 monkeypatch HTTP 注入 + 客户端工厂注入。
-- **集成测试**（`tests/test_execute_mock.py`：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名；`tests/test_execute_mcp_mock.py`：真 mcp SDK client → 本地 MCP stub 回环 HTTP，覆盖 Streamable HTTP 协议全链路）。
+- **单元测试**（`tests/test_signer.py`、`tests/test_obs_signer.py`、`tests/test_obs_execute.py`、`tests/test_safety.py`、`tests/test_tools_*.py`、`tests/test_apie_*.py`、`tests/test_service.py`、`tests/test_client.py`、`tests/test_gate.py`、`tests/test_bench_*.py`、`tests/test_mcp_discover_*.py`、`tests/test_data_engine.py`、`tests/test_data_service.py`）：纯函数，不联网、不碰真实数据；service 层用 monkeypatch HTTP 注入 + 客户端工厂注入。
+- **集成测试**（`tests/test_execute_mock.py`：直连 mock 端点，覆盖正常响应与错误注入；mock 模式下跳过签名；`tests/test_execute_mcp_mock.py`：真 mcp SDK client → 本地 MCP stub 回环 HTTP，覆盖 Streamable HTTP 协议全链路；`tests/test_data_server.py`/`tests/test_composite.py`：真 mcp SDK client + InMemoryTransport 内存回环，data 装配与混装工具集/共享 policy，无外网依赖；`tests/test_data_engine.py` 的 run_query 段：真 datafusion 本地执行）。
 - **E2E 测试**（`tests/test_e2e.py`：真实 AK/SK 只读调用；`tests/test_obs_e2e.py`：OBS 只读 ListBuckets + 错误签名拒绝；`tests/test_workflow_e2e.py`：openapi 渐进式工作流全链，真实 API Explorer 远端数据；`tests/test_workflow_obs_e2e.py`：OBS 全链路 real 模式，元数据 live 回退 + 临时桶自清理式写链路（CreateBucket/SetBucketTagging/PutObject 文本/GetObject 读回/_presign 预签发 URL 客户端直连 PUT-GET-过期负路径，finally 删除对象/标签/桶）；`tests/test_workflow_discover_e2e.py`：discover 渐进式工作流全链，mock 模式 + 本地 MCP stub 回环，无外网依赖）：标 `@pytest.mark.e2e` 默认跳过；凭证优先读环境变量，缺省时自动从项目根 `.env` 加载（`conftest.py` 最小加载器，已存在的环境变量不覆盖；`.env` 已 gitignore，禁止提交）。E2E 红线为「只读 + 自清理临时资源」——写操作仅允许走带唯一前缀的临时桶并在 finally 清理。。
 - red→green 垂直切片，禁止先写全部测试再写实现；禁止 mock 自有模块；期望值禁止用被测代码同法重算。
 
@@ -261,6 +276,7 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 - safety policy 热更新（`PolicyStore` + `manage_policy`）：策略文件为唯一真值源，运行期按 stat（mtime/size/inode）热重载，外部编辑即时生效、无需重启；`manage_policy(action=list/add/remove)` 两模式同构，add/remove 先校验再 `tmp+os.replace` 原子写盘并刷新内存，静止态 memory==file；读改写与热重载全段由进程内互斥锁（RLock）串行化，MCP 工具并发派发不丢更新（last-writer-wins 回归测试覆盖）；新 allow 规则自动插到首个会遮蔽它的 deny 规则之前（典型即 `*=deny` 兜底行前）；语义重复 add 幂等不改盘；文件被写坏/短暂消失时沿用最近合法版本记 WARNING，恢复后自动重新采纳；未配置 --policy 时 manage_policy 拒绝且不创建文件；启动时急切加载保留坏文件快速失败。
 - safety policy elicitation 确认（`common/elicit.py` PolicyConsent + `--elicitation`/`HUAWEICLOUD_MCP_ELICIT`，**默认 off**，2026-09 起）：默认关闭时不发任何 MCP elicitation——`manage_policy` add/remove 直接生效热更新（缺省会话内档、不落盘；`gate_change` 恒放行）；policy 拒绝返回但 reason 追加 `fallback_hint` 兜底指引（prompt 约定：引导 LLM 经对话/交互式问询——如 question 工具——向用户确认后经 manage_policy 授予，选项语义与四选一表单一致）+ 审计 NDJSON（唯一硬保障）。开启后才启用协议级确认门——`manage_policy` add/remove 前服务端经 elicitation 向用户确认（`gate_change`，confirm 才生效）；`execute_api`/`call_server_tool`/`connect_mcp_server` 被 policy 拒绝时服务端经 elicitation 提议授予（`offer_grant`，accept → 经 manage_policy 授予并在 denial 上附 `granted_rule` + 引导重试；**openapi execute_api 与 discover call_tool 为四选一 GrantChoiceConfirm 表单——api=最小规则 `scope="once"`（一次用户确认仅放行下一次执行，用后即焚）/ api_session=最小规则 `scope="session"`（会话内持续放行该单 API/工具，重启即失；单功能粒度，与 product 选项的广度区分）/ product=产品级规则（openapi `product:*=allow`、discover 服务级全工具 `server:X:*=allow`，`scope="session"` 会话内放行该产品/服务全部目标，重启即失）/ none=不授予；coarse_rule 缺失时退化为单一确认；discover connect 无产品级选项（call 级规则匹配不到 connect 检查），保持会话内单一授予**；choice→scope 映射内聚于 PolicyConsent（api→minimal_scope 由调用点注入，api_session/product→恒 session）；grant 失败原因附入 reason）。**兜底指引口径（fallback_hint）**：凡 policy 拒绝且存在可授予 offer、但未发生任何 elicitation 的路径（off 档 / auto 与 required 下客户端不支持）——denial reason 追加可操作指引（经交互式问询确认后 manage_policy 授予，coarse 存在时并列四选项）；decline/cancel/refuse 与授予路径不加（用户已表态或已入流程）。模式语义：off 从不 elicit，拒绝路径 reason 附兜底指引；auto 尝试 elicit，客户端不支持（`ctx.elicit` 失败）→ 降级为 prompt 兜底记 WARNING（reason 附兜底指引）；required 不支持 → manage_policy 返回可操作 reason（fail-closed），拒绝路径不提议（reason 附兜底指引）。规则文本由 `safety/policy.py` grant_rule/grant_server_rule 构造（parse_policy 交叉验证）；门栓拒绝/未配置 policy/非 denial 结果一律不提议；decline/cancel 不写审计 NDJSON（仅 WARNING，`_audited` 契约不变；accept 的授予经 manage_policy 正常入审计）。**默认 off 的原因**：① 各 code agent 对 MCP elicitation 支持参差（2026-09 实测——Claude Code/Cursor/VS Code 支持；opencode 1.x 不声明 elicitation capability（client 仅声明 roots），v2 分支已实现（上游 PR #35064）但未发版且 headless 有挂起风险（#36076）；Codex 部分支持且有 bug；Gemini CLI 不支持）；② auto 的降级放行使确认门语义随客户端能力漂移——同一部署在不同 agent 下「一个有门、一个没门」；③ 默认关闭保证跨客户端行为一致、可预测，符合项目 fail-safe 默认哲学（未配置 policy 全拒）。需要交互确认门的部署显式传 `--elicitation auto/required`（或 `HUAWEICLOUD_MCP_ELICIT`）。
 - 产品门栓（`Gate`）：openapi 模式产品级白名单，未配置时不限制；配置后未列出产品默认拒；越界产品在 `list_products` 静默隐藏，其余工具返回「不在 openapi mcp 授权范围内」；`execute_api` 先过门栓再过 policy。
+- data 模式 `query_data`（2026-09 起）：**明确不受 safety policy 约束**（policy 红线「未配置全拒」不覆盖本工具）——本地计算工具，不访问云、不需要凭证，policy 语义针对云侧调用；数据边界由引擎约束：SQL 严格只读（sqlparse 语句分型，白名单 SELECT/WITH/EXPLAIN/SHOW/DESCRIBE，多语句拒绝，SELECT INTO/内嵌 INTO 拒绝，CREATE EXTERNAL TABLE/COPY TO/INSERT 等写型语句不可达）；表源仅 inline 对象数组与本地文件（csv/parquet/ndjson 按扩展名 auto 识别，可显式 format；JSON 数组文件拒绝并提示转 jsonl）；一次性 SessionContext 用完即弃（无状态，无会话/注册表持久）；结果 JSON-safe（时间→ISO/Decimal→str/bytes→占位/非有限浮点→null）+ 双重截断（max_rows 默认 100 上限 1000 + 200k 字符预算，行边界切分，单行超预算保留首行标记 truncated）；表名 `^[A-Za-z_][A-Za-z0-9_]{0,127}$`；datafusion/pyarrow/sqlparse 为 optional extra `[datafusion]`，未安装返回 `DataError` 安装指引；审计 NDJSON 照常记录（query_data 事件与两模式同构，input 含 sql/tables/max_rows 快照）；混装时 `manage_policy` 仅由 openapi/discover 侧注册一次，与 query_data 无关。部署侧注意：query_data 能读本地文件（SQL 任意文件读取能力），仅应在信任该 agent 会话的本地部署启用。
 - 自定义提示注入（`Hints`，2026-09 起）：openapi 模式部署侧提示（`--hints`/`HUAWEICLOUD_MCP_OPENAPI_HINTS`，启动加载、无热更新、仅 openapi 模式）；配置 schema `{"instructions", "products": {PRODUCT: "notes" | {"notes", "apis": {API: text}}}}`，产品键归一化 upper（对齐 Gate）、API 键归一化 lower（大小写不敏感，对齐 live_fallback），严格校验非法配置启动快速失败；注入语义为**附加式**——官方 `summary`/`description` 永不替换，提示以独立 `hints` 字段伴随返回（`get_api` 顶层为产品+API 合并文案，合并策略内聚 `Hints.combined_notes`：产品在前、空段跳过、换行连接、双空不加字段）；注入点仅 6 处——server instructions 追加「部署自定义指引」段（全局 text 非空时）、`list_products` 条目级、`get_product`/`list_apis` 顶层产品级、`list_apis` 当前页条目级 API 级、`get_api` 顶层合并；门栓/policy 拒绝路径与 `get_api_examples`/`execute_api` 恒不注入（拒绝不泄漏越权提示、审计契约不动）；未配置（`Hints.empty()`）时结果与现状逐字段一致（回归红线，S10 测试固化）；塑造发生在 service 层（与 gate.filter_products 同层，`apie/metadata.py` 纯函数不感知部署配置），全部 copy-on-write 不改写 metadata 返回对象。
 - 审计 NDJSON（`HUAWEICLOUD_MCP_AUDIT_FILE` / `--audit-file`）：service 层 7 个 openapi 工具每次调用经 `AuditSink.record` 追加一行 `{"ts", "tool", "input", "ok"}`（ts ISO8601 UTC 由 sink 注入；input 为显式入参快照不含默认值；ok 缺省视为 true；异常路径记 ok=False 后原样抛出）；best-effort 永不抛出（写失败 WARNING）；事件 payload 契约由 `mcp_openapi.service.build_audit_event` 定义并经 `scorer.event_to_toolcall` 成为 harbor verifier 的 trace 输入源；未配置 sink 时零开销跳过。
 - mock passthrough（`--mock-passthrough` / `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`，默认关）：开启时 `MockApiClient.mock_request(params=...)` 把 execute 业务参数转发到 mock 端点——`_` 前缀控制键剥离、扁平标量→query（bool→`str(v).lower()` 对齐 real 模式 HttpClient，扁平 dict/list→JSON 串）、`params["body"]`→POST JSON body（无 body 保持 GET，`status_code/number/region_id` 三元组不变）；service 只透传原始 params，剥离职责在 `apie/mock.py` 编码层。

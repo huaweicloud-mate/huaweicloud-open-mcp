@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from apie.memory_store import MemoryStore
-from common.audit import NdjsonAuditSink, NullAuditSink, sink_from_path
-from mcp_openapi.service import ServiceConfig, ToolService, build_audit_event
+from common.audit import NdjsonAuditSink, NullAuditSink, build_audit_event, sink_from_path
+from mcp_openapi.service import ServiceConfig, ToolService
 from safety import policy
 from tests.test_service import FIXTURE_APIS_ECS, FIXTURE_GROUPS, FULL_DOC
 

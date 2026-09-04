@@ -1,6 +1,6 @@
 [project]
 name = "huaweicloud-open-mcp"
-description = "华为云 MCP server：本地 stdio 通用网关，openapi 模式 7 工具直连华为云全量 OpenAPI，discover 模式 8 工具发现连接云端 MCP server"
+description = "华为云 MCP server：本地 stdio 通用网关，openapi 模式 7 工具直连华为云全量 OpenAPI，discover 模式 8 工具发现连接云端 MCP server，data 模式 1 工具（DataFusion 只读 SQL 本地分析）"
 readme = "README.md"
 requires-python = ">=3.10"
 dynamic = ["version"]
@@ -27,6 +27,12 @@ dependencies = [
     "tabulate>=0.9.0",
 ]
 
+[project.optional-dependencies]
+datafusion = [
+    "datafusion>=43",
+    "sqlparse>=0.5",
+]
+
 [project.urls]
 Repository = "https://github.com/huaweicloud-mate/huaweicloud-open-mcp"
 Issues = "https://github.com/huaweicloud-mate/huaweicloud-open-mcp/issues"
@@ -44,7 +50,7 @@ build-backend = "hatchling.build"
 path = "src/huaweicloud_open_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/common", "src/safety", "src/apie", "src/mcp_openapi", "src/mcp_discover", "src/huaweicloud_open_mcp"]
+packages = ["src/common", "src/safety", "src/apie", "src/mcp_openapi", "src/mcp_discover", "src/mcp_data", "src/huaweicloud_open_mcp"]
 force-include = {"configs" = "huaweicloud_open_mcp/configs"}
 
 [tool.hatch.build.targets.sdist]
@@ -67,6 +73,8 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.9.0",
     "mypy>=1.10",
+    "datafusion>=43",
+    "sqlparse>=0.5",
 ]
 
 [tool.ruff]
@@ -87,5 +95,5 @@ disallow_untyped_defs = true
 exclude = ["tests/"]
 
 [[tool.mypy.overrides]]
-module = ["jsonschema", "yaml", "tabulate", "mcp.*"]
+module = ["jsonschema", "yaml", "tabulate", "mcp.*", "sqlparse", "pyarrow"]
 ignore_missing_imports = true

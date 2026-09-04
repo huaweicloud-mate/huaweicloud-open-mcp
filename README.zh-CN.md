@@ -10,7 +10,7 @@
 
 一个开放的本地 stdio [Model Context Protocol](https://modelcontextprotocol.io) 网关，把代码 Agent —— opencode、Codex、Cursor 以及任何支持 MCP 的客户端 —— 以自然语言连接到华为云。无需逐服务手写封装：Agent 逐步探索全量目录（300+ 产品、17000+ API），收窄到一次具体调用并执行，请求在本地完成签名。你的 AK/SK 永不出本机。
 
-另一实验性模式（发现并连接云端华为云 MCP server）正在开发中，暂无文档。
+三种模式经 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析——本地计算工具，不需要凭证、不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合，仅聚合结果进入模型上下文。
 
 ## 工作原理
 
@@ -189,6 +189,16 @@ Agent 走渐进式工作流 —— `list_apis(ECS)` 找到 API、`get_api` 读�
 | `get_api_examples` | 单 API 官方请求示例 |
 | `execute_api` | 执行一个 API：路径/query 参数平铺、请求体放 `body`；错误结构化返回、429 自动退避重试 |
 | `manage_policy` | 运行期增删查 safety policy 规则（热生效、无需重启） |
+
+## 工具（data 模式）
+
+本地数据分析，DataFusion 引擎（可选依赖：`pip install "huaweicloud-open-mcp[datafusion]"`；未安装时工具返回安装指引）。
+
+| 工具 | 职责 |
+| --- | --- |
+| `query_data` | 对命名表执行只读 SQL：`{"表名": {"data": [对象数组]}}`（inline）或 `{"表名": {"path": "文件"}}`（本地 csv/parquet/jsonl，按扩展名自动识别）；返回列 schema + JSON-safe 行，行数与字符预算双重截断 |
+
+严格只读：仅 `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`DESCRIBE` 通过守卫，多语句与写型语句（`INSERT`/`CREATE`/`COPY TO`/…）一律拒绝。`query_data` 不访问云、不需要凭证、**不受** safety policy 约束——仅应在信任该 Agent 会话读取本地文件的部署中启用。
 
 ## Safety policy
 

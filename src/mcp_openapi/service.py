@@ -4,17 +4,15 @@
 调用纯函数层（tools.metadata / tools.execute）与执行客户端。
 """
 
-import functools
-import inspect
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence, TypeVar, cast
+from typing import Any, Callable, Sequence, cast
 
 from apie import catalog, metadata
 from apie import mock as apie_mock
 from apie.memory_store import ApiHit, MemoryStore
 from common.audit import AuditSink
+from common.audit import audited as _audited
 from common.auth.credentials import Credentials
 from common.elicit import DenialOffer
 from common.types import (
@@ -39,8 +37,6 @@ logger = logging.getLogger("mcp_openapi.service")
 
 DEFAULT_REGION = "cn-north-4"
 
-_F = TypeVar("_F", bound=Callable[..., Any])
-
 
 @dataclass
 class ServiceConfig:
@@ -57,43 +53,6 @@ class ServiceConfig:
     gate: Gate = Gate.unrestricted()
     hints: Hints = Hints.empty()
     audit_sink: AuditSink | None = None
-
-
-def build_audit_event(tool: str, input_args: Mapping[str, Any],
-                      result: Any) -> dict[str, Any]:
-    """审计事件 payload（对 verifier 的已发布契约）：tool/input/ok；ts 由 sink 注入。
-
-    ok 取 result 的 ok 字段（缺失视为成功）；input 为调用方显式入参快照
-    （不含默认值，对齐 agent 侧 trace 口径）。
-    """
-    ok = bool(result.get("ok", True)) if isinstance(result, Mapping) else True
-    return {"tool": tool, "input": dict(input_args), "ok": ok}
-
-
-def _audited(fn: _F) -> _F:
-    """工具方法审计装饰器：每次调用经 audit sink 记一条事件（未配置 sink 零开销跳过）。
-
-    input 为绑定后的显式入参（不含 self 与默认值）；方法抛异常时记 ok=False 并原样抛出。
-    签名保持：装饰不改变方法对调用方的可见类型。
-    """
-    sig = inspect.signature(fn)
-
-    @functools.wraps(fn)
-    def wrapper(self: "ToolService", *args: Any, **kwargs: Any) -> Any:
-        try:
-            bound = sig.bind(self, *args, **kwargs)
-            input_args = {k: v for k, v in bound.arguments.items() if k != "self"}
-        except TypeError:
-            input_args = {}
-        try:
-            result = fn(self, *args, **kwargs)
-        except Exception:
-            self._audit(fn.__name__, input_args, {"ok": False})
-            raise
-        self._audit(fn.__name__, input_args, result)
-        return result
-
-    return wrapper  # type: ignore[return-value]
 
 
 class ToolService:
@@ -221,13 +180,6 @@ class ToolService:
         if self.config.gate.allows(product):
             return None
         return f"产品 {product} 不在 openapi mcp 授权范围内"
-
-    def _audit(self, tool: str, input_args: Mapping[str, Any], result: Any) -> None:
-        """经 audit sink 记录一条工具调用事件（best-effort，未配置 sink 跳过）。"""
-        sink = self.config.audit_sink
-        if sink is None:
-            return
-        sink.record(build_audit_event(tool, input_args, result))
 
     # ---------- 提示注入（Hints：配置驱动塑形与 gate 同层，copy-on-write） ----------
 

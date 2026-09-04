@@ -9,7 +9,7 @@
 
 One open, local stdio [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents — opencode, Codex, Cursor, and any other MCP-capable client — to Huawei Cloud in natural language. No per-service wrappers: the agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrowing it down to one concrete API call, executed with locally signed requests. Your AK/SK never leave your machine.
 
-An experimental second mode that discovers and connects to cloud-hosted Huawei Cloud MCP servers is under development and not documented yet.
+Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `openapi` (default) talks to Huawei Cloud OpenAPI, `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet), and `data` runs read-only SQL analytics over inline/local data with DataFusion — a local compute tool that needs no credentials and is not governed by the safety policy. The typical closed loop (`openapi,data`): pull a large dataset via `execute_api`, save it to a file, aggregate with `query_data`, and only the aggregated result enters the model context.
 
 ## How it works
 
@@ -188,6 +188,16 @@ Run the same flow without credentials: skip Step 1, and add `--mock` to the serv
 | `get_api_examples` | Official request examples for one API |
 | `execute_api` | Execute one API: path/query params flattened, request body under `body`; errors come back structured, 429 retried with backoff |
 | `manage_policy` | Read/add/remove safety-policy rules at runtime (hot effect, no restart) |
+
+## Tools (data mode)
+
+Local analytics on DataFusion (optional extra: `pip install "huaweicloud-open-mcp[datafusion]"`; the tool returns a friendly install hint when missing).
+
+| Tool | Purpose |
+| --- | --- |
+| `query_data` | Read-only SQL over named tables: `{"name": {"data": [objects]}}` (inline) or `{"name": {"path": "file"}}` (local csv/parquet/jsonl, format auto-detected by extension); returns column schema + JSON-safe rows with row-count/char-budget truncation |
+
+Strictly read-only: only `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`DESCRIBE` statements pass the guard; multi-statement and write statements (`INSERT`/`CREATE`/`COPY TO`/…) are rejected. `query_data` touches no cloud APIs, needs no credentials and is **not** subject to the safety policy — deploy it only where the agent session is trusted to read local files.
 
 ## Safety policy
 

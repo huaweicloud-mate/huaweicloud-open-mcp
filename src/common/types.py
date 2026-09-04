@@ -146,6 +146,25 @@ class ExamplesResult(TypedDict):
     examples: list[ApiExample]
 
 
+# ---------- data 模式工具：结果信封 ----------
+
+class QueryColumn(TypedDict):
+    name: str
+    type: str
+
+
+class QueryDataResult(TypedDict):
+    """query_data 的规范化输出：列 schema + JSON-safe 行 + 截断标记。"""
+
+    ok: Literal[True]
+    columns: list[QueryColumn]
+    rows: list[dict[str, Any]]
+    total_rows: int
+    returned_rows: int
+    truncated: bool
+    tables: list[str]
+
+
 # ---------- MCP server 发现工具：内层实体 ----------
 
 class McpServerItem(TypedDict):

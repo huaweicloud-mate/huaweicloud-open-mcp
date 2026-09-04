@@ -104,11 +104,20 @@ def build_discover_app(config: DiscoverConfig, *,
                        log_level: str = "INFO",
                        elicit_mode: str = "off") -> MCPServer:
     ds = DiscoverService(config)
-    consent_mode = elicit_mode
-
     server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
                        instructions=INSTRUCTIONS_DISCOVER,
                        log_level=log_level)  # type: ignore[arg-type]
+    register_discover_tools(server, ds, consent_mode=elicit_mode)
+    return server
+
+
+def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
+                            consent_mode: str,
+                            include_manage_policy: bool = True) -> None:
+    """注册 discover 模式 8 工具（混装装配复用；instructions 由 builder 自持）。
+
+    include_manage_policy：混装时 manage_policy 全局只注册一次（由 composite 决定归属）。
+    """
 
     def _consent(ctx: Context | None, minimal_scope: str = "session") -> PolicyConsent:
         assert ctx is not None, "Context injected by MCP framework"
@@ -219,32 +228,31 @@ def build_discover_app(config: DiscoverConfig, *,
         logger.info("disconnect_mcp_server server=%s", server)
         return await ds.disconnect(server)
 
-    @server.tool()
-    async def manage_policy(action: str, line: str | None = None,
-                            scope: str | None = None,
-                            ttl_seconds: int | None = None,
-                            ctx: Context | None = None) -> dict[str, Any]:
-        """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
+    if include_manage_policy:
+        @server.tool()
+        async def manage_policy(action: str, line: str | None = None,
+                                scope: str | None = None,
+                                ttl_seconds: int | None = None,
+                                ctx: Context | None = None) -> dict[str, Any]:
+            """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
 
-        四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
-        session 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
-        temporary 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ permanent 永久
-        （写入策略文件，跨重启）。仅 permanent 落盘。「会话内」指 code agent 会话
-        （AI 客户端与 gateway 的一次连接），非到远端 MCP server 的连接会话——远端
-        连接断开或空闲回收后 session 档授权仍在。
-        action=list 查看当前全部规则（结构化 rules 含 scope/expires_in + 文件全文）；
-        action=add 新增规则（自动插到会遮蔽它的 deny 规则之前，如
-        "server:@huaweicloud/ecs=allow"）；action=remove 按语义移除首个匹配规则
-        （跨层：先会话/临时后文件；不接受 scope/ttl_seconds）。
-        安全约定：先经交互式问询（如 question 工具）向用户确认再 add/remove；开启
-        elicitation 时由服务端弹窗确认，未开启/客户端不支持时由调用方自行完成问询确认。
-        未配置 policy 文件时本工具拒绝执行（不创建文件）。
-        """
-        if ((action or "").strip().lower() in ("add", "remove")
-                and (line or "").strip()):
-            blocked = await _consent(ctx).gate_change(action, line or "")
-            if blocked:
-                return {"ok": False, "action": action, "reason": blocked}
-        return ds.manage_policy(action, line=line, scope=scope, ttl_seconds=ttl_seconds)
-
-    return server
+            四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
+            session 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
+            temporary 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ permanent 永久
+            （写入策略文件，跨重启）。仅 permanent 落盘。「会话内」指 code agent 会话
+            （AI 客户端与 gateway 的一次连接），非到远端 MCP server 的连接会话——远端
+            连接断开或空闲回收后 session 档授权仍在。
+            action=list 查看当前全部规则（结构化 rules 含 scope/expires_in + 文件全文）；
+            action=add 新增规则（自动插到会遮蔽它的 deny 规则之前，如
+            "server:@huaweicloud/ecs=allow"）；action=remove 按语义移除首个匹配规则
+            （跨层：先会话/临时后文件；不接受 scope/ttl_seconds）。
+            安全约定：先经交互式问询（如 question 工具）向用户确认再 add/remove；开启
+            elicitation 时由服务端弹窗确认，未开启/客户端不支持时由调用方自行完成问询确认。
+            未配置 policy 文件时本工具拒绝执行（不创建文件）。
+            """
+            if ((action or "").strip().lower() in ("add", "remove")
+                    and (line or "").strip()):
+                blocked = await _consent(ctx).gate_change(action, line or "")
+                if blocked:
+                    return {"ok": False, "action": action, "reason": blocked}
+            return ds.manage_policy(action, line=line, scope=scope, ttl_seconds=ttl_seconds)

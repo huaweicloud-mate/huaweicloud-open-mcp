@@ -12,13 +12,30 @@ logger = logging.getLogger(__name__)
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
+_MODES = ("openapi", "discover", "data")
+
+
+def parse_modes(value: str | None, env: str | None = None) -> list[str]:
+    """解析 --mode / 环境变量：逗号多值混用（如 openapi,data），去重保序。
+
+    无效项告警忽略；全部无效回退 openapi（单值语义与历史行为一致）。
+    """
+    raw = (value or env or "openapi").strip().lower()
+    items = [m.strip() for m in raw.split(",") if m.strip()]
+    invalid = [m for m in items if m not in _MODES]
+    if invalid:
+        logger.warning("无效模式 %s 已忽略（可用：openapi/discover/data）", invalid)
+    valid = list(dict.fromkeys(m for m in items if m in _MODES))
+    return valid or ["openapi"]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="huaweicloud-open-mcp",
         description="华为云 Open MCP server（stdio）。openapi 直连华为云 API；discover 发现连接云端 MCP server。")
-    parser.add_argument("--mode", choices=["openapi", "discover"], default=None,
-                        help="运行模式（默认 openapi；环境变量 HUAWEICLOUD_MCP_MODE）")
+    parser.add_argument("--mode", default=None,
+                        help="运行模式，可逗号组合混用（openapi/discover/data，"
+                             "如 openapi,data；默认 openapi；环境变量 HUAWEICLOUD_MCP_MODE）")
     parser.add_argument("--mock", action="store_true", default=None,
                         help="mock 模式：openapi 模式指向 API Explorer mock；discover 模式指向本地 stub")
     parser.add_argument("--mock-base", default=None,
@@ -44,9 +61,7 @@ def main() -> None:
     parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")
     args = parser.parse_args()
 
-    mode = (args.mode or os.environ.get("HUAWEICLOUD_MCP_MODE") or "openapi").lower()
-    if mode not in ("openapi", "discover"):
-        mode = "openapi"
+    modes = parse_modes(args.mode, os.environ.get("HUAWEICLOUD_MCP_MODE"))
 
     level_name = (args.log_level or os.environ.get("HUAWEICLOUD_MCP_LOG_LEVEL") or "INFO").upper()
     if level_name not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
@@ -57,7 +72,7 @@ def main() -> None:
     elicit_mode = parse_elicit_mode(args.elicitation
                                     or os.environ.get("HUAWEICLOUD_MCP_ELICIT"))
 
-    if mode == "discover":
+    if modes == ["discover"]:
         from mcp_discover.server import build_discover_app, build_discover_config  # noqa: E402
         discover_config = build_discover_config(args)
         logger.info("server start: mode=discover mock=%s policy=%s catalog=%s elicit=%s",
@@ -68,7 +83,13 @@ def main() -> None:
             logger.warning("未配置 safety policy，discover 连接与调用将全部拒绝（--policy 指定策略文件）")
         app = build_discover_app(discover_config, log_level=level_name,
                                  elicit_mode=elicit_mode)
-    else:
+    elif modes == ["data"]:
+        from mcp_data.server import build_data_app, build_data_config  # noqa: E402
+        data_config = build_data_config(args)
+        logger.info("server start: mode=data audit=%s",
+                    "configured" if data_config.audit_sink else "none")
+        app = build_data_app(data_config, log_level=level_name)
+    elif modes == ["openapi"]:
         from mcp_openapi.server import build_openapi_app, build_openapi_config  # noqa: E402
         from mcp_openapi.service import ToolService  # noqa: E402
         openapi_config = build_openapi_config(args)
@@ -80,6 +101,14 @@ def main() -> None:
             logger.warning("未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）")
         app = build_openapi_app(ToolService(openapi_config), log_level=level_name,
                                 elicit_mode=elicit_mode)
+    else:
+        from huaweicloud_open_mcp.composite import build_composite_app  # noqa: E402
+        logger.info("server start: mode=%s policy=%s elicit=%s",
+                     "+".join(modes),
+                     "configured" if (args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")) else "MISSING",
+                     elicit_mode)
+        app = build_composite_app(modes, args, log_level=level_name,
+                                  elicit_mode=elicit_mode)
 
     app.run("stdio")
 
