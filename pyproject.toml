@@ -28,8 +28,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://gitcode.com/hd-vector/huaweicloud-open-mcp"
-Issues = "https://gitcode.com/hd-vector/huaweicloud-open-mcp/issues"
+Repository = "https://github.com/huaweicloud-mate/huaweicloud-open-mcp"
+Issues = "https://github.com/huaweicloud-mate/huaweicloud-open-mcp/issues"
 
 [project.scripts]
 api-refresh = "apie.refresh:main"
