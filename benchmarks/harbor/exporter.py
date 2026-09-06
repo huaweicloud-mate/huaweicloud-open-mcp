@@ -65,7 +65,7 @@ def _hwc_tree(project_root: Path) -> dict[str, str]:
             continue
         for fp in sorted(base.rglob("*")):
             if fp.is_file() and "__pycache__" not in fp.parts:
-                out[str(fp.relative_to(project_root))] = fp.read_text(encoding="utf-8")
+                out[fp.relative_to(project_root).as_posix()] = fp.read_text(encoding="utf-8")
     return out
 
 
