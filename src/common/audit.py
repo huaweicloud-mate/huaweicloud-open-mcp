@@ -70,8 +70,6 @@ def _audit_write(host: Any, tool: str, input_args: Mapping[str, Any],
         return
     sink.record(build_audit_event(tool, input_args, result))
 
-logger = logging.getLogger("common.audit")
-
 
 class AuditSink(Protocol):
     def record(self, event: Mapping[str, Any]) -> None:

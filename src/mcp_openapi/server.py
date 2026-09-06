@@ -11,7 +11,7 @@ from mcp.server.mcpserver.context import Context
 from apie import mock as apie_mock
 from common.audit import sink_from_path
 from common.auth import credentials as cred_mod
-from common.elicit import PolicyConsent, ctx_elicit_fn
+from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
 from common.types import (
     ApiDetailResult,
     ApiListResult,
@@ -253,13 +253,9 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
             elicitation 时由服务端弹窗确认，未开启/客户端不支持时由调用方自行完成问询确认。
             未配置 policy 文件时本工具拒绝执行（不创建文件）。
             """
-            if ((action or "").strip().lower() in ("add", "remove")
-                    and (line or "").strip()):
-                blocked = await _consent(ctx).gate_change(action, line or "")
-                if blocked:
-                    return {"ok": False, "action": action, "reason": blocked}
-            return svc.manage_policy(action, line=line, scope=scope, ttl_seconds=ttl_seconds)
-
+            return await gated_manage_policy(
+                _consent(ctx), svc.manage_policy, action, line=line,
+                scope=scope, ttl_seconds=ttl_seconds)
 
 build_config = build_openapi_config
 build_app = build_openapi_app

@@ -18,9 +18,6 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
 
-import sqlparse
-from sqlparse import tokens as T
-
 # 结果行字符预算（与 execute.MAX_RESPONSE_CHARS 同口径）
 MAX_RESULT_CHARS = 200_000
 
@@ -46,21 +43,32 @@ class DataError(Exception):
         self.reason = reason
 
 
-def _is_blank(statement: sqlparse.sql.Statement) -> bool:
+def _import_sqlparse() -> Any:
+    """sqlparse 惰性加载（optional extra `[datafusion]` 成员）；未安装报 DataError。"""
+    try:
+        import sqlparse
+        from sqlparse import tokens as T
+
+        return sqlparse, T
+    except ImportError as e:
+        raise DataError(_INSTALL_HINT) from e
+
+
+def _is_blank(statement: Any, tokens: Any) -> bool:
     """仅由空白/分号构成的语句视为空（sqlparse 会把裸 ';' 切成独立 statement）。"""
     return all(
-        tok.is_whitespace or tok.ttype in (T.Punctuation, T.Whitespace)
+        tok.is_whitespace or tok.ttype in (tokens.Punctuation, tokens.Whitespace)
         for tok in statement.tokens
     )
 
 
-def _first_keyword(statement: sqlparse.sql.Statement) -> str:
+def _first_keyword(statement: Any, tokens: Any) -> str:
     """首个非注释/非空白 token 的归一化关键字（大写）。
 
     前导注释在 sqlparse 中可能 ttype=None（未分型），按文本形态识别跳过。
     """
     for tok in statement.tokens:
-        if tok.is_whitespace or tok.ttype in T.Comment:
+        if tok.is_whitespace or tok.ttype in tokens.Comment:
             continue
         text = tok.normalized
         if tok.ttype is None and text.lstrip().startswith(("--", "/*", "#")):
@@ -73,19 +81,21 @@ def assert_readonly_sql(sql: str) -> None:
     """只读守卫：单语句 + 首关键字白名单 + 拒 SELECT INTO（含 CTE 内嵌）。
 
     任何违规抛 DataError。字符串/注释内的分号不构成语句边界（sqlparse 语义）。
+    sqlparse 与 datafusion 同属 optional extra，此处惰性加载（base 安装可导入本模块）。
     """
-    statements = [st for st in sqlparse.parse(sql or "") if not _is_blank(st)]
+    sqlparse, tokens = _import_sqlparse()
+    statements = [st for st in sqlparse.parse(sql or "") if not _is_blank(st, tokens)]
     if not statements:
         raise DataError("SQL 为空：请提供一条只读查询（SELECT/WITH/EXPLAIN/SHOW/DESCRIBE）")
     if len(statements) > 1:
         raise DataError("仅允许单条 SQL 语句（检测到多语句）")
     statement = statements[0]
-    keyword = _first_keyword(statement)
+    keyword = _first_keyword(statement, tokens)
     if keyword not in _READONLY_KEYWORDS:
         raise DataError(
             f"仅允许只读查询（SELECT/WITH/EXPLAIN/SHOW/DESCRIBE），语句以 {keyword!r} 开头")
     for tok in statement.flatten():
-        if tok.ttype == T.Keyword and tok.normalized.upper() == "INTO":
+        if tok.ttype == tokens.Keyword and tok.normalized.upper() == "INTO":
             raise DataError("SELECT INTO / 内嵌 INTO 语句不支持（只读口径）")
 
 
@@ -208,7 +218,7 @@ def run_query(tables: Mapping[str, Mapping[str, Any]] | None, sql: str,
     max_rows：None→默认 100，钳位 [1, 1000]。
     """
     try:
-        from datafusion import SessionContext  # noqa: F401
+        from datafusion import SessionContext
     except ImportError as e:
         raise DataError(_INSTALL_HINT) from e
 
@@ -298,7 +308,7 @@ def run_transform(tables: Mapping[str, Mapping[str, Any]] | None, sql: str,
     任何失败抛 DataError(reason)。
     """
     try:
-        from datafusion import SessionContext  # noqa: F401
+        from datafusion import SessionContext
     except ImportError as e:
         raise DataError(_INSTALL_HINT) from e
 

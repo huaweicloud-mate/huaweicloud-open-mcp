@@ -77,7 +77,7 @@
 | `src/mcp_discover/` | discover 模式（catalog.py 目录源 + config.py + sdk.py SessionClient 协议 + manager.py session 注册表 + service.py + server.py） | — | — |
 | `src/mcp_data/` | data 模式（engine.py DataFusion 惰性封装：表注册/只读守卫/规范化/双重截断 + service.py DataService audit 信封 + server.py 装配；datafusion 为 optional extra `[datafusion]`，未安装返回友好错误） | — | — |
 | `src/common/types.py` | 跨模块共享类型：ClientResponse/ExecuteResult/ToolError + 六工具结果信封 + MCP discover 结果信封（McpServerItem/*Result）+ QueryDataResult/QueryColumn（data 工具信封） | — | — |
-| `src/common/elicit.py` | PolicyConsent：safety policy 变更的 elicitation 交互语义（offer_grant 拒绝提议授予（粗规则存在时四选一 GrantChoiceConfirm：api=最小 / api_session=最小 session 档 / product=产品级 session 档 / none） / gate_change 变更确认门 / fallback_hint 未问询路径拒绝兜底指引 / parse_elicit_mode / PolicyChangeConfirm+GrantChoiceConfirm 表单 schema / ElicitFn adapter 契约 + ctx_elicit_fn MCP Context 归一化 adapter（confirm/choice 独立归一）） | — | — |
+| `src/common/elicit.py` | PolicyConsent：safety policy 变更的 elicitation 交互语义（offer_grant 拒绝提议授予（粗规则存在时四选一 GrantChoiceConfirm：api=最小 / api_session=最小 session 档 / product=产品级 session 档 / none） / gate_change 变更确认门 / gated_manage_policy 两模式共享的 manage_policy 工具体（确认门+service 委派，docstring 留各 registrar） / fallback_hint 未问询路径拒绝兜底指引 / parse_elicit_mode / PolicyChangeConfirm+GrantChoiceConfirm 表单 schema / ElicitFn adapter 契约 + ctx_elicit_fn MCP Context 归一化 adapter（confirm/choice 独立归一）） | — | — |
 | `src/common/paths.py` | 项目根路径解析（统一 project_root） | — | — |
 | `src/common/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
 | `src/huaweicloud_open_mcp/` | server 入口包：`cli.py` CLI（按 --mode 分发 openapi/discover 两条路径）+ `__main__.py`（`python -m`）+ `__version__`（发布版本单一真值源，hatch dynamic version 读取） | — | — |

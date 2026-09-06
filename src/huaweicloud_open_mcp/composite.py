@@ -75,8 +75,8 @@ def build_composite_app(modes: list[str], args: argparse.Namespace, *,
     shared_sink = sink_from_path(audit_file)
 
     svc: ToolService | None = None
-    ds: DiscoverService | None = None
-    das: DataService | None = None
+    discover_svc: DiscoverService | None = None
+    data_svc: DataService | None = None
 
     if "openapi" in modes:
         if openapi_service is not None:
@@ -91,22 +91,22 @@ def build_composite_app(modes: list[str], args: argparse.Namespace, *,
             svc = ToolService(openapi_cfg)
     if "discover" in modes:
         if discover_service is not None:
-            ds = discover_service
+            discover_svc = discover_service
         else:
             discover_cfg = build_discover_config(args)
             if shared_store is not None:
                 discover_cfg.policy_store = shared_store
                 discover_cfg.policy_rules = shared_store.rules()
             # discover 模式不写审计（DiscoverConfig 无 audit_sink，口径与单模式一致）
-            ds = DiscoverService(discover_cfg)
+            discover_svc = DiscoverService(discover_cfg)
     if "data" in modes:
         if data_service is not None:
-            das = data_service
+            data_svc = data_service
         else:
             data_cfg = build_data_config(args)
             if shared_sink is not None:
                 data_cfg.audit_sink = shared_sink
-            das = DataService(data_cfg)
+            data_svc = DataService(data_cfg)
 
     gate = svc.config.gate if svc is not None else None
     hints = svc.config.hints if svc is not None else None
@@ -116,9 +116,9 @@ def build_composite_app(modes: list[str], args: argparse.Namespace, *,
 
     if svc is not None:
         register_openapi_tools(server, svc, consent_mode=elicit_mode)
-    if ds is not None:
-        register_discover_tools(server, ds, consent_mode=elicit_mode,
+    if discover_svc is not None:
+        register_discover_tools(server, discover_svc, consent_mode=elicit_mode,
                                 include_manage_policy=svc is None)
-    if das is not None:
-        register_data_tools(server, das)
+    if data_svc is not None:
+        register_data_tools(server, data_svc)
     return server

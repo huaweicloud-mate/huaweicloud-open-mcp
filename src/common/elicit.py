@@ -301,3 +301,24 @@ def ctx_elicit_fn(ctx: ElicitContext) -> ElicitFn:
         return ElicitOutcome(action="cancel")
 
     return elicit
+
+
+async def gated_manage_policy(
+        consent: "PolicyConsent", manage: Callable[..., Any],
+        action: str, line: str | None = None,
+        scope: str | None = None,
+        ttl_seconds: int | None = None) -> dict[str, Any]:
+    """manage_policy 工具体（openapi/discover 两模式共享）：add/remove 先过确认门。
+
+    consent 为调用方按各自 service 构造的 PolicyConsent；manage 为其
+    svc.manage_policy / ds.manage_policy 可调用。其余行为（热更新、scope
+    语义）内聚 PolicyStore，由 manage 委派。
+    """
+    if ((action or "").strip().lower() in ("add", "remove")
+            and (line or "").strip()):
+        blocked = await consent.gate_change(action, line or "")
+        if blocked:
+            return {"ok": False, "action": action, "reason": blocked}
+    result: dict[str, Any] = manage(action, line=line, scope=scope,
+                                    ttl_seconds=ttl_seconds)
+    return result

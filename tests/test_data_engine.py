@@ -4,6 +4,9 @@
 """
 
 import json
+import os
+import subprocess
+import sys
 from datetime import date, datetime, time
 from decimal import Decimal
 
@@ -413,3 +416,31 @@ def test_run_transform_json_array_source_to_parquet(tmp_path):
     assert out["rows"] == 4
     import pyarrow.parquet as pq
     assert pq.read_table(out_path).num_rows == 4
+
+
+# ---------- base 安装模拟（optional extra 惰性口径，评审修复） ----------
+
+def test_engine_imports_without_sqlparse_installed():
+    """base 安装下 engine 模块必须可导入（sqlparse 仅在守卫内惰性加载）。"""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = ("import sys; sys.modules['sqlparse'] = None; "
+            "import mcp_data.engine; print('ok')")
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                          text=True, cwd=repo,
+                          env={**os.environ, "PYTHONPATH": os.path.join(repo, "src")})
+    assert proc.returncode == 0, proc.stderr
+    assert "ok" in proc.stdout
+
+
+def test_uninstalled_sqlparse_friendly_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sqlparse", None)
+    with pytest.raises(DataError) as exc:
+        data_engine.run_query({"t": {"data": [{"a": 1}]}}, "SELECT a FROM t")
+    assert "huaweicloud-open-mcp[datafusion]" in exc.value.reason
+
+
+def test_uninstalled_sqlparse_guard_direct(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sqlparse", None)
+    with pytest.raises(DataError) as exc:
+        assert_readonly_sql("SELECT 1")
+    assert "huaweicloud-open-mcp[datafusion]" in exc.value.reason

@@ -9,7 +9,7 @@ from typing import Any, cast
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
 
-from common.elicit import PolicyConsent, ctx_elicit_fn
+from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
 from common.types import (
     McpCallResult,
     McpConnectResult,
@@ -250,9 +250,6 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
             elicitation 时由服务端弹窗确认，未开启/客户端不支持时由调用方自行完成问询确认。
             未配置 policy 文件时本工具拒绝执行（不创建文件）。
             """
-            if ((action or "").strip().lower() in ("add", "remove")
-                    and (line or "").strip()):
-                blocked = await _consent(ctx).gate_change(action, line or "")
-                if blocked:
-                    return {"ok": False, "action": action, "reason": blocked}
-            return ds.manage_policy(action, line=line, scope=scope, ttl_seconds=ttl_seconds)
+            return await gated_manage_policy(
+                _consent(ctx), ds.manage_policy, action, line=line,
+                scope=scope, ttl_seconds=ttl_seconds)
