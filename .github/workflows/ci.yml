@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
 
 concurrency:
@@ -34,12 +34,13 @@ jobs:
         run: uv run mypy src
 
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
@@ -53,12 +54,13 @@ jobs:
         run: uv sync --locked
 
       - name: Fetch Swagger 2.0 schema (best-effort)
-        run: |
-          curl -fsSL --max-time 60 -o /tmp/swagger2_schema.json \
-            https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json \
-            || echo "::warning::Swagger 2.0 schema 下载失败，相关校验用例将跳过"
+        env:
+          SCHEMA_PATH: ${{ runner.temp }}/swagger2_schema.json
+        run: curl -fsSL --max-time 60 -o "$SCHEMA_PATH" https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json || echo "::warning::Swagger 2.0 schema 下载失败，相关校验用例将跳过"
 
       - name: Run tests
+        env:
+          SWAGGER2_SCHEMA: ${{ runner.temp }}/swagger2_schema.json
         run: uv run pytest --tb=short -ra
 
   build:

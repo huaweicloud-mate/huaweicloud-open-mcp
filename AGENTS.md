@@ -176,7 +176,7 @@ scripts/publish <test|prod> --skip-build  # 复用已有 dist/ 产物重发
 
 GitHub Actions CI/CD（`.github/workflows/`）：
 
-- `ci.yml`（push main / PR；同 ref 并发取消旧跑，`permissions: contents: read`）：lint（ruff + mypy 门禁）+ test 矩阵（Python 3.10–3.13；Swagger 2.0 schema best-effort 下载到 `/tmp/swagger2_schema.json`，失败仅相关用例 skip）+ build（`uv build` + `uvx twine check` + 全新 venv 装 wheel 冒烟 `huaweicloud-open-mcp --help` + dist 产物上传）。测试默认档即 `uv run pytest`（e2e 由 conftest 跳过；`test_execute_mock.py` 外呼 API Explorer mock 端点，托管 runner 可达）。
+- `ci.yml`（push 任意分支 / PR；同 ref 并发取消旧跑，`permissions: contents: read`）：lint（ruff + mypy 门禁）+ test 矩阵（ubuntu/macos/windows × Python 3.10–3.13 共 12 job；Swagger 2.0 schema best-effort 下载到 runner.temp 并经 `SWAGGER2_SCHEMA` env 注入（conftest 已支持），失败仅相关用例 skip；schema/curl 步骤单行写法规避 pwsh 续行符差异）+ build（ubuntu-only：`uv build` + `uvx twine check` + 全新 venv 装 wheel 冒烟 `huaweicloud-open-mcp --help` + dist 产物上传）。测试默认档即 `uv run pytest`（e2e 由 conftest 跳过；`test_execute_mock.py` 外呼 API Explorer mock 端点，托管 runner 可达）。
 - `release.yml`（tag `v*` 推送 → 正式 PyPI + GitHub Release 附 dist；workflow_dispatch 手动选 `target=test|prod`，默认 test）：版本守卫（tag 触发时强制 `v{__version__} == tag`）→ 构建 + twine check → `uv publish --index <testpypi|pypi>`（token 取仓库 secrets `UV_PUBLISH_TOKEN_TEST`/`UV_PUBLISH_TOKEN_PROD`，与 `scripts/publish` 同名约定）→ tag 触发时 `softprops/action-gh-release`。CI 内无交互确认门（tag 推送即显式发布动作）。
 
 CLI 入口（`pyproject.toml` 注册 console scripts）：
