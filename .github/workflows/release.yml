@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "发布目标（test -> TestPyPI 试发验证；prod -> 正式 PyPI）"
+        type: choice
+        options: ["test", "prod"]
+        default: "test"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish (${{ github.event_name == 'push' && 'prod (tag)' || inputs.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET: ${{ github.event_name == 'push' && 'prod' || inputs.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      - name: Resolve version
+        id: version
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/huaweicloud_open_mcp/__init__.py)
+          if [[ -z "$version" ]]; then
+            echo "错误：无法从 src/huaweicloud_open_mcp/__init__.py 解析版本号" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "项目版本: huaweicloud-open-mcp $version"
+
+      - name: Guard tag matches version
+        if: github.event_name == 'push'
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          expected="v${{ steps.version.outputs.version }}"
+          if [[ "$tag" != "$expected" ]]; then
+            echo "错误：tag ($tag) 与 __version__ ($expected) 不匹配，请修正后重新打 tag" >&2
+            exit 1
+          fi
+
+      - name: Build distributions
+        run: |
+          rm -rf dist
+          uv build
+
+      - name: Twine check
+        run: uvx twine check dist/*
+
+      - name: Publish to TestPyPI
+        if: env.TARGET == 'test'
+        run: uv publish --index testpypi
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN_TEST }}
+
+      - name: Publish to PyPI
+        if: env.TARGET == 'prod'
+        run: uv publish --index pypi
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN_PROD }}
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (ruff + mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Ruff check
+        run: uv run ruff check src tests
+
+      - name: Mypy type check
+        run: uv run mypy src
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Fetch Swagger 2.0 schema (best-effort)
+        run: |
+          curl -fsSL --max-time 60 -o /tmp/swagger2_schema.json \
+            https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json \
+            || echo "::warning::Swagger 2.0 schema 下载失败，相关校验用例将跳过"
+
+      - name: Run tests
+        run: uv run pytest --tb=short -ra
+
+  build:
+    name: Build & smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      - name: Build distributions
+        run: |
+          rm -rf dist
+          uv build
+
+      - name: Twine check
+        run: uvx twine check dist/*
+
+      - name: Smoke test (fresh venv, wheel install, CLI help)
+        run: |
+          uv venv /tmp/smoke-venv
+          uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
+          /tmp/smoke-venv/bin/huaweicloud-open-mcp --help
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
