@@ -13,7 +13,7 @@
 **Open Connect. Explore What's Next.**
 **开放连接，探索下一个可能**
 
-一个开放的本地 stdio [Model Context Protocol](https://modelcontextprotocol.io) 网关，把代码 Agent —— opencode、Codex、Cursor 以及任何支持 MCP 的客户端 —— 以自然语言连接到华为云。无需逐服务手写封装：Agent 逐步探索全量目录（300+ 产品、17000+ API），收窄到一次具体调用并执行，请求在本地完成签名。你的 AK/SK 永不出本机。
+一个开放的本地 [Model Context Protocol](https://modelcontextprotocol.io) 网关，把 code agent —— opencode、Codex、Cursor 以及任何支持 MCP 的客户端 —— 以自然语言连接到华为云。无需逐服务手写封装：Agent 逐步探索全量目录（300+ 产品、17000+ API），收窄到一次具体调用并执行，请求在本地完成签名。这是面向个人的本地化部署方案：网关完全运行在你自己的机器上——AK/SK 永不出本机。
 
 三种模式经 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘——本地计算工具，不需要凭证、不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合 / transform_data 整形落盘，仅聚合结果或产物元数据进入模型上下文。
 
@@ -30,9 +30,18 @@
 ### 前置要求
 
 - Python 3.10+，[uv](https://docs.astral.sh/uv/) 在 PATH 上（或 `pip`）
-- 一个代码 Agent：[opencode](https://opencode.ai) 或 [Codex](https://developers.openai.com/codex/) —— 任何支持 MCP 的客户端均可
+- 一个 code agent：[opencode](https://opencode.ai) 或 [Codex](https://developers.openai.com/codex/) —— 任何支持 MCP 的客户端均可
 - 一对华为云 AK/SK，来自**最小权限 IAM 子用户**（推荐：仅授予计划查询所需的只读权限）
 - 可访问 `apiexplorer.cn-north-4.myhuaweicloud.com` 的网络
+
+### 安装
+
+快速开始经 [uvx](https://docs.astral.sh/uv/) 运行网关——无需安装步骤：首次调用自动拉取包。偏好持久安装时：
+
+```bash
+pip install huaweicloud-open-mcp                  # 或 uv tool install / pipx install——装完在步骤 3 用 huaweicloud-open-mcp 替换 uvx huaweicloud-open-mcp
+pip install "huaweicloud-open-mcp[datafusion]"    # 可选 extra：data 模式 SQL 引擎
+```
 
 ### 步骤 1：提供凭证
 
@@ -44,6 +53,11 @@
 [basic]
 ak = your-access-key-id
 sk = your-secret-access-key
+
+# 可选 —— 按需取消注释：
+# security_token = <temporary-security-token>
+# project_id = <project-id>
+# domain_id = <domain-id>
 ```
 
 可选键（按需取消注释）：`security_token`（临时凭证）、`project_id`（缺省自动解析）、`domain_id`（全局级服务，完整支持开发中）。妥善保管该文件 —— 里面有你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。server 启动时读取该文件；日志行 `server start: ... credentials=configured`（见 `--log-file`）可确认已加载。
@@ -63,7 +77,7 @@ sk = your-secret-access-key
 
 每条规则形如 `product:apiPattern=allow|deny` —— fnmatch 风格通配、大小写不敏感、`#` 开头为注释。规则自上而下评估、首个命中生效：本文件允许所有名字含 `List` 的 ECS API，其余全部拒绝。客户端需要该文件的**绝对路径** —— macOS/Linux 如 `/home/you/hwc-policy.json`，Windows 如 `C:\Users\you\hwc-policy.json` —— 因为客户端用自己的工作目录拉起 server。
 
-### 步骤 3：将网关注册到你的代码 Agent
+### 步骤 3：将网关注册到你的 code agent
 
 **opencode** —— 添加到 `opencode.json`（项目级，所有 OS 通用）或全局配置（macOS/Linux：`~/.config/opencode/opencode.json`；Windows 建议用项目级文件，或经 `OPENCODE_CONFIG` 环境变量指向绝对路径）：
 

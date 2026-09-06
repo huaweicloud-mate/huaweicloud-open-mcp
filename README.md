@@ -12,7 +12,7 @@
 
 **Open Connect. Explore What's Next.**
 
-One open, local stdio [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents — opencode, Codex, Cursor, and any other MCP-capable client — to Huawei Cloud in natural language. No per-service wrappers: the agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrowing it down to one concrete API call, executed with locally signed requests. Your AK/SK never leave your machine.
+One open, local [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents — opencode, Codex, Cursor, and any other MCP-capable client — to Huawei Cloud in natural language. No per-service wrappers: the agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrowing it down to one concrete API call, executed with locally signed requests. This is a personal, local deployment: the gateway runs entirely on your machine — your AK/SK never leave it.
 
 Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `openapi` (default) talks to Huawei Cloud OpenAPI, `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet), and `data` runs read-only SQL analytics and transformations over inline/local data with DataFusion — local compute tools that need no credentials and are not governed by the safety policy. The typical closed loop (`openapi,data`): pull a large dataset via `execute_api`, save it to a file, aggregate with `query_data` or reshape it to a new dataset with `transform_data` — only aggregated results or artifact metadata enter the model context.
 
@@ -33,6 +33,15 @@ Connect once — your agent explores the rest.
 - A Huawei Cloud Access Key (AK/SK) from a **minimal-privilege IAM sub-user** (recommended: read-only permissions for what you plan to query)
 - Network access to `apiexplorer.cn-north-4.myhuaweicloud.com`
 
+### Install
+
+The quick start runs the gateway via [uvx](https://docs.astral.sh/uv/) — no install step: the first invocation fetches the package automatically. For a persistent install:
+
+```bash
+pip install huaweicloud-open-mcp                  # or: uv tool install / pipx install — then replace `uvx huaweicloud-open-mcp` with `huaweicloud-open-mcp` in Step 3
+pip install "huaweicloud-open-mcp[datafusion]"    # optional extra: data-mode SQL engine
+```
+
 ### Step 1 — Provide credentials
 
 The gateway reads your AK/SK from `~/.huaweicloud/credentials` (INI format, `[basic]` section) — on Windows that is `%USERPROFILE%\.huaweicloud\credentials`. See [Credentials](#credentials) for the alternative inline-environment-variable way.
@@ -43,6 +52,11 @@ Create a `.huaweicloud` directory in your home directory, then a `credentials` f
 [basic]
 ak = your-access-key-id
 sk = your-secret-access-key
+
+# optional — uncomment as needed:
+# security_token = <temporary-security-token>
+# project_id = <project-id>
+# domain_id = <domain-id>
 ```
 
 Optional keys (uncomment as needed): `security_token` (temporary credentials), `project_id` (auto-resolved when unset), `domain_id` (global-level services; full support in progress). Keep the file private — it holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default. The server reads this file at startup; the log line `server start: ... credentials=configured` (see `--log-file`) confirms it was picked up.
