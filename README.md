@@ -28,10 +28,25 @@ Connect once — your agent explores the rest.
 
 ### Prerequisites
 
-- Python 3.10+ and [uv](https://docs.astral.sh/uv/) on your PATH (or `pip`)
+- Python 3.10+ and [uv](https://docs.astral.sh/uv/) on your PATH (or `pip`) — see [Compatibility](#compatibility)
 - A code agent: [opencode](https://opencode.ai) or [Codex](https://developers.openai.com/codex/) — any MCP-capable client works
 - A Huawei Cloud Access Key (AK/SK) from a **minimal-privilege IAM sub-user** (recommended: read-only permissions for what you plan to query)
 - Network access to `apiexplorer.cn-north-4.myhuaweicloud.com`
+
+### Compatibility
+
+**Supported** — per package metadata:
+
+- **OS**: Windows, macOS, Linux — the base package is pure Python, so any platform that runs Python works; the optional `[datafusion]` extra (data mode) ships native wheels for Windows x86_64, macOS x86_64/arm64, and Linux x86_64/aarch64 (manylinux)
+- **Python**: 3.10+ (`requires-python = ">=3.10"`); the `[datafusion]` extra covers the same range
+
+**Tested** — full unit + integration suite (`uv run pytest`, e2e excluded; data-mode tests included via the dev dependency group), Linux x86_64:
+
+| Python | 3.10 | 3.11 | 3.12 | 3.13 |
+|---|---|---|---|---|
+| Full suite (incl. data mode) | pass | pass | pass | pass |
+
+Windows and macOS are expected to work — dependency resolution for those platforms is verified and the code has no OS-specific branches — but they are not machine-tested; there is no CI matrix yet.
 
 ### Install
 

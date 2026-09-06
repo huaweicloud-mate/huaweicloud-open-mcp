@@ -4,6 +4,8 @@
 调用纯函数层（tools.metadata / tools.execute）与执行客户端。
 """
 
+from __future__ import annotations
+
 import functools
 import inspect
 import logging

@@ -1,8 +1,8 @@
 """跨模块共享的类型定义。"""
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
-from typing_extensions import NotRequired
+from typing_extensions import NotRequired, TypedDict
 
 
 class ClientResponse(TypedDict):

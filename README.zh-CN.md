@@ -29,10 +29,25 @@
 
 ### 前置要求
 
-- Python 3.10+，[uv](https://docs.astral.sh/uv/) 在 PATH 上（或 `pip`）
+- Python 3.10+，[uv](https://docs.astral.sh/uv/) 在 PATH 上（或 `pip`）—— 见[兼容性](#兼容性)
 - 一个 code agent：[opencode](https://opencode.ai) 或 [Codex](https://developers.openai.com/codex/) —— 任何支持 MCP 的客户端均可
 - 一对华为云 AK/SK，来自**最小权限 IAM 子用户**（推荐：仅授予计划查询所需的只读权限）
 - 可访问 `apiexplorer.cn-north-4.myhuaweicloud.com` 的网络
+
+### 兼容性
+
+**支持范围** —— 依包元数据：
+
+- **操作系统**：Windows、macOS、Linux —— 基础包为纯 Python，任何能运行 Python 的平台均可；可选 `[datafusion]` extra（data 模式）提供 Windows x86_64、macOS x86_64/arm64、Linux x86_64/aarch64（manylinux）原生 wheel
+- **Python**：3.10+（`requires-python = ">=3.10"`）；`[datafusion]` extra 覆盖同一范围
+
+**实测** —— 完整单测 + 集成套件（`uv run pytest`，e2e 默认排除；经 dev 依赖组包含 data 模式测试），Linux x86_64：
+
+| Python | 3.10 | 3.11 | 3.12 | 3.13 |
+|---|---|---|---|---|
+| 完整套件（含 data 模式） | 通过 | 通过 | 通过 | 通过 |
+
+Windows 与 macOS 预期可用——两平台的依赖解析已验证、代码无 OS 特定分支——但未经实机测试；目前尚无 CI 矩阵。
 
 ### 安装
 
