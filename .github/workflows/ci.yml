@@ -54,9 +54,8 @@ jobs:
         run: uv sync --locked
 
       - name: Fetch Swagger 2.0 schema (best-effort)
-        env:
-          SCHEMA_PATH: ${{ runner.temp }}/swagger2_schema.json
-        run: curl -fsSL --max-time 60 -o "$SCHEMA_PATH" https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json || echo "::warning::Swagger 2.0 schema 下载失败，相关校验用例将跳过"
+        shell: bash
+        run: curl -fsSL --max-time 60 -o "$RUNNER_TEMP/swagger2_schema.json" https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/_archive_/schemas/v2.0/schema.json || echo "::warning::Swagger 2.0 schema 下载失败，相关校验用例将跳过"
 
       - name: Run tests
         env:
