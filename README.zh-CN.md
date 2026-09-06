@@ -10,7 +10,7 @@
 
 一个开放的本地 stdio [Model Context Protocol](https://modelcontextprotocol.io) 网关，把代码 Agent —— opencode、Codex、Cursor 以及任何支持 MCP 的客户端 —— 以自然语言连接到华为云。无需逐服务手写封装：Agent 逐步探索全量目录（300+ 产品、17000+ API），收窄到一次具体调用并执行，请求在本地完成签名。你的 AK/SK 永不出本机。
 
-三种模式经 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析——本地计算工具，不需要凭证、不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合，仅聚合结果进入模型上下文。
+三种模式经 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘——本地计算工具，不需要凭证、不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合 / transform_data 整形落盘，仅聚合结果或产物元数据进入模型上下文。
 
 ## 工作原理
 
@@ -192,13 +192,14 @@ Agent 走渐进式工作流 —— `list_apis(ECS)` 找到 API、`get_api` 读�
 
 ## 工具（data 模式）
 
-本地数据分析，DataFusion 引擎（可选依赖：`pip install "huaweicloud-open-mcp[datafusion]"`；未安装时工具返回安装指引）。
+本地数据分析与转换，DataFusion 引擎（可选依赖：`pip install "huaweicloud-open-mcp[datafusion]"`；未安装时工具返回安装指引）。
 
 | 工具 | 职责 |
 | --- | --- |
-| `query_data` | 对命名表执行只读 SQL：`{"表名": {"data": [对象数组]}}`（inline）或 `{"表名": {"path": "文件"}}`（本地 csv/parquet/jsonl，按扩展名自动识别）；返回列 schema + JSON-safe 行，行数与字符预算双重截断 |
+| `query_data` | 对命名表执行只读 SQL：`{"表名": {"data": [对象数组]}}`（inline）或 `{"表名": {"path": "文件"}}`（本地 csv/parquet/jsonl/json 数组，按扩展名自动识别）；返回列 schema + JSON-safe 行，行数与字符预算双重截断 |
+| `transform_data` | 把只读 SQL 变换结果落盘为新数据文件：`out = {"path", "format"?}`（csv/parquet/jsonl），原子写盘，默认拒绝覆盖（`overwrite=true` 显式放行）；返回产物元数据（path/format/rows/bytes）+ 小预览 |
 
-严格只读：仅 `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`DESCRIBE` 通过守卫，多语句与写型语句（`INSERT`/`CREATE`/`COPY TO`/…）一律拒绝。`query_data` 不访问云、不需要凭证、**不受** safety policy 约束——仅应在信任该 Agent 会话读取本地文件的部署中启用。
+严格只读 SQL：仅 `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`DESCRIBE` 通过守卫，多语句与写型语句（`INSERT`/`CREATE`/`COPY TO`/…）一律拒绝——`transform_data` 的写盘动作由引擎在守卫**之后**经结构化 `out` 参数施加（审计 NDJSON 记录写路径），SQL 无写语法可达。两工具均不访问云、不需要凭证、**不受** safety policy 约束——仅应在信任该 Agent 会话读写本地文件的部署中启用。
 
 ## Safety policy
 

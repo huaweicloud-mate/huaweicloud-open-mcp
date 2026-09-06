@@ -1,6 +1,6 @@
 [project]
 name = "huaweicloud-open-mcp"
-description = "华为云 MCP server：本地 stdio 通用网关，openapi 模式 7 工具直连华为云全量 OpenAPI，discover 模式 8 工具发现连接云端 MCP server，data 模式 1 工具（DataFusion 只读 SQL 本地分析）"
+description = "华为云 MCP server：本地 stdio 通用网关，openapi 模式 7 工具直连华为云全量 OpenAPI，discover 模式 8 工具发现连接云端 MCP server，data 模式 2 工具（DataFusion 只读 SQL 分析与转换落盘）"
 readme = "README.md"
 requires-python = ">=3.10"
 dynamic = ["version"]
@@ -95,5 +95,5 @@ disallow_untyped_defs = true
 exclude = ["tests/"]
 
 [[tool.mypy.overrides]]
-module = ["jsonschema", "yaml", "tabulate", "mcp.*", "sqlparse", "pyarrow"]
+module = ["jsonschema", "yaml", "tabulate", "mcp.*", "sqlparse", "pyarrow", "pyarrow.*"]
 ignore_missing_imports = true

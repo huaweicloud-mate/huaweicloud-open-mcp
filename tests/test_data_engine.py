@@ -3,6 +3,7 @@
 独立真值：手写字面量矩阵。不联网、不依赖 datafusion 运行时（守卫用 sqlparse）。
 """
 
+import json
 from datetime import date, datetime, time
 from decimal import Decimal
 
@@ -232,12 +233,35 @@ def test_run_query_parquet_file(tmp_path):
     assert out["rows"] == [{"m": 2}]
 
 
-def test_run_query_json_array_file_rejected(tmp_path):
+def test_run_query_json_array_file(tmp_path):
+    """JSON 数组文件直接作为表源（API 结果落盘 → 分析闭环）。"""
     p = tmp_path / "t.json"
-    p.write_text('[{"a": 1}]', encoding="utf-8")
+    p.write_text('[{"a": 1}, {"a": 2}]', encoding="utf-8")
+    out = data_engine.run_query({"t": {"path": str(p)}}, "SELECT SUM(a) AS s FROM t")
+    assert out["rows"] == [{"s": 3}]
+
+
+def test_run_query_json_array_empty_rejected(tmp_path):
+    p = tmp_path / "t.json"
+    p.write_text("[]", encoding="utf-8")
+    with pytest.raises(DataError):
+        data_engine.run_query({"t": {"path": str(p)}}, "SELECT * FROM t")
+
+
+def test_run_query_json_array_non_dicts_rejected(tmp_path):
+    p = tmp_path / "t.json"
+    p.write_text('[1, 2, 3]', encoding="utf-8")
+    with pytest.raises(DataError):
+        data_engine.run_query({"t": {"path": str(p)}}, "SELECT * FROM t")
+
+
+def test_run_query_json_ndjson_content_rejected_with_hint(tmp_path):
+    """扩展名 .json 但内容是 NDJSON：报错并指引改扩展名/显式 format。"""
+    p = tmp_path / "t.json"
+    p.write_text('{"a": 1}\n{"a": 2}\n', encoding="utf-8")
     with pytest.raises(DataError) as exc:
         data_engine.run_query({"t": {"path": str(p)}}, "SELECT * FROM t")
-    assert "jsonl" in exc.value.reason or "ndjson" in exc.value.reason
+    assert "jsonl" in exc.value.reason
 
 
 def test_run_query_missing_file():
@@ -268,3 +292,124 @@ def test_run_query_empty_inline_data():
 def test_run_query_inline_rows_not_dicts():
     with pytest.raises(DataError):
         data_engine.run_query({"t": {"data": [1, 2]}}, "SELECT * FROM t")
+
+
+# ---------- run_transform：转换落盘（切片 1） ----------
+
+_TRANSFORM_ROWS = [{"g": "a", "v": 1}, {"g": "b", "v": 2}, {"g": "a", "v": 3}]
+_TRANSFORM_TABLES = {"t": {"data": _TRANSFORM_ROWS}}
+
+
+def test_run_transform_csv_roundtrip_independent_truth(tmp_path):
+    out_path = tmp_path / "out.csv"
+    out = data_engine.run_transform(_TRANSFORM_TABLES,
+                                    "SELECT g, v FROM t WHERE v >= 2 ORDER BY v",
+                                    {"path": str(out_path)})
+    assert out["path"] == str(out_path) and out["format"] == "csv"
+    assert out["rows"] == 2
+    assert out["columns"] == [{"name": "g", "type": "string"}, {"name": "v", "type": "int64"}]
+    assert out["preview"] == [{"g": "b", "v": 2}, {"g": "a", "v": 3}]
+    text = out_path.read_text(encoding="utf-8")
+    assert text.splitlines()[0] == "g,v"          # 独立真值：表头
+    assert sorted(text.splitlines()[1:]) == ["a,3", "b,2"]
+    assert out["bytes"] == out_path.stat().st_size
+    assert not (tmp_path / "out.csv.tmp-part").exists()
+
+
+def test_run_transform_parquet_roundtrip(tmp_path):
+    import pyarrow.parquet as pq
+    out_path = tmp_path / "out.parquet"
+    out = data_engine.run_transform(_TRANSFORM_TABLES,
+                                    "SELECT g, SUM(v) AS s FROM t GROUP BY g ORDER BY g",
+                                    {"path": str(out_path)})
+    assert out["rows"] == 2
+    table = pq.read_table(out_path)
+    assert table.to_pylist() == [{"g": "a", "s": 4}, {"g": "b", "s": 2}]
+
+
+def test_run_transform_jsonl_roundtrip(tmp_path):
+    out_path = tmp_path / "out.jsonl"
+    data_engine.run_transform(_TRANSFORM_TABLES, "SELECT * FROM t", {"path": str(out_path)})
+    lines = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines()]
+    assert sorted(lines, key=lambda r: r["v"]) == _TRANSFORM_ROWS
+
+
+def test_run_transform_explicit_format_override(tmp_path):
+    out_path = tmp_path / "out.dat"
+    out = data_engine.run_transform(_TRANSFORM_TABLES, "SELECT * FROM t",
+                                    {"path": str(out_path), "format": "csv"})
+    assert out["format"] == "csv"
+    assert out_path.read_text(encoding="utf-8").splitlines()[0] == "g,v"
+
+
+def test_run_transform_unknown_extension_rejected(tmp_path):
+    with pytest.raises(DataError):
+        data_engine.run_transform(_TRANSFORM_TABLES, "SELECT * FROM t",
+                                  {"path": str(tmp_path / "out.xyz")})
+
+
+def test_run_transform_default_refuses_overwrite(tmp_path):
+    out_path = tmp_path / "out.csv"
+    out_path.write_text("sentinel", encoding="utf-8")
+    with pytest.raises(DataError) as exc:
+        data_engine.run_transform(_TRANSFORM_TABLES, "SELECT * FROM t",
+                                  {"path": str(out_path)})
+    assert "overwrite" in exc.value.reason
+    assert out_path.read_text(encoding="utf-8") == "sentinel"   # 原文件未动
+
+
+def test_run_transform_explicit_overwrite(tmp_path):
+    out_path = tmp_path / "out.csv"
+    out_path.write_text("sentinel", encoding="utf-8")
+    out = data_engine.run_transform(_TRANSFORM_TABLES, "SELECT * FROM t",
+                                    {"path": str(out_path)}, overwrite=True)
+    assert out["rows"] == 3
+    assert "sentinel" not in out_path.read_text(encoding="utf-8")
+
+
+def test_run_transform_empty_result(tmp_path):
+    out_path = tmp_path / "out.csv"
+    out = data_engine.run_transform(_TRANSFORM_TABLES, "SELECT * FROM t WHERE v > 100",
+                                    {"path": str(out_path)})
+    assert out["rows"] == 0 and out["preview"] == []
+    assert out_path.read_text(encoding="utf-8").splitlines() == ["g,v"]
+
+
+def test_run_transform_preview_capped(tmp_path):
+    out = data_engine.run_transform({"t": {"data": [{"a": i} for i in range(50)]}},
+                                    "SELECT * FROM t", {"path": str(tmp_path / "o.parquet")},
+                                    preview_rows=5)
+    assert len(out["preview"]) == 5
+
+
+def test_run_transform_rejects_non_select(tmp_path):
+    with pytest.raises(DataError):
+        data_engine.run_transform(_TRANSFORM_TABLES, "COPY (SELECT 1) TO '/tmp/x.csv'",
+                                  {"path": str(tmp_path / "o.csv")})
+
+
+def test_run_transform_failure_leaves_no_tmp_part(tmp_path):
+    with pytest.raises(DataError):
+        data_engine.run_transform({"t": {"data": [{"a": "x"}]}},
+                                  "SELECT 1/0 FROM t", {"path": str(tmp_path / "o.csv")})
+    assert list(tmp_path.iterdir()) == []   # 无半截产物
+
+
+def test_run_transform_out_requires_path():
+    with pytest.raises(DataError):
+        data_engine.run_transform(_TRANSFORM_TABLES, "SELECT * FROM t", {})
+    with pytest.raises(DataError):
+        data_engine.run_transform(_TRANSFORM_TABLES, "SELECT * FROM t", None)
+
+
+def test_run_transform_json_array_source_to_parquet(tmp_path):
+    """API 结果 .json 落地 → 一步转 parquet 闭环。"""
+    src = tmp_path / "api_result.json"
+    src.write_text(json.dumps([{"id": i, "name": f"n{i}"} for i in range(4)]), encoding="utf-8")
+    out_path = tmp_path / "api_result.parquet"
+    out = data_engine.run_transform({"t": {"path": str(src)}},
+                                    "SELECT id, name FROM t ORDER BY id",
+                                    {"path": str(out_path)})
+    assert out["rows"] == 4
+    import pyarrow.parquet as pq
+    assert pq.read_table(out_path).num_rows == 4

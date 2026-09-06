@@ -37,7 +37,7 @@ def make_app(**config_kwargs):
 
 # ---------- 装配 ----------
 
-def test_data_app_registers_single_tool():
+def test_data_app_registers_two_tools():
     app = make_app()
 
     async def _run():
@@ -45,9 +45,9 @@ def test_data_app_registers_single_tool():
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 tools = await s.list_tools()
-                return [t.name for t in tools.tools]
+                return sorted(t.name for t in tools.tools)
 
-    assert run(_run()) == ["query_data"]
+    assert run(_run()) == ["query_data", "transform_data"]
 
 
 def test_data_app_instructions_mention_readonly_and_workflow():
@@ -124,3 +124,62 @@ def test_data_app_audit_records_tool_call(tmp_path):
     assert event["tool"] == "query_data"
     assert event["input"]["sql"] == "SELECT 1 AS one"
     assert event["ok"] is True
+
+
+def test_data_app_transform_roundtrip(tmp_path):
+    """inline 数据 → transform_data 落盘 csv → 独立回读验证。"""
+    app = make_app()
+    out_path = tmp_path / "out.csv"
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool("transform_data", {
+                    "sql": "SELECT g, COUNT(*) AS c FROM t GROUP BY g ORDER BY g",
+                    "tables": {"t": {"data": [
+                        {"g": "a", "v": 1}, {"g": "a", "v": 2}, {"g": "b", "v": 3}]}},
+                    "out": {"path": str(out_path)},
+                }))
+
+    out = run(_run())
+    assert out["ok"] is True
+    assert out["path"] == str(out_path) and out["format"] == "csv"
+    assert out["rows"] == 2
+    assert out["preview"] == [{"g": "a", "c": 2}, {"g": "b", "c": 1}]
+    assert out_path.read_text(encoding="utf-8").splitlines()[0] == "g,c"
+
+
+def test_data_app_transform_refuses_overwrite(tmp_path):
+    app = make_app()
+    out_path = tmp_path / "out.csv"
+    out_path.write_text("sentinel", encoding="utf-8")
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool("transform_data", {
+                    "sql": "SELECT 1 AS a", "out": {"path": str(out_path)}}))
+
+    out = run(_run())
+    assert out["ok"] is False and "overwrite" in out["reason"]
+    assert out_path.read_text(encoding="utf-8") == "sentinel"
+
+
+def test_data_app_transform_audit_records_out(tmp_path):
+    audit = tmp_path / "audit.jsonl"
+    app = make_app(audit_sink=NdjsonAuditSink(audit))
+    out_path = tmp_path / "o.jsonl"
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool("transform_data", {
+                    "sql": "SELECT 1 AS a", "out": {"path": str(out_path)}}))
+
+    run(_run())
+    event = json.loads(audit.read_text(encoding="utf-8").splitlines()[0])
+    assert event["tool"] == "transform_data" and event["ok"] is True
+    assert event["input"]["out"] == {"path": str(out_path)}

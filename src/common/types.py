@@ -165,6 +165,18 @@ class QueryDataResult(TypedDict):
     tables: list[str]
 
 
+class TransformDataResult(TypedDict):
+    """transform_data 的规范化输出：落盘产物元数据 + 小预览（大结果不进上下文）。"""
+
+    ok: Literal[True]
+    path: str
+    format: str
+    rows: int
+    bytes: int
+    columns: list[QueryColumn]
+    preview: list[dict[str, Any]]
+
+
 # ---------- MCP server 发现工具：内层实体 ----------
 
 class McpServerItem(TypedDict):

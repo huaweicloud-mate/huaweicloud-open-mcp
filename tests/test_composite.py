@@ -67,24 +67,24 @@ def test_openapi_data_toolset_with_dedup():
     app = build_composite_app(["openapi", "data"], make_args(),
                               openapi_service=make_openapi_service())
     names = list_tool_names(app)
-    assert set(names) == _OPENAPI_TOOLS | {"query_data"}
-    assert len(names) == 8  # manage_policy 去重：7 openapi + query_data
+    assert set(names) == _OPENAPI_TOOLS | {"query_data", "transform_data"}
+    assert len(names) == 9  # manage_policy 去重：7 openapi + 2 data 工具
     assert names.count("manage_policy") == 1
 
 
 def test_discover_data_toolset_with_dedup():
     app = build_composite_app(["discover", "data"], make_args())
     names = list_tool_names(app)
-    assert set(names) == _DISCOVER_TOOLS | {"query_data"}
-    assert len(names) == 9
+    assert set(names) == _DISCOVER_TOOLS | {"query_data", "transform_data"}
+    assert len(names) == 10
     assert names.count("manage_policy") == 1
 
 
 def test_all_three_modes_toolset():
     app = build_composite_app(["openapi", "discover", "data"], make_args())
     names = list_tool_names(app)
-    assert set(names) == _OPENAPI_TOOLS | _DISCOVER_TOOLS | {"query_data"}
-    assert len(names) == 15
+    assert set(names) == _OPENAPI_TOOLS | _DISCOVER_TOOLS | {"query_data", "transform_data"}
+    assert len(names) == 16
     assert names.count("manage_policy") == 1
 
 
