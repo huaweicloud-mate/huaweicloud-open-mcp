@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# 发布脚本：test/prod 双仓区分。
+# 用法：scripts/publish <test|prod> [--skip-build] [--yes]
+#   test -> uv publish --index testpypi（token：UV_PUBLISH_TOKEN_TEST）
+#   prod -> uv publish --index pypi（token：UV_PUBLISH_TOKEN_PROD，确认门，--yes 跳过）
+# 目标 URL 由 pyproject.toml [[tool.uv.index]] 具名 index 固化，token 严格按目标取用、无共享回退。
+set -euo pipefail
+
+usage() { echo "用法: $0 <test|prod> [--skip-build] [--yes]" >&2; exit 1; }
+
+target="${1:-}"
+case "$target" in
+  test|prod) ;;
+  *) usage ;;
+esac
+
+skip_build=false
+auto_yes=false
+for arg in "${@:2}"; do
+  case "$arg" in
+    --skip-build) skip_build=true ;;
+    --yes) auto_yes=true ;;
+    *) usage ;;
+  esac
+done
+
+version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/huaweicloud_open_mcp/__init__.py)
+if [[ -z "$version" ]]; then
+  echo "错误：无法从 src/huaweicloud_open_mcp/__init__.py 解析版本号" >&2
+  exit 1
+fi
+
+if [[ "$skip_build" == false ]]; then
+  rm -rf dist
+  uv build
+  uvx twine check dist/*
+else
+  if [[ ! -d dist || -z "$(ls -A dist 2>/dev/null)" ]]; then
+    echo "错误：--skip-build 但 dist/ 为空，先去掉 --skip-build 重新构建" >&2
+    exit 1
+  fi
+fi
+
+if [[ "$target" == test ]]; then
+  index="testpypi"
+  token_var="UV_PUBLISH_TOKEN_TEST"
+  upload_url="https://test.pypi.org/legacy/"
+else
+  index="pypi"
+  token_var="UV_PUBLISH_TOKEN_PROD"
+  upload_url="https://upload.pypi.org/legacy/"
+fi
+
+token="${!token_var:-}"
+if [[ -z "$token" ]]; then
+  echo "错误：未设置 $token_var（在对应站点 Account Settings -> API tokens 申请；test 与 prod 账号相互独立）" >&2
+  exit 1
+fi
+
+echo "目标仓库: $upload_url"
+echo "项目: huaweicloud-open-mcp $version"
+if [[ "$target" == prod && "$auto_yes" == false ]]; then
+  echo "待上传产物:"
+  ls -1 dist
+  read -r -p "确认发布到正式 PyPI？输入 yes 继续: " reply
+  if [[ "$reply" != "yes" ]]; then
+    echo "已取消" >&2
+    exit 1
+  fi
+fi
+
+UV_PUBLISH_TOKEN="$token" uv publish --index "$index"

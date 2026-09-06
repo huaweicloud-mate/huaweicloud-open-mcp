@@ -83,6 +83,7 @@
 | `src/common/logconf.py` | 日志配置：文件为主（logs/{program}.log 轮转）+ stderr WARNING+ 兜底 | — | — |
 | `src/huaweicloud_open_mcp/` | server 入口包：`cli.py` CLI（按 --mode 分发 openapi/discover 两条路径）+ `__main__.py`（`python -m`）+ `__version__`（发布版本单一真值源，hatch dynamic version 读取） | — | — |
 | `benchmarks/` | LLM Agent 级工作流 benchmark（`openapi/cases/` 用例 + 旧 stub_server + scorer/report/trace/runner；`harbor/` Harbor 集成：`conventions.py` 路径常量单一真值源 + `build_agent_opencode_config`、`exporter.py`（render_task 纯核/export_dataset 薄壳）、`task_templates/` 模板组（stub_server/Dockerfile/task.toml/instruction/verifier/oracle/脚本）、`opencode_agent.py`（仅 harbor 运行时加载，本项目不声明 harbor 依赖）；`results/` 不入库，`baseline-*.json` 除外） | — | — |
+| `scripts/` | 发布脚本（`publish`：test/prod 双仓区分，目标 URL 来自 `pyproject.toml` 具名 index，token 按 `UV_PUBLISH_TOKEN_TEST`/`UV_PUBLISH_TOKEN_PROD` 严格取用无回退，正式仓确认门） | — | — |
 | `configs/` | safety policy 示例（含 server 规则）、`openapi-gate.example.json` 产品门栓示例、`openapi-hints.example.json` 自定义提示注入示例、tag 中文→英文翻译映射、`mcp-server-catalog.example.json` 本地目录；发布时经 hatch force-include 打进 wheel（`huaweicloud_open_mcp/configs/` 包数据），运行时经 `common.paths.config_path` 解析（仓库根优先 → 安装态包内资源回退） | — | — |
 | `tests/` | TDD 测试（见「测试」章节） | — | — |
 | `datasets/` | Harbor 任务数据集（exporter 从 cases + task_templates 重建，不入库）；`datasets/mcp-regression/<case_id>/` 每目录一个自包含 Harbor task（instruction/task.toml/environment 内嵌 hwc 源码树+stub+fixtures/solution oracle/tests verifier 壳） | `python -m benchmarks.harbor.exporter`（经 export_dataset） | 是 |
@@ -166,11 +167,12 @@ uv run mypy src                          # 类型检查（全量类型标注）
 构建与发布（PyPI）：
 
 ```bash
-uv build                                 # 产出 dist/ 下 sdist + wheel（wheel 内嵌 configs 包数据）
-uvx twine check dist/*                   # 发布包元数据自检
-uv publish --publish-url https://test.pypi.org/legacy/   # TestPyPI 干跑（可选）
-uv publish                               # 正式发布（token 经 UV_PUBLISH_TOKEN 提供）
+scripts/publish test                      # TestPyPI 发布（token：UV_PUBLISH_TOKEN_TEST）
+scripts/publish prod                      # 正式 PyPI 发布（token：UV_PUBLISH_TOKEN_PROD，确认门，--yes 供 CI 跳过）
+scripts/publish <test|prod> --skip-build  # 复用已有 dist/ 产物重发
 ```
+
+发布约定：目标上传 URL 由 `pyproject.toml` `[[tool.uv.index]]` 具名 index 固化（`testpypi` → `test.pypi.org/legacy/`、`pypi` → `upload.pypi.org/legacy/`），经 `uv publish --index <name>` 引用；脚本内构建（清空 dist/ 后 `uv build` + `uvx twine check`）+ token 严格按目标取用（`UV_PUBLISH_TOKEN_TEST`/`UV_PUBLISH_TOKEN_PROD`，无共享回退）+ 正式仓确认门（打印目标 URL/版本/产物清单，需输入 yes）。TestPyPI 与 PyPI 账号、API token 相互独立，分别在两站 Account Settings 申请；同仓版本号不可重复上传，TestPyPI 验证通过后升版本号再发正式仓。
 
 CLI 入口（`pyproject.toml` 注册 console scripts）：
 
