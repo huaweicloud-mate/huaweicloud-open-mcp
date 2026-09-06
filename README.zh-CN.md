@@ -3,7 +3,7 @@
   <p><sub><a href="README.md">English</a> | 中文</sub></p>
   <p>
     <a href="https://pypi.org/project/huaweicloud-open-mcp/">
-      <img src="https://img.shields.io/pypi/v/huaweicloud-open-mcp" alt="PyPI">
+      <img src="https://img.shields.io/pypi/v/huaweicloud-open-mcp?include_prereleases=1" alt="PyPI">
     </a>
   </p>
 </div>
