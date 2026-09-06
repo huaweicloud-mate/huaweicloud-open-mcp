@@ -1,6 +1,11 @@
 <div align="center">
-  <img src="logo.png" alt="华为云 Open MCP" width="240"/>
+  <img src="logo.png" alt="Huawei Cloud Open MCP" width="240"/>
   <p><sub><a href="README.md">English</a> | 中文</sub></p>
+  <p>
+    <a href="https://pypi.org/project/huaweicloud-open-mcp/">
+      <img src="https://img.shields.io/pypi/v/huaweicloud-open-mcp" alt="PyPI">
+    </a>
+  </p>
 </div>
 
 # 华为云 Open MCP
@@ -17,7 +22,6 @@
 - **渐进式工作流** —— Agent 逐步探索：`list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`，从 17000+ API 收窄到一次具体调用。每一步都把 LLM 上下文控制在有界范围；完整工作流指引已内置于 server instructions。
 - **元数据驱动、零 SDK** —— API 元数据从华为云 API Explorer 实时拉取并缓存在内存；请求在本地签名（自实现 SDK-HMAC-SHA256）后直连华为云。
 - **默认安全** —— 每次 `execute_api` 必须通过 safety policy（allowlist/denylist）；未配置 policy 时全部拒绝。规则热更新，Agent 可经 `manage_policy` 申请最小授予。
-- **OBS 对象数据面走预签名 URL** —— 上传/下载类 API 返回预签名 URL 信封；客户端直连 OBS 收发字节流，不限大小，网关不经手数据。
 
 ## 快速开始
 
@@ -32,22 +36,9 @@
 
 ### 步骤 1：提供凭证
 
-网关从 `~/.huaweicloud/credentials`（INI 格式，`[basic]` 节）读取你的 AK/SK。偏好环境变量内联方式见[凭证](#凭证)。
+网关从 `~/.huaweicloud/credentials`（INI 格式，`[basic]` 节）读取你的 AK/SK —— Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`。偏好环境变量内联方式见[凭证](#凭证)。
 
-**输入：**
-
-```bash
-mkdir -p ~/.huaweicloud
-cat > ~/.huaweicloud/credentials <<'EOF'
-[basic]
-ak = your-access-key-id
-sk = your-secret-access-key
-EOF
-chmod 600 ~/.huaweicloud/credentials
-cat ~/.huaweicloud/credentials
-```
-
-**输出：**
+在你的用户主目录创建 `.huaweicloud` 目录，再在其中创建 `credentials` 文件，内容如下：
 
 ```ini
 [basic]
@@ -55,25 +46,13 @@ ak = your-access-key-id
 sk = your-secret-access-key
 ```
 
-可选键（按需取消注释）：`security_token`（临时凭证）、`project_id`（缺省自动解析）、`domain_id`（全局级服务，完整支持开发中）。建议 `chmod 600` —— 文件存有你的密钥。server 启动时读取该文件；日志行 `server start: ... credentials=configured`（见 `--log-file`）可确认已加载。
+可选键（按需取消注释）：`security_token`（临时凭证）、`project_id`（缺省自动解析）、`domain_id`（全局级服务，完整支持开发中）。妥善保管该文件 —— 里面有你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。server 启动时读取该文件；日志行 `server start: ... credentials=configured`（见 `--log-file`）可确认已加载。
 
 ### 步骤 2：创建只读 safety policy
 
 除非 policy 文件显式允许，网关拒绝每一次 `execute_api`；未配置 policy 时全部拒绝。
 
-**输入：**
-
-```bash
-printf '[\n  "ECS:*List*=allow",\n  "*=deny"\n]\n' > "$HOME/hwc-policy.json"
-echo "$HOME/hwc-policy.json"
-cat "$HOME/hwc-policy.json"
-```
-
-**输出：**
-
-```text
-/home/you/hwc-policy.json
-```
+在你的主目录创建一个 policy 文件（例如 `hwc-policy.json`），内容如下：
 
 ```json
 [
@@ -82,11 +61,11 @@ cat "$HOME/hwc-policy.json"
 ]
 ```
 
-每条规则形如 `product:apiPattern=allow|deny` —— fnmatch 风格通配、大小写不敏感、`#` 开头为注释。规则自上而下评估、首个命中生效：本文件允许所有名字含 `List` 的 ECS API，其余全部拒绝。客户端需要**绝对路径**（上方已打印），因为客户端用自己的工作目录拉起 server。
+每条规则形如 `product:apiPattern=allow|deny` —— fnmatch 风格通配、大小写不敏感、`#` 开头为注释。规则自上而下评估、首个命中生效：本文件允许所有名字含 `List` 的 ECS API，其余全部拒绝。客户端需要该文件的**绝对路径** —— macOS/Linux 如 `/home/you/hwc-policy.json`，Windows 如 `C:\Users\you\hwc-policy.json` —— 因为客户端用自己的工作目录拉起 server。
 
 ### 步骤 3：将网关注册到你的代码 Agent
 
-**opencode** —— 添加到 `opencode.json`（项目级）或 `~/.config/opencode/opencode.json`（全局）：
+**opencode** —— 添加到 `opencode.json`（项目级，所有 OS 通用）或全局配置（macOS/Linux：`~/.config/opencode/opencode.json`；Windows 建议用项目级文件，或经 `OPENCODE_CONFIG` 环境变量指向绝对路径）：
 
 ```json
 {
@@ -103,11 +82,10 @@ cat "$HOME/hwc-policy.json"
 }
 ```
 
-**Codex** —— 添加到 `~/.codex/config.toml`，或执行：
+**Codex** —— 添加到 `~/.codex/config.toml`（Windows：`%USERPROFILE%\.codex\config.toml`），或执行（单行命令，任意 shell 通用）：
 
-```bash
-codex mcp add huaweicloud -- \
-  uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
+```
+codex mcp add huaweicloud -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
 ```
 
 ```toml
@@ -115,6 +93,8 @@ codex mcp add huaweicloud -- \
 command = "uvx"
 args = ["huaweicloud-open-mcp", "--policy", "/home/you/hwc-policy.json"]
 ```
+
+把示例路径换成步骤 2 里你自己的绝对路径（Windows 形如 `C:\Users\you\hwc-policy.json`；JSON/TOML 字符串中需写成转义反斜杠形式 `"C:\\Users\\you\\hwc-policy.json"`）。
 
 **输出：** 启动你的 Agent —— 七个网关工具出现，以 server 名为前缀（`huaweicloud_list_products`、`huaweicloud_get_product`、`huaweicloud_list_apis`、`huaweicloud_get_api`、`huaweicloud_get_api_examples`、`huaweicloud_execute_api`、`huaweicloud_manage_policy`）。Codex 中 `codex mcp list` 可见该 server，TUI 内 `/mcp` 确认已连接。
 
@@ -174,9 +154,38 @@ Agent 走渐进式工作流 —— `list_apis(ECS)` 找到 API、`get_api` 读�
 
 ### 还没有账号？Mock 模式
 
-同一流程无需凭证即可体验：跳过步骤 1，并在步骤 3 的 server 命令中加 `--mock`（`uvx huaweicloud-open-mcp --mock --policy /home/you/hwc-policy.json`）。
+同一流程无需凭证即可体验：跳过步骤 1，并在步骤 3 的 server 命令中加 `--mock`（`uvx huaweicloud-open-mcp --mock --policy <policy路径>`，如 `/home/you/hwc-policy.json` 或 `C:\Users\you\hwc-policy.json`）。
 
 **输出：** 步骤 4 完全一致 —— 产品目录仍是真实元数据；步骤 5 返回与真实响应同构的模拟数据（mock 端点，不涉及华为云账号）。
+
+## OBS 上传与下载
+
+OBS 对象类 API（`PutObject` / `GetObject` / `AppendObject` / `UploadPart`）的字节流从不经过网关。真实模式下 `execute_api` **恒**返回预签名 URL 信封——无需任何标志——客户端直连 OBS 收发字节，不限大小：
+
+```json
+{
+  "ok": true,
+  "presign": {
+    "url": "https://<bucket>.obs.<region>.myhuaweicloud.com/<key>?AccessKeyId=...&Expires=...&Signature=...",
+    "method": "PUT",
+    "expires_in": 900,
+    "signed_content_type": "application/octet-stream",
+    "headers": { "Content-Type": "application/octet-stream" }
+  }
+}
+```
+
+用任意 HTTP 客户端消费该 URL——网关不经手数据：
+
+```bash
+curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-stream'
+```
+
+关键口径：
+
+- Content-Type 参与签名。上传建议传 `_presign_content_type` 锁定类型，并按 `headers` 清单原样携带；未锁定时签名按空 Content-Type 计算，直连请求不得携带该头（`curl -H 'Content-Type:'`）。命中该情形时信封的 `note` 字段会给出警示。
+- `_presign_expires` 调整有效期（秒，默认 900）。
+- 其余 OBS 接口（桶管理、tagging、ACL 等）照常经网关执行；需要 URL 时可显式传 `_presign=true`。非 OBS 产品传 `_presign` 会被拒绝。mock 模式继续走 mock 端点。
 
 ## 工具（openapi 模式）
 
@@ -253,7 +262,10 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
+| `--mode <modes>` | `openapi` | 运行模式，逗号组合（`openapi`/`discover`/`data`，如 `openapi,data`；env `HUAWEICLOUD_MCP_MODE`） |
 | `--mock` | off | `execute_api` 指向 API Explorer mock 端点（无需凭证） |
+| `--mock-base <url>` | — | mock 端点基础地址覆盖（env `HUAWEICLOUD_MCP_MOCK_BASE`） |
+| `--mock-passthrough` | off | mock 模式转发 execute 业务参数到端点（env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`） |
 | `--policy <file>` | — | safety policy 文件；缺失 → 全部执行被拒 |
 | `--region <id>` | `cn-north-4` | 默认 region |
 | `--gate <file>` | — | 可选产品门栓（allowlist；未列出产品对 Agent 隐藏） |
@@ -271,17 +283,22 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 | `HUAWEICLOUD_SDK_SECURITY_TOKEN` | 可选临时安全凭证 token |
 | `HUAWEICLOUD_SDK_PROJECT_ID` | 可选；缺省自动解析 |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | 可选；为全局级服务预留（完整支持开发中） |
+| `HUAWEICLOUD_MCP_MODE` | 等价 `--mode` |
+| `HUAWEICLOUD_MCP_REGION` | 等价 `--region` |
+| `HUAWEICLOUD_MCP_MOCK` | 等价 `--mock`（`1`/`true`/`yes`） |
+| `HUAWEICLOUD_MCP_MOCK_BASE` | mock 端点基础地址覆盖 |
+| `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH` | 等价 `--mock-passthrough` |
 | `HUAWEICLOUD_MCP_POLICY_FILE` | 等价 `--policy` |
 | `HUAWEICLOUD_MCP_OPENAPI_GATE` | 等价 `--gate` |
 | `HUAWEICLOUD_MCP_OPENAPI_HINTS` | 等价 `--hints` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | 等价 `--audit-file` |
 | `HUAWEICLOUD_MCP_SPILL_DIR` | 等价 `--spill-dir` |
-| `HUAWEICLOUD_MCP_MOCK_BASE` | mock 端点基础地址覆盖 |
+| `HUAWEICLOUD_MCP_ELICIT` | 等价 `--elicitation` |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | 等价 `--log-level` / `--log-file` |
 
 ## 凭证
 
-网关按顺序从两个来源加载 AK/SK：**环境变量 → `~/.huaweicloud/credentials`**。两者同时配置时环境变量优先。
+网关按顺序从两个来源加载 AK/SK：**环境变量 → `~/.huaweicloud/credentials`**（Windows：`%USERPROFILE%\.huaweicloud\credentials`）。两者同时配置时环境变量优先。
 
 ### 方式 A —— Profile 文件（快速开始主路径）
 
@@ -300,7 +317,7 @@ sk = your-secret-access-key
 
 - `[basic]` 节含 `ak` 与 `sk` 为必需；三个可选键与下方环境变量一一对应。
 - 文件缺失会被静默跳过 —— server 照常启动但没有凭证（元数据工具仍可用，见下）。
-- 妥善保管：`chmod 600 ~/.huaweicloud/credentials`。
+- 妥善保管 —— 文件里是你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。
 
 ### 方式 B —— 环境变量（客户端注册内联）
 
@@ -315,13 +332,10 @@ sk = your-secret-access-key
 }
 ```
 
-**Codex** —— 在 `--` 前加 `--env` 参数：
+**Codex** —— 在 `--` 前加 `--env` 参数（单行命令，任意 shell 通用）：
 
-```bash
-codex mcp add huaweicloud \
-  --env HUAWEICLOUD_SDK_AK=your-access-key-id \
-  --env HUAWEICLOUD_SDK_SK=your-secret-access-key \
-  -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
+```
+codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAWEICLOUD_SDK_SK=your-secret-access-key -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
 ```
 
 | 变量 | 用途 |
@@ -342,7 +356,7 @@ codex mcp add huaweicloud \
 | 症状 | 可能原因 | 处理 |
 | --- | --- | --- |
 | 客户端显示 "failed to connect" 或 server 立即退出 | `--policy` 是相对路径或文件缺失 —— policy 文件有问题时 server 快速失败 | 使用存在的文件的绝对路径 |
-| 七个工具从未出现在 Agent 中 | `uvx` 不在客户端 PATH 上 | `which uvx` 定位后在命令中改用绝对路径 |
+| 七个工具从未出现在 Agent 中 | `uvx` 不在客户端 PATH 上 | `which uvx`（macOS/Linux）或 `where uvx`（Windows）定位后在命令中改用绝对路径 |
 | 元数据工具正常但 `execute_api` 失败 | 凭证未加载（`[basic]` 节为空，或环境变量覆盖了一个空文件） | 修正 `~/.huaweicloud/credentials`（见[凭证](#凭证)）或设置 `HUAWEICLOUD_SDK_*` 环境变量 |
 | `execute_api` 返回 `{"ok": false, "reason": ...}` 且提及 policy | 该 API 未被 policy 文件允许（快速开始文件仅允许 `ECS:*List*`） | 编辑 policy 文件 —— 热生效无需重启 server —— 或（先向用户确认后）让 Agent 经 `manage_policy` 加规则 |
 | 401 / SignatureDoesNotMatch | AK 或 SK 错误 | 核对正在生效的凭证来源（env 优先于 profile 文件） |
@@ -350,7 +364,7 @@ codex mcp add huaweicloud \
 | 明明有服务器却返回 `"count": 0` | 资源在另一个 region | 带 `region` 再问，如 `cn-east-3` |
 | Mock 调用挂起或超时 | 到 API Explorer 端点无网络路由 | 检查 `apiexplorer.cn-north-4.myhuaweicloud.com` 的代理/防火墙 |
 
-更深入的诊断：注册命令中加 `--log-level DEBUG --log-file /tmp/hwc-mcp.log` 后查看日志文件。
+更深入的诊断：注册命令中加 `--log-level DEBUG --log-file <日志文件>`（如 macOS/Linux 的 `/tmp/hwc-mcp.log`、Windows 的 `%TEMP%\hwc-mcp.log`）后查看日志文件。
 
 ## 文档
 
@@ -375,6 +389,23 @@ uv run mypy src                          # 类型检查
 ```
 
 配套 CLI：`api-refresh`（离线 APIE 管道：抓取 API Explorer → OpenAPI 2.0 文档）与 `api-docs`（终端元数据查询）。详见 [AGENTS.md](AGENTS.md)。
+
+### 发布
+
+发布区分 TestPyPI 与正式 PyPI 仓库，上传 URL 经 `pyproject.toml` 具名 index（`[[tool.uv.index]]`）固化：
+
+```bash
+scripts/publish test                      # TestPyPI（token：UV_PUBLISH_TOKEN_TEST）
+scripts/publish prod                      # 正式 PyPI（token：UV_PUBLISH_TOKEN_PROD，带确认门；--yes 供 CI 跳过）
+scripts/publish <test|prod> --skip-build  # 复用已有 dist/ 产物重发
+```
+
+说明：
+
+- TestPyPI 与 PyPI 账号、API token 相互独立——分别在两站 Account Settings 申请；脚本严格按目标取用对应环境变量、无共享回退，凭证不会拿错。
+- 每次构建先清空 `dist/`（`uv build` + `uvx twine check`），陈旧产物不会混入上传。
+- `prod` 发布前打印目标 URL、项目版本与产物清单，需手动输入 yes 确认。
+- 版本号在单个 index 内不可重复：已上传过的版本永不可重发（TestPyPI 验证通过后升版本号再发正式仓）。
 
 ## 许可证
 

@@ -1,6 +1,11 @@
 <div align="center">
   <img src="logo.png" alt="Huawei Cloud Open MCP" width="240"/>
   <p><sub>English | <a href="README.zh-CN.md">中文</a></sub></p>
+  <p>
+    <a href="https://pypi.org/project/huaweicloud-open-mcp/">
+      <img src="https://img.shields.io/pypi/v/huaweicloud-open-mcp" alt="PyPI">
+    </a>
+  </p>
 </div>
 
 # Huawei Cloud Open MCP
@@ -16,7 +21,6 @@ Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `ope
 - **Progressive workflow** — the agent explores step by step: `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`, narrowing 17,000+ APIs to one concrete call. Each step keeps the LLM context bounded; the full guide is baked into the server instructions.
 - **Metadata-driven, zero SDK** — API metadata is fetched live from Huawei Cloud API Explorer and cached in memory; requests are signed locally (SDK-HMAC-SHA256, self-implemented) and sent straight to Huawei Cloud.
 - **Secure by default** — every `execute_api` must pass a safety policy (allowlist/denylist); with no policy configured, everything is denied. Rules hot-reload, and the agent can request minimal grants via `manage_policy`.
-- **OBS object data plane via presigned URLs** — upload/download APIs return a presigned-URL envelope; the client streams bytes directly to OBS with no size limit and the gateway never touches the data.
 
 ## Quick start
 
@@ -31,22 +35,9 @@ Connect once — your agent explores the rest.
 
 ### Step 1 — Provide credentials
 
-The gateway reads your AK/SK from `~/.huaweicloud/credentials` (INI format, `[basic]` section). See [Credentials](#credentials) for the alternative inline-environment-variable way.
+The gateway reads your AK/SK from `~/.huaweicloud/credentials` (INI format, `[basic]` section) — on Windows that is `%USERPROFILE%\.huaweicloud\credentials`. See [Credentials](#credentials) for the alternative inline-environment-variable way.
 
-**Input:**
-
-```bash
-mkdir -p ~/.huaweicloud
-cat > ~/.huaweicloud/credentials <<'EOF'
-[basic]
-ak = your-access-key-id
-sk = your-secret-access-key
-EOF
-chmod 600 ~/.huaweicloud/credentials
-cat ~/.huaweicloud/credentials
-```
-
-**Output:**
+Create a `.huaweicloud` directory in your home directory, then a `credentials` file inside it with the following content:
 
 ```ini
 [basic]
@@ -54,25 +45,13 @@ ak = your-access-key-id
 sk = your-secret-access-key
 ```
 
-Optional keys (uncomment as needed): `security_token` (temporary credentials), `project_id` (auto-resolved when unset), `domain_id` (global-level services; full support in progress). `chmod 600` is recommended — the file holds your secret. The server reads this file at startup; the log line `server start: ... credentials=configured` (see `--log-file`) confirms it was picked up.
+Optional keys (uncomment as needed): `security_token` (temporary credentials), `project_id` (auto-resolved when unset), `domain_id` (global-level services; full support in progress). Keep the file private — it holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default. The server reads this file at startup; the log line `server start: ... credentials=configured` (see `--log-file`) confirms it was picked up.
 
 ### Step 2 — Create a read-only safety policy
 
 The gateway refuses every `execute_api` call unless a policy file explicitly allows it; with no policy configured, everything is denied.
 
-**Input:**
-
-```bash
-printf '[\n  "ECS:*List*=allow",\n  "*=deny"\n]\n' > "$HOME/hwc-policy.json"
-echo "$HOME/hwc-policy.json"
-cat "$HOME/hwc-policy.json"
-```
-
-**Output:**
-
-```text
-/home/you/hwc-policy.json
-```
+Create a policy file — e.g. `hwc-policy.json` in your home directory — with the following content:
 
 ```json
 [
@@ -81,11 +60,11 @@ cat "$HOME/hwc-policy.json"
 ]
 ```
 
-Each rule reads `product:apiPattern=allow|deny` — fnmatch-style wildcards, case-insensitive, `#` lines are comments. Rules are evaluated top-down and the first match wins, so this file allows every ECS API whose name contains `List` and denies everything else. Clients need the **absolute** path (printed above) because they spawn the server with their own working directory.
+Each rule reads `product:apiPattern=allow|deny` — fnmatch-style wildcards, case-insensitive, `#` lines are comments. Rules are evaluated top-down and the first match wins, so this file allows every ECS API whose name contains `List` and denies everything else. Clients need the **absolute** path to this file — e.g. `/home/you/hwc-policy.json` on macOS/Linux or `C:\Users\you\hwc-policy.json` on Windows — because they spawn the server with their own working directory.
 
 ### Step 3 — Register the gateway with your code agent
 
-**opencode** — add to `opencode.json` (project) or `~/.config/opencode/opencode.json` (global):
+**opencode** — add to `opencode.json` (project-level, works on every OS) or the global config (`~/.config/opencode/opencode.json` on macOS/Linux; on Windows, prefer the project-level file or the `OPENCODE_CONFIG` environment variable pointing to an absolute path):
 
 ```json
 {
@@ -102,11 +81,10 @@ Each rule reads `product:apiPattern=allow|deny` — fnmatch-style wildcards, cas
 }
 ```
 
-**Codex** — add to `~/.codex/config.toml` or run:
+**Codex** — add to `~/.codex/config.toml` (on Windows: `%USERPROFILE%\.codex\config.toml`) or run (single line, works in any shell):
 
-```bash
-codex mcp add huaweicloud -- \
-  uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
+```
+codex mcp add huaweicloud -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
 ```
 
 ```toml
@@ -114,6 +92,8 @@ codex mcp add huaweicloud -- \
 command = "uvx"
 args = ["huaweicloud-open-mcp", "--policy", "/home/you/hwc-policy.json"]
 ```
+
+Replace the example path with your own absolute path from Step 2 (on Windows, e.g. `C:\Users\you\hwc-policy.json`; inside JSON/TOML strings write it with escaped backslashes: `"C:\\Users\\you\\hwc-policy.json"`).
 
 **Output:** start your agent — the seven gateway tools appear, prefixed with your server name (`huaweicloud_list_products`, `huaweicloud_get_product`, `huaweicloud_list_apis`, `huaweicloud_get_api`, `huaweicloud_get_api_examples`, `huaweicloud_execute_api`, `huaweicloud_manage_policy`). In Codex, `codex mcp list` shows the server and `/mcp` in the TUI confirms it is connected.
 
@@ -173,9 +153,38 @@ On security: requests are signed locally and your SK never leaves your machine; 
 
 ### No account yet? Mock mode
 
-Run the same flow without credentials: skip Step 1, and add `--mock` to the server command in Step 3 (`uvx huaweicloud-open-mcp --mock --policy /home/you/hwc-policy.json`).
+Run the same flow without credentials: skip Step 1, and add `--mock` to the server command in Step 3 (`uvx huaweicloud-open-mcp --mock --policy <policy-path>`, e.g. `/home/you/hwc-policy.json` or `C:\Users\you\hwc-policy.json`).
 
 **Output:** Step 4 works identically — the product catalog is real metadata. Step 5 returns simulated server data shaped exactly like the real response (mock endpoint, no Huawei Cloud account involved).
+
+## OBS uploads & downloads
+
+OBS object APIs (`PutObject` / `GetObject` / `AppendObject` / `UploadPart`) never stream data through the gateway. In real mode, `execute_api` **always** answers with a presigned-URL envelope — no flag needed — and the client moves the bytes directly to/from OBS, with no size limit:
+
+```json
+{
+  "ok": true,
+  "presign": {
+    "url": "https://<bucket>.obs.<region>.myhuaweicloud.com/<key>?AccessKeyId=...&Expires=...&Signature=...",
+    "method": "PUT",
+    "expires_in": 900,
+    "signed_content_type": "application/octet-stream",
+    "headers": { "Content-Type": "application/octet-stream" }
+  }
+}
+```
+
+Pick up the URL with any HTTP client — the gateway never sees the data:
+
+```bash
+curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-stream'
+```
+
+Rules that matter:
+
+- Content-Type is part of the signature. For uploads, pass `_presign_content_type` to lock it and send exactly the headers listed in `headers`; if you don't lock it, the signature assumes no Content-Type — the direct request must not send one (`curl -H 'Content-Type:'`). The envelope's `note` field warns about this case.
+- `_presign_expires` tunes validity in seconds (default 900).
+- All other OBS APIs (bucket management, tagging, ACL, …) execute through the gateway as usual; pass `_presign=true` explicitly if you want a URL for one of them. Non-OBS products reject `_presign`. Mock mode keeps hitting the mock endpoint.
 
 ## Tools (openapi mode)
 
@@ -252,7 +261,10 @@ Example: `configs/openapi-hints.example.json`.
 
 | Flag | Default | Description |
 | --- | --- | --- |
+| `--mode <modes>` | `openapi` | Run mode(s), comma-separated (`openapi`/`discover`/`data`, e.g. `openapi,data`; env `HUAWEICLOUD_MCP_MODE`) |
 | `--mock` | off | Point `execute_api` at the API Explorer mock endpoint (no credentials needed) |
+| `--mock-base <url>` | — | Mock endpoint base URL override (env `HUAWEICLOUD_MCP_MOCK_BASE`) |
+| `--mock-passthrough` | off | Mock mode: forward execute business params to the mock endpoint (env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`) |
 | `--policy <file>` | — | Safety policy file; missing → all executions denied |
 | `--region <id>` | `cn-north-4` | Default region |
 | `--gate <file>` | — | Optional product gate (allowlist; unlisted products are hidden from the agent) |
@@ -270,17 +282,22 @@ Example: `configs/openapi-hints.example.json`.
 | `HUAWEICLOUD_SDK_SECURITY_TOKEN` | Optional temporary-security-credential token |
 | `HUAWEICLOUD_SDK_PROJECT_ID` | Optional; resolved automatically when unset |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | Optional; loaded for global-level services (full support in progress) |
+| `HUAWEICLOUD_MCP_MODE` | Same as `--mode` |
+| `HUAWEICLOUD_MCP_REGION` | Same as `--region` |
+| `HUAWEICLOUD_MCP_MOCK` | Same as `--mock` (`1`/`true`/`yes`) |
+| `HUAWEICLOUD_MCP_MOCK_BASE` | Mock endpoint base URL override |
+| `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH` | Same as `--mock-passthrough` |
 | `HUAWEICLOUD_MCP_POLICY_FILE` | Same as `--policy` |
 | `HUAWEICLOUD_MCP_OPENAPI_GATE` | Same as `--gate` |
 | `HUAWEICLOUD_MCP_OPENAPI_HINTS` | Same as `--hints` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | Same as `--audit-file` |
 | `HUAWEICLOUD_MCP_SPILL_DIR` | Same as `--spill-dir` |
-| `HUAWEICLOUD_MCP_MOCK_BASE` | Mock endpoint base URL override |
+| `HUAWEICLOUD_MCP_ELICIT` | Same as `--elicitation` |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | Same as `--log-level` / `--log-file` |
 
 ## Credentials
 
-The gateway loads AK/SK from two sources, checked in order: **environment variables → `~/.huaweicloud/credentials`**. When both are configured, environment variables win.
+The gateway loads AK/SK from two sources, checked in order: **environment variables → `~/.huaweicloud/credentials`** (on Windows: `%USERPROFILE%\.huaweicloud\credentials`). When both are configured, environment variables win.
 
 ### Option A — Profile file (quick-start main path)
 
@@ -299,7 +316,7 @@ sk = your-secret-access-key
 
 - `[basic]` section with `ak` and `sk` is required; the three optional keys mirror the environment variables below.
 - A missing file is silently skipped — the server simply runs without credentials (metadata tools keep working; see below).
-- Keep it private: `chmod 600 ~/.huaweicloud/credentials`.
+- Keep it private — the file holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default.
 
 ### Option B — Environment variables (inline in client registration)
 
@@ -314,13 +331,10 @@ Set them in the client registration instead of the profile file:
 }
 ```
 
-**Codex** — add `--env` flags before `--`:
+**Codex** — add `--env` flags before `--` (single line, works in any shell):
 
-```bash
-codex mcp add huaweicloud \
-  --env HUAWEICLOUD_SDK_AK=your-access-key-id \
-  --env HUAWEICLOUD_SDK_SK=your-secret-access-key \
-  -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
+```
+codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAWEICLOUD_SDK_SK=your-secret-access-key -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
 ```
 
 | Variable | Purpose |
@@ -341,7 +355,7 @@ codex mcp add huaweicloud \
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | Client shows "failed to connect" or the server exits immediately | `--policy` path is relative or the file is missing — the server fails fast on a bad policy file | Use an absolute path to a file that exists |
-| The seven tools never appear in the agent | `uvx` is not on the client's PATH | Find it with `which uvx` and use the absolute path in place of `uvx` in the command |
+| The seven tools never appear in the agent | `uvx` is not on the client's PATH | Find it with `which uvx` (macOS/Linux) or `where uvx` (Windows) and use the absolute path in place of `uvx` in the command |
 | Metadata tools work but `execute_api` fails | Credentials not loaded (empty `[basic]` section, or env vars shadow an empty file) | Fix `~/.huaweicloud/credentials` (see [Credentials](#credentials)) or set the `HUAWEICLOUD_SDK_*` environment variables |
 | `execute_api` returns `{"ok": false, "reason": ...}` mentioning policy | The API is not allowed by the policy file (the quick-start file allows only `ECS:*List*`) | Edit the policy file — changes hot-reload without restarting the server — or, after confirming with the user, have the agent add a rule via `manage_policy` |
 | 401 / SignatureDoesNotMatch | Wrong AK or SK | Recheck the credentials source in use (env wins over profile file) |
@@ -349,7 +363,7 @@ codex mcp add huaweicloud \
 | `"count": 0` but you have servers | Resources live in another region | Ask again with an explicit `region`, e.g. `cn-east-3` |
 | Mock calls hang or time out | No network route to the API Explorer endpoint | Check proxy/firewall access to `apiexplorer.cn-north-4.myhuaweicloud.com` |
 
-For deeper diagnosis, add `--log-level DEBUG --log-file /tmp/hwc-mcp.log` to the registration command and inspect the log file.
+For deeper diagnosis, add `--log-level DEBUG --log-file <log>` to the registration command — e.g. `/tmp/hwc-mcp.log` on macOS/Linux or `%TEMP%\hwc-mcp.log` on Windows — and inspect the log file.
 
 ## Documentation
 
@@ -374,6 +388,23 @@ uv run mypy src                          # type check
 ```
 
 Companion CLIs: `api-refresh` (offline APIE pipeline: fetch API Explorer → OpenAPI 2.0 docs) and `api-docs` (metadata queries from the terminal). Details in [AGENTS.md](AGENTS.md).
+
+### Publishing
+
+Releases distinguish TestPyPI from the production PyPI index; both upload URLs are pinned as named indexes in `pyproject.toml` (`[[tool.uv.index]]`):
+
+```bash
+scripts/publish test                      # TestPyPI (token: UV_PUBLISH_TOKEN_TEST)
+scripts/publish prod                      # PyPI (token: UV_PUBLISH_TOKEN_PROD, confirmation gate; --yes for CI)
+scripts/publish <test|prod> --skip-build  # republish existing dist/ artifacts
+```
+
+Notes:
+
+- TestPyPI and PyPI accounts/API tokens are independent — request each token from the corresponding site's Account Settings; the script strictly uses the target-specific env var with no fallback, so credentials can never be mixed up.
+- Each build clears `dist/` first (`uv build` + `uvx twine check`), so no stale artifacts can be uploaded.
+- `prod` prints the target URL, project version, and artifact list, then requires typing `yes`.
+- Version numbers are unique per index: never reuse a version already uploaded (verify on TestPyPI, bump the version, then publish to PyPI).
 
 ## License
 
