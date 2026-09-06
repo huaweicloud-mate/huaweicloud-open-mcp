@@ -4,9 +4,11 @@
 调用纯函数层（tools.metadata / tools.execute）与执行客户端。
 """
 
+import functools
+import inspect
 import logging
-from dataclasses import dataclass
-from typing import Any, Callable, Sequence, cast
+from dataclasses import dataclass, field
+from typing import Any, Callable, Sequence, TypeVar, cast
 
 from apie import catalog, metadata
 from apie import mock as apie_mock
@@ -32,10 +34,39 @@ from .execute_obs import ObsHttpClient
 from .gate import Gate
 from .hints import Hints
 from .signer.client import HttpClient
+from .spill import SpillConfig, guard_result
 
 logger = logging.getLogger("mcp_openapi.service")
 
 DEFAULT_REGION = "cn-north-4"
+
+_R = TypeVar("_R")
+
+
+def _guarded(fn: Callable[..., _R]) -> Callable[..., _R]:
+    """S12 通用信封守卫（与 _audited 同层横切）：预算内原样返回，工具集增删自动继承。
+
+    refusal（ok 非 True）与 lane 已落盘信封由 guard_result 内部恒等跳过；
+    spill 未配置（None）时直通。stem 从函数名与 product/api 绑定参数推导。
+    """
+    sig = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(self: ToolService, *args: Any, **kwargs: Any) -> _R:
+        result = fn(self, *args, **kwargs)
+        cfg = self.config.spill
+        if cfg is None or not isinstance(result, dict):
+            return result
+        bound = sig.bind(self, *args, **kwargs)
+        bound.apply_defaults()
+        parts = [fn.__name__]
+        for name in ("product", "api"):
+            value = bound.arguments.get(name)
+            if isinstance(value, str) and value:
+                parts.append(value)
+        return cast(_R, guard_result(result, cfg=cfg, stem="-".join(parts)))
+
+    return wrapper
 
 
 @dataclass
@@ -53,6 +84,7 @@ class ServiceConfig:
     gate: Gate = Gate.unrestricted()
     hints: Hints = Hints.empty()
     audit_sink: AuditSink | None = None
+    spill: SpillConfig | None = field(default_factory=SpillConfig.default)
 
 
 class ToolService:
@@ -127,6 +159,7 @@ class ToolService:
                            coarse_rule=safety_policy.grant_rule(product, "*"))
 
     @_audited
+    @_guarded
     def manage_policy(self, action: str, line: str | None = None,
                       scope: str | None = None,
                       ttl_seconds: int | None = None) -> dict[str, Any]:
@@ -217,6 +250,7 @@ class ToolService:
     # ---------- 元数据工具 ----------
 
     @_audited
+    @_guarded
     def list_products(self, category: str | None = None,
                       keyword: str | None = None) -> ProductListResult | ToolError:
         logger.info("list_products category=%s keyword=%s", category or "-", keyword or "-")
@@ -230,6 +264,7 @@ class ToolService:
         return cast(ProductListResult, self._annotate_product_items(out))
 
     @_audited
+    @_guarded
     def get_product(self, product: str) -> ProductResult | ToolError:
         logger.info("get_product product=%s", product)
         gated = self._check_gate(product)
@@ -247,6 +282,7 @@ class ToolService:
         return cast(ProductResult, self._with_product_hints(out, product))
 
     @_audited
+    @_guarded
     def list_apis(self, product: str, tag: str | None = None, search: str | None = None,
                   limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
         logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d",
@@ -264,6 +300,7 @@ class ToolService:
         return cast(ApiListResult, self._annotate_list_apis(out, product))
 
     @_audited
+    @_guarded
     def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
         region = region or self.config.region
         logger.info("get_api %s:%s region=%s", product, api, region)
@@ -280,6 +317,7 @@ class ToolService:
         return cast(ApiDetailResult, self._with_combined_hints(out, product, api))
 
     @_audited
+    @_guarded
     def get_api_examples(self, product: str, api: str,
                          region: str | None = None) -> ExamplesResult | ToolError:
         region = region or self.config.region
@@ -300,14 +338,23 @@ class ToolService:
     # ---------- 执行工具 ----------
 
     @_audited
+    @_guarded
     def execute_api(self, product: str, api: str, region: str | None = None,
                     params: dict[str, Any] | None = None) -> ExecuteResult:
-        """执行 API。产品门栓先粗滤，safety policy 再细检，mock/real 分支共享。"""
+        """执行 API。产品门栓先粗滤，safety policy 再细检，mock/real 分支共享。
+
+        spill：超限响应自动落盘（S12）；params["_spill"]=false 按次退出
+        （控制键在 dispatch 前剥离，不进入 query/body）。
+        """
         if (api or "").strip() == "manage_policy":
             return {"ok": False, "reason": (
                 "manage_policy 是 server 内置控制面工具，请直接调用 manage_policy 工具"
                 "（不经 execute_api 路由）")}
         region = region or self.config.region
+        params = dict(params or {})
+        spill_cfg = self.config.spill
+        if params.pop("_spill", None) is False:
+            spill_cfg = None
         gated = self._check_gate(product)
         if gated:
             logger.warning("execute %s:%s region=%s mode=%s policy=gated",
@@ -326,7 +373,6 @@ class ToolService:
         if hit is None:
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
-        params = dict(params or {})
 
         # 预签发分支：OBS 专用，gateway 只签名不搬运字节；先于 mock/real 分流
         if params.get("_presign"):
@@ -365,7 +411,7 @@ class ToolService:
                     "mock" if self.config.mock else "real")
 
         if self.config.mock:
-            return self._execute_mock(product, api, region, params)
+            return self._execute_mock(product, api, region, params, spill=spill_cfg)
 
         if execute_obs.is_obs(product, doc):
             if execute_obs.is_object_data_api(api, op):
@@ -380,16 +426,19 @@ class ToolService:
                 doc, path, method, op, product, api, region, params,
                 client=self._make_obs_client(),
                 credentials=self.config.credentials,
+                spill=spill_cfg,
             )
 
         return execute.execute_api(
             doc, path, method, op, product, api, region, params,
             client=self._make_http_client(),
             credentials=self.config.credentials,
+            spill=spill_cfg,
         )
 
     def _execute_mock(self, product: str, api: str, region: str,
-                      params: dict[str, Any]) -> ExecuteResult:
+                      params: dict[str, Any],
+                      *, spill: SpillConfig | None = None) -> ExecuteResult:
         """mock 模式：直接路由到 API Explorer mock 端点（policy 已在上层检查）。
 
         mock_passthrough 开启时把业务参数转发到端点（标量→query、body→POST JSON，
@@ -405,6 +454,6 @@ class ToolService:
         else:
             resp = client.mock_request(product, api, region,
                                        status_code=status_code, number=number)
-        out = execute.normalize_response(resp)
+        out = execute.normalize_response(resp, spill, stem=f"{product}-{api}")
         out.update({"ok": True, "product": product, "api": api})
         return out

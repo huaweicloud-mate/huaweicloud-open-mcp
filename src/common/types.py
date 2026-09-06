@@ -31,7 +31,21 @@ class ExecuteResult(TypedDict, total=False):
     api: str | None
     headers: dict[str, str] | None
     presign: "PresignInfo | None"
+    spill: "SpillInfo | None"  # 超限响应/信封完整落盘（S12）
     granted_rule: str | None  # policy 拒绝经用户 elicitation 确认后授予的规则（最小或产品级）
+
+
+class SpillInfo(TypedDict):
+    """响应落盘信封：完整数据已原子落盘，path 为绝对路径。
+
+    note 为部署感知消费指引（data 模式混装时指引 query_data，否则指引文件读取），
+    由 spill 模块恒注入。
+    """
+
+    path: str
+    format: str   # "json" | "text" | "bin"
+    bytes: int
+    note: str
 
 
 class PresignInfo(TypedDict):

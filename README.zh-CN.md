@@ -185,9 +185,9 @@ Agent 走渐进式工作流 —— `list_apis(ECS)` 找到 API、`get_api` 读�
 | `list_products` | 全量华为云产品目录 —— 标识符、显示名、分类、产品页链接；`keyword`/`category` 过滤 |
 | `get_product` | 单产品详情（分类、API 数、是否全局级） |
 | `list_apis` | 产品 API 目录，含 `tag_groups` 全量 tag 概览；`tag`/`search`/`limit`/`offset` 收窄 |
-| `get_api` | 单 API 完整文档（参数、必填、枚举、约束）—— 执行前必读 |
+| `get_api` | 单 API 完整文档（参数、必填、枚举、约束）—— 执行前必读。超大文档（超 200k 字符）完整信封落盘，响应中重字段以占位替换 |
 | `get_api_examples` | 单 API 官方请求示例 |
-| `execute_api` | 执行一个 API：路径/query 参数平铺、请求体放 `body`；错误结构化返回、429 自动退避重试 |
+| `execute_api` | 执行一个 API：路径/query 参数平铺、请求体放 `body`；错误结构化返回、429 自动退避重试。超大响应（超 200k 字符）自动落盘：结果携带 `spill` 信封（`path`/`format`/`bytes`/`note`），`body` 保留截断预览；`_spill=false` 可按次退出 |
 | `manage_policy` | 运行期增删查 safety policy 规则（热生效、无需重启） |
 
 ## 工具（data 模式）
@@ -259,6 +259,7 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 | `--gate <file>` | — | 可选产品门栓（allowlist；未列出产品对 Agent 隐藏） |
 | `--hints <file>` | — | 可选自定义提示注入配置（部署侧指引注入 instructions 与发现结果） |
 | `--elicitation auto\|required\|off` | `off` | policy 变更的 MCP elicitation 确认 |
+| `--spill-dir <dir>` | 系统临时目录（`hwc-mcp-spill`） | 超大响应/信封落盘目录（空串或 `off` 禁用落盘，回落纯截断） |
 | `--audit-file <file>` | disabled | 审计落盘（NDJSON）：每次工具调用一行 `{ts, tool, input, ok}` |
 | `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | 日志（轮转文件；stderr 同步 WARNING+） |
 
@@ -274,6 +275,7 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 | `HUAWEICLOUD_MCP_OPENAPI_GATE` | 等价 `--gate` |
 | `HUAWEICLOUD_MCP_OPENAPI_HINTS` | 等价 `--hints` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | 等价 `--audit-file` |
+| `HUAWEICLOUD_MCP_SPILL_DIR` | 等价 `--spill-dir` |
 | `HUAWEICLOUD_MCP_MOCK_BASE` | mock 端点基础地址覆盖 |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | 等价 `--log-level` / `--log-file` |
 

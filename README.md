@@ -184,9 +184,9 @@ Run the same flow without credentials: skip Step 1, and add `--mock` to the serv
 | `list_products` | Full Huawei Cloud product catalog — identifier, display name, category, product link; `keyword`/`category` filter |
 | `get_product` | One product's details (classification, API count, global vs regional) |
 | `list_apis` | A product's API directory with `tag_groups` overview; `tag`/`search`/`limit`/`offset` to narrow |
-| `get_api` | One API's full documentation (parameters, required fields, enums, constraints) — read before executing |
+| `get_api` | One API's full documentation (parameters, required fields, enums, constraints) — read before executing. Oversized docs (>200k chars) spill the full envelope to disk and stub the heaviest fields in the response |
 | `get_api_examples` | Official request examples for one API |
-| `execute_api` | Execute one API: path/query params flattened, request body under `body`; errors come back structured, 429 retried with backoff |
+| `execute_api` | Execute one API: path/query params flattened, request body under `body`; errors come back structured, 429 retried with backoff. Oversized responses (>200k chars) are spilled to disk automatically: the result carries a `spill` envelope (`path`/`format`/`bytes`/`note`) and `body` keeps a truncated preview; `_spill=false` opts out per call |
 | `manage_policy` | Read/add/remove safety-policy rules at runtime (hot effect, no restart) |
 
 ## Tools (data mode)
@@ -258,6 +258,7 @@ Example: `configs/openapi-hints.example.json`.
 | `--gate <file>` | — | Optional product gate (allowlist; unlisted products are hidden from the agent) |
 | `--hints <file>` | — | Optional custom-hints file (deploy-side guidance injected into instructions and discovery results) |
 | `--elicitation auto\|required\|off` | `off` | MCP-elicitation confirmation for policy changes |
+| `--spill-dir <dir>` | system temp dir (`hwc-mcp-spill`) | Where oversized responses/envelopes are spilled (empty or `off` disables spilling; pure truncation returns) |
 | `--audit-file <file>` | disabled | Audit trail (NDJSON): one `{ts, tool, input, ok}` line per tool call |
 | `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | Logging (rotating file; stderr mirrors WARNING+) |
 
@@ -273,6 +274,7 @@ Example: `configs/openapi-hints.example.json`.
 | `HUAWEICLOUD_MCP_OPENAPI_GATE` | Same as `--gate` |
 | `HUAWEICLOUD_MCP_OPENAPI_HINTS` | Same as `--hints` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | Same as `--audit-file` |
+| `HUAWEICLOUD_MCP_SPILL_DIR` | Same as `--spill-dir` |
 | `HUAWEICLOUD_MCP_MOCK_BASE` | Mock endpoint base URL override |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | Same as `--log-level` / `--log-file` |
 

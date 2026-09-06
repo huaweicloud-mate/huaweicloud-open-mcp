@@ -10,11 +10,12 @@ from typing import Any, Callable, Protocol
 import jsonschema
 
 from common.auth.credentials import Credentials
-from common.types import ClientResponse, ExecuteResult
+from common.types import ClientResponse, ExecuteResult, SpillInfo
+
+from .spill import MAX_RESPONSE_CHARS, SpillConfig, spill_body
 
 logger = logging.getLogger("mcp_openapi.execute")
 
-MAX_RESPONSE_CHARS = 200_000
 PATH_PARAM = re.compile(r"\{([^}]+)\}")
 
 # 标量类型严格口径：str 不自动强转；bool 混入整型/数值显式排除
@@ -189,31 +190,40 @@ def build_request(op: dict[str, Any], path: str, params: dict[str, Any],
     return filled, query, body, headers, None
 
 
-def _render_body(raw: Any) -> tuple[Any, bool]:
-    """响应体渲染（成功/错误分支共用）：超限截断。返回 (body, truncated)。"""
+def _render_body(raw: Any, spill: SpillConfig | None = None,
+                 stem: str = "response") -> tuple[Any, bool, SpillInfo | None]:
+    """响应体渲染（成功/错误分支共用）：超限截断；配置 spill 时先把完整原始体
+    保真落盘（S12 层级 1，截断前真值）。返回 (body, truncated, spill_info)。"""
     if raw is None:
-        return None, False
-    text = json.dumps(raw, ensure_ascii=False) if not isinstance(raw, str) else raw
+        return None, False, None
+    text = json.dumps(raw, ensure_ascii=False, default=str) \
+        if not isinstance(raw, str) else raw
     if len(text) > MAX_RESPONSE_CHARS:
+        info = spill_body(raw, cfg=spill, stem=stem) if spill is not None else None
         if isinstance(raw, str):
-            return raw[:MAX_RESPONSE_CHARS], True
+            return raw[:MAX_RESPONSE_CHARS], True, info
         return {"truncated": True,
                 "note": f"响应超过 {MAX_RESPONSE_CHARS} 字符，已截断",
-                "raw_size": len(text)}, True
-    return raw, False
+                "raw_size": len(text)}, True, info
+    return raw, False, None
 
 
-def normalize_response(resp: ClientResponse) -> ExecuteResult:
+def normalize_response(resp: ClientResponse, spill: SpillConfig | None = None,
+                       stem: str = "response") -> ExecuteResult:
     """把客户端响应规范化为结构化输出。
 
-    2xx：body 恒透出（超限截断）。非 2xx：error_code/error_msg 为尽力规范化字段
-    （多形态兼容抽取，不命中保持 null）；body 恒透出原始体（真值源兜底）。
+    2xx：body 恒透出（超限截断；配置 spill 时完整原始体先落盘并在结果附
+    spill 信封）。非 2xx：error_code/error_msg 为尽力规范化字段（多形态兼容
+    抽取，不命中保持 null）；body 恒透出原始体（真值源兜底）。
+    未配置 spill 时与既有行为逐字段一致（回归红线）。
     """
     status = resp.get("status", 0)
-    body, truncated = _render_body(resp.get("body"))
+    body, truncated, info = _render_body(resp.get("body"), spill, stem)
     out: ExecuteResult = {"status": status, "body": body}
     if truncated:
         out["truncated"] = True
+    if info is not None:
+        out["spill"] = info
     if 200 <= status < 300:
         return out
     raw = resp.get("body")
@@ -291,8 +301,12 @@ def _extract_error_fields(raw: Any) -> tuple[str | None, str | None]:
 def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
                 product: str, api_name: str, region: str, params: dict[str, Any],
                 *, client: ApiExecutor,
-                credentials: Credentials | None = None) -> ExecuteResult:
-    """执行真实 API：请求构建 → 调用 → 规范化（safety 已由 ToolService 完成）。"""
+                credentials: Credentials | None = None,
+                spill: SpillConfig | None = None) -> ExecuteResult:
+    """执行真实 API：请求构建 → 调用 → 规范化（safety 已由 ToolService 完成）。
+
+    spill 配置透传响应规范化：超限 body 完整落盘（S12 层级 1）。
+    """
     logger.info("execute %s:%s region=%s mode=real",
                 product, api_name, region)
 
@@ -310,6 +324,6 @@ def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
 
     resp = client.request(method.upper(), host, filled,
                           query=query, body=body, headers=headers)
-    out = normalize_response(resp)
+    out = normalize_response(resp, spill, stem=f"{product}-{api_name}")
     out.update({"ok": True, "product": product, "api": api_name})
     return out

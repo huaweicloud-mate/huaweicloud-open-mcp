@@ -26,6 +26,7 @@ from safety.policy_store import PolicyStore
 from .gate import Gate, load_gate_file
 from .hints import Hints, load_hints_file
 from .service import ServiceConfig, ToolService
+from .spill import parse_spill_config
 
 INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模式）
 
@@ -63,6 +64,15 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
   （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内/临时；
   `remove` 跨层回收（先会话/临时后文件，首个语义命中移除）。
 
+## 超大响应落盘（spill）
+
+- 工具响应/结果超过 200k 字符时自动落盘：结果携带 `spill` 信封
+  （path/format/bytes/note），`body` 或重字段为截断预览，完整数据以落盘文件为准；
+- `execute_api` 可传 `params["_spill"]=false` 按次退出（控制键不进入请求）；
+- 落盘文件为原始数据（JSON/text，原子写、绝对路径、不自动清理）：
+  部署混装 data 模式时可用 query_data/transform_data 直接分析该文件
+  （json 数组可直接作表）；纯 openapi 部署用文件读取工具或 shell 查看。
+
 ## 其它
 
 - region 默认 cn-north-4；非默认 region 需显式传 region 参数；
@@ -90,7 +100,8 @@ def build_instructions(gate: Gate, hints: Hints | None = None) -> str:
     return text
 
 
-def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
+def build_openapi_config(args: argparse.Namespace, *,
+                         data_enabled: bool = False) -> ServiceConfig:
     mock = (args.mock if args.mock is not None
             else os.environ.get("HUAWEICLOUD_MCP_MOCK", "") in ("1", "true", "yes"))
     policy_file = args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")
@@ -104,6 +115,9 @@ def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
     audit_file = (getattr(args, "audit_file", None)
                   or os.environ.get("HUAWEICLOUD_MCP_AUDIT_FILE"))
     policy_store = PolicyStore(policy_file) if policy_file else None
+    spill_raw = getattr(args, "spill_dir", None)
+    if spill_raw is None:
+        spill_raw = os.environ.get("HUAWEICLOUD_MCP_SPILL_DIR")
     return ServiceConfig(
         region=region or "cn-north-4",
         mock=mock,
@@ -115,6 +129,7 @@ def build_openapi_config(args: argparse.Namespace) -> ServiceConfig:
         gate=load_gate_file(gate_file) if gate_file else Gate.unrestricted(),
         hints=load_hints_file(hints_file),
         audit_sink=sink_from_path(audit_file),
+        spill=parse_spill_config(spill_raw, data_enabled=data_enabled),
     )
 
 
@@ -221,6 +236,11 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         默认 off 或客户端不支持 elicitation 时，拒绝原因附带同样的兜底指引
         （先经交互式问询向用户确认，再经 manage_policy 授予）；
         亦可经 manage_policy 授予（add/remove 前服务端先 elicit 确认）。
+
+        超大响应落盘：响应超过 200k 字符时自动落盘，body 为截断预览，结果携带
+        spill 信封（path/format/bytes/note 消费指引，部署混装 data 模式时指引
+        query_data 直读该文件）；params["_spill"]=false 按次退出（控制键不进入
+        请求）。未配置落盘目录时保持纯截断行为。
 
         授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """

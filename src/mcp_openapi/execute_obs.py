@@ -20,6 +20,7 @@ from common.types import ClientResponse, ExecuteResult, PresignInfo
 
 from . import execute
 from .signer import obs as obs_sign
+from .spill import SpillConfig
 
 logger = logging.getLogger("mcp_openapi.execute_obs")
 
@@ -463,19 +464,20 @@ def _pick_headers(resp: ClientResponse) -> dict[str, str] | None:
     return out or None
 
 
-def _normalize_obs(resp: ClientResponse) -> ExecuteResult:
+def _normalize_obs(resp: ClientResponse, spill: SpillConfig | None = None,
+                   stem: str = "response") -> ExecuteResult:
     status = resp.get("status", 0)
     picked = _pick_headers(resp)
     out: ExecuteResult
     if 200 <= status < 300:
-        out = execute.normalize_response(resp)
+        out = execute.normalize_response(resp, spill, stem)
     else:
         parsed = parse_obs_error(resp.get("body"))
         if parsed is not None:
             code, msg = parsed
             out = {"status": status, "error_code": code, "error_msg": msg}
         else:
-            out = execute.normalize_response(resp)
+            out = execute.normalize_response(resp, spill, stem)
     if picked is not None:
         out["headers"] = picked
     return out
@@ -484,8 +486,12 @@ def _normalize_obs(resp: ClientResponse) -> ExecuteResult:
 def execute_obs_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
                     product: str, api_name: str, region: str, params: dict[str, Any],
                     *, client: ObsClient,
-                    credentials: Credentials | None = None) -> ExecuteResult:
-    """执行 OBS API：请求构建 → OBS 签名发送 → 响应规范化（safety 已由上层完成）。"""
+                    credentials: Credentials | None = None,
+                    spill: SpillConfig | None = None) -> ExecuteResult:
+    """执行 OBS API：请求构建 → OBS 签名发送 → 响应规范化（safety 已由上层完成）。
+
+    spill 配置透传响应规范化：超限 body 完整落盘（S12 层级 1）。
+    """
     logger.info("execute %s:%s region=%s mode=obs", product, api_name, region)
 
     built = build_obs_request(op, path, params, doc)
@@ -503,7 +509,7 @@ def execute_obs_api(doc: dict[str, Any], path: str, method: str, op: dict[str, A
     resp = client.request(method.upper(), host, bucket=built.bucket,
                           object_key=built.object_key, query=built.query,
                           headers=headers, body=built.body)
-    out = _normalize_obs(resp)
+    out = _normalize_obs(resp, spill, stem=f"{product}-{api_name}")
     out.update({"ok": True, "product": product, "api": api_name})
     return out
 

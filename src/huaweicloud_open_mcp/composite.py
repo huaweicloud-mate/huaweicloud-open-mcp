@@ -82,7 +82,9 @@ def build_composite_app(modes: list[str], args: argparse.Namespace, *,
         if openapi_service is not None:
             svc = openapi_service
         else:
-            openapi_cfg = build_openapi_config(args)
+            # 部署感知披露：data 工具已注册时 spill note 指引 query_data
+            openapi_cfg = build_openapi_config(args,
+                                               data_enabled="data" in modes)
             if shared_store is not None:
                 openapi_cfg.policy_store = shared_store
                 openapi_cfg.policy_rules = shared_store.rules()

@@ -1,5 +1,8 @@
 """execute 工具纯函数单元测试（stub client）。"""
 
+import json
+import os
+
 from common.auth import Credentials
 from common.types import ClientResponse
 from mcp_openapi import execute
@@ -86,6 +89,70 @@ def test_normalize_response_truncates_oversized():
     big = {"data": "x" * 200_000}
     out = execute.normalize_response({"status": 200, "headers": {}, "body": big})
     assert out["truncated"] is True
+
+
+# ---------- normalize_response：超限落盘（S12 层级 1） ----------
+
+def test_normalize_response_spills_oversized_body(tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    big = {"data": "x" * 250_000}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": big},
+                                     spill=SpillConfig(dir=tmp_path),
+                                     stem="ECS-ListServers")
+    assert out["truncated"] is True
+    assert out["body"]["truncated"] is True   # 预览形态保持现状
+    info = out["spill"]
+    assert info["path"].startswith(str(tmp_path))
+    with open(info["path"], encoding="utf-8") as f:
+        assert json.load(f) == big            # 文件为完整原始 body（截断前真值）
+    assert "query_data" not in info["note"]
+
+
+def test_normalize_response_oversized_str_spills_full(tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    raw = "y" * 250_000
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": raw},
+                                     spill=SpillConfig(dir=tmp_path), stem="x")
+    assert out["body"] == raw[:execute.MAX_RESPONSE_CHARS]
+    info = out["spill"]
+    with open(info["path"], encoding="utf-8") as f:
+        assert f.read() == raw
+
+
+def test_normalize_response_error_oversized_also_spills(tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    big = {"error_code": "E.1", "error_msg": "m" * 250_000}
+    out = execute.normalize_response({"status": 400, "headers": {}, "body": big},
+                                     spill=SpillConfig(dir=tmp_path), stem="x")
+    assert out["error_code"] == "E.1"
+    info = out["spill"]
+    with open(info["path"], encoding="utf-8") as f:
+        assert json.load(f) == big
+
+
+def test_normalize_response_without_spill_config_unchanged():
+    """未配置落盘：与现状逐字段一致（回归红线），不出现 spill 字段。"""
+    big = {"data": "x" * 250_000}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": big})
+    assert out["truncated"] is True
+    assert "spill" not in out
+
+
+def test_execute_api_passes_spill_with_stem(mini_detail, tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    doc, path, method, op = _get_op(mini_detail)
+    big = {"servers": [{"id": "s"} for _ in range(1)], "fill": "x" * 250_000}
+    client = StubClient([{"status": 200, "headers": {}, "body": big}])
+    out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
+                              {"limit": 1}, client=client,
+                              spill=SpillConfig(dir=tmp_path),
+                              credentials=Credentials(ak="AK", sk="SK",
+                                                      project_id="proj123"))
+    assert out["ok"] is True
+    name = os.path.basename(out["spill"]["path"])
+    assert name.startswith("ECS-ListServers-")
+    with open(out["spill"]["path"], encoding="utf-8") as f:
+        assert json.load(f) == big
 
 
 # ---------- normalize_response：错误体形状兼容（矩阵经单一接口断言） ----------

@@ -606,3 +606,30 @@ def test_execute_presign_api_missing_object_key_passthrough():
         credentials=Credentials(ak="A", sk="B"))
     assert out["ok"] is False
     assert "object_key" in (out.get("reason") or "")
+
+
+# ---------- spill 透传（S12） ----------
+
+def test_normalize_obs_spill_passthrough(tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    big = {"buckets": ["b" * 100] * 4000}
+    resp: ClientResponse = {"status": 200, "headers": {"ETag": '"e"'}, "body": big}
+    out = execute_obs._normalize_obs(resp, spill=SpillConfig(dir=tmp_path))
+    assert out["headers"] == {"etag": '"e"'}
+    with open(out["spill"]["path"], encoding="utf-8") as f:
+        assert json.load(f) == big
+
+
+def test_execute_obs_api_spill_passthrough(tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    op = {"parameters": [{"name": "bucket_name", "in": "query"}]}
+    doc = {"host": "obs.cn-north-4.myhuaweicloud.com", "definitions": {}}
+    big = {"contents": ["c" * 200] * 2000}
+    fake = _FakeObsClient({"status": 200, "headers": {}, "body": big})
+    out = execute_obs_api(doc, "/", "get", op, "OBS", "ListObjects", "cn-north-4",
+                          {"bucket_name": "b"}, client=fake, credentials=None,
+                          spill=SpillConfig(dir=tmp_path))
+    assert out["ok"] is True
+    assert os.path.basename(out["spill"]["path"]).startswith("OBS-ListObjects-")
+    with open(out["spill"]["path"], encoding="utf-8") as f:
+        assert json.load(f) == big

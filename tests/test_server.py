@@ -225,3 +225,45 @@ def test_server_instructions_carry_hints():
     svc = ToolService(ServiceConfig(hints=parse_hints({"instructions": "全局指引"})))
     app = build_app(svc)
     assert "全局指引" in app.instructions
+
+
+# ---------- spill 装配（S12） ----------
+
+def test_build_config_spill_default_on():
+    cfg = build_config(argparse.Namespace(mock=True, policy=None, region=None,
+                                          mock_base=None))
+    assert cfg.spill is not None
+    assert cfg.spill.data_enabled is False
+
+
+def test_build_config_spill_dir_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("HUAWEICLOUD_MCP_SPILL_DIR", str(tmp_path / "s"))
+    cfg = build_config(argparse.Namespace(mock=True, policy=None, region=None,
+                                          mock_base=None))
+    assert cfg.spill is not None
+    assert cfg.spill.dir == tmp_path / "s"
+
+
+def test_build_config_spill_dir_arg_beats_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("HUAWEICLOUD_MCP_SPILL_DIR", "/from-env")
+    cfg = build_config(argparse.Namespace(mock=True, policy=None, region=None,
+                                          mock_base=None,
+                                          spill_dir=str(tmp_path / "arg")))
+    assert cfg.spill is not None
+    assert cfg.spill.dir == tmp_path / "arg"
+
+
+def test_build_config_spill_off(monkeypatch):
+    monkeypatch.setenv("HUAWEICLOUD_MCP_SPILL_DIR", "off")
+    cfg = build_config(argparse.Namespace(mock=True, policy=None, region=None,
+                                          mock_base=None))
+    assert cfg.spill is None
+
+
+def test_build_config_spill_data_enabled(tmp_path):
+    cfg = build_config(argparse.Namespace(mock=True, policy=None, region=None,
+                                          mock_base=None,
+                                          spill_dir=str(tmp_path)),
+                       data_enabled=True)
+    assert cfg.spill is not None
+    assert cfg.spill.data_enabled is True

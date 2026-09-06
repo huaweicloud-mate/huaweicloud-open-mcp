@@ -1,11 +1,15 @@
 """ToolService 单元测试（store 注入，不联网、不碰磁盘）。"""
 
+import json
+import os
+
 import pytest
 
 from apie.memory_store import MemoryStore
 from common.auth import Credentials
 from mcp_openapi.gate import parse_gate
 from mcp_openapi.service import ServiceConfig, ToolService
+from mcp_openapi.spill import SpillConfig
 from safety import policy
 
 FIXTURE_GROUPS = [
@@ -574,13 +578,12 @@ def test_presign_non_obs_product_refused():
 
 def test_presign_flow_after_policy_grant(tmp_path):
     """拒（未授权）→ manage_policy 加规则 → 同实例立即产出预签发 URL（无网络调用）。"""
-    import json as _json
 
     from common.auth.credentials import Credentials
     from safety.policy_store import PolicyStore
 
     p = tmp_path / "policy.json"
-    p.write_text(_json.dumps(["*=deny"]), encoding="utf-8")
+    p.write_text(json.dumps(["*=deny"]), encoding="utf-8")
     svc = ToolService(
         store=_prep_obs_store(),
         config=ServiceConfig(policy_store=PolicyStore(str(p)),
@@ -867,3 +870,121 @@ def test_policy_denial_offer_none_when_reason_mismatches(tmp_path):
     gate_denial_reason = "产品 ECS 不在 openapi mcp 授权范围内"
     assert svc.policy_denial_offer("ECS", "ListServersDetails",
                                    denial_reason=gate_denial_reason) is None
+
+
+# ---------- spill 装配（S12） ----------
+
+
+def test_service_config_spill_default_auto_on():
+    """默认自动落盘：系统临时目录（不污染工作区），显式置 None 才禁用。"""
+    cfg = ServiceConfig()
+    assert cfg.spill is not None
+    assert "hwc-mcp-spill" in str(cfg.spill.dir)
+    assert cfg.spill.data_enabled is False
+
+
+class _FixedHttpClient:
+    def __init__(self, resp):
+        self.resp = resp
+        self.calls = []
+
+    def request(self, method, host, path, query=None, body=None, headers=None):
+        self.calls.append((method, host, path, query, body, headers))
+        return self.resp
+
+
+def _big_body():
+    return {"servers": [{"id": "s"}], "fill": "x" * 250_000}
+
+
+def _real_service(store, tmp_path, client):
+    cred = Credentials(ak="AK", sk="SK", project_id="proj123")
+    return ToolService(store=store, config=ServiceConfig(
+        policy_rules=_policy("ECS:*=allow"),
+        credentials=cred, http_client_factory=lambda: client,
+        spill=SpillConfig(dir=tmp_path)))
+
+
+def test_execute_real_spills_oversized(tmp_path):
+    store = _prep_store(products=False, apis=False)
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": _big_body()})
+    service = _real_service(store, tmp_path, client)
+    out = service.execute_api("ECS", "ListServersDetails", params={"limit": 1})
+    assert out["ok"] is True
+    assert out["spill"]["path"].startswith(str(tmp_path))
+    with open(out["spill"]["path"], encoding="utf-8") as f:
+        assert json.load(f) == _big_body()
+
+
+def test_execute_spill_false_opts_out_and_is_stripped(tmp_path):
+    store = _prep_store(products=False, apis=False)
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": _big_body()})
+    service = _real_service(store, tmp_path, client)
+    out = service.execute_api("ECS", "ListServersDetails",
+                              params={"limit": 1, "_spill": False})
+    assert out["ok"] is True
+    assert "spill" not in out
+    assert out["truncated"] is True
+    assert client.calls[0][3] == {"limit": 1}   # `_spill` 控制键不落入 query
+
+
+def test_execute_mock_lane_spills(tmp_path):
+    store = _prep_store(products=False, apis=False)
+
+    class _BigMock:
+        def mock_request(self, product, api_name, region, status_code=200, number=1):
+            return {"status": 200, "headers": {}, "body": _big_body()}
+
+    service = ToolService(store=store, config=ServiceConfig(
+        mock=True, policy_rules=_policy("ECS:*=allow"),
+        mock_client_factory=lambda: _BigMock(),
+        spill=SpillConfig(dir=tmp_path)))
+    out = service.execute_api("ECS", "ListServersDetails")
+    assert out["ok"] is True
+    assert out["spill"]["path"].startswith(str(tmp_path))
+
+
+def test_get_api_oversized_definitions_guarded(tmp_path):
+    """层级 2 通用守卫：get_api 超限信封完整落盘，重字段以占位替换。"""
+    doc = {**FULL_DOC, "definitions": {
+        "huge": {"type": "object",
+                 "properties": {"p": {"description": "d" * 3000}}}}}
+    doc["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]["responses"]["200"][
+        "schema"] = {"$ref": "#/definitions/huge"}
+    store = MemoryStore()   # 注意 set_api_cache 首写优先，须一次写入大文档
+    store.set_api_cache(("ecs", "ListServersDetails", "cn-north-4"),
+                        (doc, "/v1/{project_id}/cloudservers/detail", "get",
+                         doc["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]))
+    service = ToolService(store=store, config=ServiceConfig(
+        spill=SpillConfig(dir=tmp_path, budget=1000)))
+    out = service.get_api("ECS", "ListServersDetails")
+    assert out["ok"] is True
+    assert out["truncated"] is True
+    assert out["responses"]["_truncated"] is True
+    assert out["definitions"]["_truncated"] is True
+    with open(out["spill"]["path"], encoding="utf-8") as f:
+        full = json.load(f)
+    assert "d" * 3000 in json.dumps(full, ensure_ascii=False)   # 完整原始信封
+
+
+def test_get_api_small_result_untouched(tmp_path):
+    store = _prep_store(products=False, apis=False)
+    service = ToolService(store=store, config=ServiceConfig(
+        spill=SpillConfig(dir=tmp_path)))
+    out = service.get_api("ECS", "ListServersDetails")
+    assert out["ok"] is True
+    assert "spill" not in out
+    assert "truncated" not in out
+
+
+def test_execute_spill_false_str_body_no_file(tmp_path):
+    """_spill=false 对超大 str body 同样成立：guard 同步跳过，不产生任何文件。"""
+    store = _prep_store(products=False, apis=False)
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": "y" * 250_000})
+    service = _real_service(store, tmp_path, client)
+    out = service.execute_api("ECS", "ListServersDetails",
+                              params={"limit": 1, "_spill": False})
+    assert out["ok"] is True
+    assert "spill" not in out
+    assert out["truncated"] is True
+    assert os.listdir(tmp_path) == []

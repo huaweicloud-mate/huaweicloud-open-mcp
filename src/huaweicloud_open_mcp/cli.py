@@ -56,6 +56,10 @@ def main() -> None:
     parser.add_argument("--hints", default=None,
                         help="openapi 自定义提示注入配置文件路径"
                              "（环境变量 HUAWEICLOUD_MCP_OPENAPI_HINTS）")
+    parser.add_argument("--spill-dir", default=None,
+                        help="openapi 超限响应/信封落盘目录（环境变量 "
+                             "HUAWEICLOUD_MCP_SPILL_DIR；缺省为系统临时目录 "
+                             "hwc-mcp-spill，空串或 off 禁用落盘）")
     parser.add_argument("--region", default=None, help="默认 region（openapi 模式，默认 cn-north-4）")
     parser.add_argument("--log-level", default=None, help="日志级别（默认 INFO）")
     parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")
@@ -93,10 +97,11 @@ def main() -> None:
         from mcp_openapi.server import build_openapi_app, build_openapi_config  # noqa: E402
         from mcp_openapi.service import ToolService  # noqa: E402
         openapi_config = build_openapi_config(args)
-        logger.info("server start: mode=openapi region=%s mock=%s policy=%s credentials=%s elicit=%s",
+        logger.info("server start: mode=openapi region=%s mock=%s policy=%s credentials=%s elicit=%s spill=%s",
                      openapi_config.region, openapi_config.mock,
                      "configured" if openapi_config.policy_rules else "MISSING",
-                     "configured" if openapi_config.credentials else "none", elicit_mode)
+                     "configured" if openapi_config.credentials else "none", elicit_mode,
+                     "off" if openapi_config.spill is None else str(openapi_config.spill.dir))
         if openapi_config.policy_rules is None:
             logger.warning("未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）")
         app = build_openapi_app(ToolService(openapi_config), log_level=level_name,
