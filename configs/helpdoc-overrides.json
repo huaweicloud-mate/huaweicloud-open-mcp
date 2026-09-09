@@ -1,0 +1,8 @@
+{
+  "api-cci": "CCI",
+  "api-codecheck": "CodeCheck",
+  "api-mpc": "MPC",
+  "api-projectman": "ProjectMan",
+  "api-modelarts": "ModelArts",
+  "api-sdrs": "SDRS"
+}
