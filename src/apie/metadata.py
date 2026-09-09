@@ -74,9 +74,15 @@ def get_product(groups: list[dict[str, Any]], product: str, *,
 
 def list_apis(apis: list[dict[str, Any]], product: str, *,
               tag: str | None = None, search: str | None = None,
-              limit: int = 20, offset: int = 0) -> ApiListResult:
+              limit: int = 20, offset: int = 0,
+              exclude_apis: frozenset[str] | None = None) -> ApiListResult:
     p = (product or "").lower()
     matched = [a for a in apis if (a.get("product_short") or "").lower() == p]
+    # exclude_apis（机制参数，如 hide 模式的废弃名单）：分页前过滤，
+    # total/tag_groups/分页全按过滤后集合计算，口径一致
+    if exclude_apis:
+        matched = [a for a in matched
+                   if (a.get("name") or "").lower() not in exclude_apis]
 
     # tag 概览基于产品全量目录（不受 tag/search/分页过滤影响），供 LLM 收窄目录参考；
     # 按接口数降序，同数按 tag 名

@@ -162,6 +162,38 @@ def test_list_apis_empty_hints_is_status_quo():
     assert all("hints" not in a for a in out["apis"])
 
 
+# ---------- S13f：api_notes_in_list_apis=false（list_apis 条目零注入） ----------
+
+HINTS_NOLIST = parse_hints({
+    "api_notes_in_list_apis": False,
+    "products": {
+        "ECS": {"notes": "ECS 产品提示",
+                "apis": {"ListServersDetails": "ListServersDetails 提示"}},
+        "RabbitMQ": {"apis": {"ListQueues": "队列提示"}},
+    },
+})
+
+
+def test_list_apis_flag_off_item_level_suppressed_top_level_kept():
+    out = _svc(_prep_store(detail=False), hints=HINTS_NOLIST).list_apis("ECS")
+    assert out["ok"] is True
+    assert out["hints"] == "ECS 产品提示"
+    assert all("hints" not in a for a in out["apis"])
+
+
+def test_list_apis_flag_off_api_level_only_product_fully_suppressed():
+    out = _svc(_prep_store(detail=False), hints=HINTS_NOLIST).list_apis("RabbitMQ")
+    assert out["ok"] is True
+    assert "hints" not in out
+    assert all("hints" not in a for a in out["apis"])
+
+
+def test_get_api_flag_off_unaffected():
+    out = _svc(_prep_store(), hints=HINTS_NOLIST).get_api("ECS", "ListServersDetails")
+    assert out["ok"] is True
+    assert out["hints"] == "ECS 产品提示\nListServersDetails 提示"
+
+
 # ---------- get_api：顶层合并（产品在前、API 在后） ----------
 
 def test_get_api_combined_notes():

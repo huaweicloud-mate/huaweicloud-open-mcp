@@ -32,6 +32,7 @@ from safety import policy as safety_policy
 from safety.policy_store import PolicyStore
 
 from . import execute, execute_obs
+from .deprecated import DeprecatedIndex
 from .execute_obs import ObsHttpClient
 from .gate import Gate
 from .hints import Hints
@@ -85,6 +86,8 @@ class ServiceConfig:
     obs_client_factory: Callable[[], execute_obs.ObsClient] | None = None
     gate: Gate = Gate.unrestricted()
     hints: Hints = Hints.empty()
+    deprecated_index: DeprecatedIndex = DeprecatedIndex.empty()
+    deprecated_mode: str = "off"
     audit_sink: AuditSink | None = None
     spill: SpillConfig | None = field(default_factory=SpillConfig.default)
 
@@ -238,10 +241,31 @@ class ToolService:
         return {**out, "products": [
             {**p, "hints": notes} if notes else p for p, notes in annotated]}
 
+    def _annotate_deprecated(self, out: Any, product: str) -> Any:
+        """annotate 模式：条目级结构化标注 deprecated + replacement（S14）。"""
+        index = self.config.deprecated_index
+        items = out.get("apis") or []
+        decorated: list[Any] = []
+        changed = False
+        for a in items:
+            entry = index.entry(product, a.get("name", ""))
+            if entry is not None:
+                changed = True
+                a = {**a, "deprecated": True}
+                if entry.replacement:
+                    a["replacement"] = entry.replacement
+            decorated.append(a)
+        return {**out, "apis": decorated} if changed else out
+
     def _annotate_list_apis(self, out: Any, product: str) -> Any:
-        """list_apis：顶层产品级提示 + 当前页条目级 API 级提示。"""
+        """list_apis：顶层产品级提示 + 当前页条目级 API 级提示。
+
+        api_notes_in_list_apis=False 时条目级被抑制（S13f），顶层保留。
+        """
         hints = self.config.hints
         new_out = self._with_product_hints(out, product)
+        if not hints.api_notes_in_list_apis:
+            return new_out
         items = new_out.get("apis") or []
         annotated = [(a, hints.api_notes(product, a.get("name", ""))) for a in items]
         if not any(text for _, text in annotated):
@@ -298,7 +322,12 @@ class ToolService:
             logger.warning("list_apis product=%s metadata=missing", product)
             return {"ok": False, "reason": "接口索引不可用（远端拉取失败）"}
         out = metadata.list_apis(apis, product, tag=tag, search=search,
-                                 limit=limit, offset=offset)
+                                 limit=limit, offset=offset,
+                                 exclude_apis=(self.config.deprecated_index.names(product)
+                                               if self.config.deprecated_mode == "hide"
+                                               else None))
+        if self.config.deprecated_mode == "annotate":
+            out = self._annotate_deprecated(out, product)
         return cast(ApiListResult, self._annotate_list_apis(out, product))
 
     @_audited

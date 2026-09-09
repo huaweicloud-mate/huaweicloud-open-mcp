@@ -1,0 +1,5 @@
+{
+  "_comment": "api-refresh helphints --overrides：帮助中心文档集(docset)→产品(productshort) 归属覆盖。用于 product_display 名称匹配不了的文档集（别名歧义/命名例外）。键为 docset（support.huaweicloud.com 首段路径），值为 apiexplorer productshort。",
+  "api-iotda": "IoTDA",
+  "api-dws": "DWS"
+}

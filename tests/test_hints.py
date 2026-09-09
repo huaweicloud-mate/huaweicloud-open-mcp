@@ -83,6 +83,23 @@ def test_parse_minimal_form_is_noop():
     assert h.product_notes("ECS") is None
 
 
+# ---------- S13f：api_notes_in_list_apis 开关（缺省 true = 现状） ----------
+
+def test_parse_flag_default_true():
+    h = parse_hints({"products": {"ECS": {"apis": {"A": "x"}}}})
+    assert h.api_notes_in_list_apis is True
+
+
+def test_parse_flag_explicit_false():
+    h = parse_hints({"api_notes_in_list_apis": False, "products": {}})
+    assert h.api_notes_in_list_apis is False
+
+
+def test_parse_flag_non_bool_raises():
+    with pytest.raises(ValueError):
+        parse_hints({"api_notes_in_list_apis": "no"})
+
+
 def test_parse_invalid_raises():
     with pytest.raises(ValueError):
         parse_hints("nope")

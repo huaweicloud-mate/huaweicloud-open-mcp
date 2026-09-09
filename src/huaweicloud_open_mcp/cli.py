@@ -56,6 +56,13 @@ def main() -> None:
     parser.add_argument("--hints", default=None,
                         help="openapi 自定义提示注入配置文件路径"
                              "（环境变量 HUAWEICLOUD_MCP_OPENAPI_HINTS）")
+    parser.add_argument("--deprecated-index", default=None,
+                        help="openapi 废弃接口索引文件路径"
+                             "（环境变量 HUAWEICLOUD_MCP_DEPRECATED_INDEX）")
+    parser.add_argument("--deprecated-mode", default=None,
+                        choices=["annotate", "hide", "off"],
+                        help="list_apis 废弃接口处理模式（缺省：配置索引即 annotate，"
+                             "未配置即 off；环境变量 HUAWEICLOUD_MCP_DEPRECATED_MODE）")
     parser.add_argument("--spill-dir", default=None,
                         help="openapi 超限响应/信封落盘目录（环境变量 "
                              "HUAWEICLOUD_MCP_SPILL_DIR；缺省为系统临时目录 "

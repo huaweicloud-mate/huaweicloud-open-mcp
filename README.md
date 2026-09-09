@@ -280,9 +280,34 @@ A hints file lets a deployment inject its own guidance into the discovery chain:
 - Official metadata is never replaced — hints ride along in an extra `hints` field (product + API notes are merged, product first).
 - Injected only on successful discovery results, never on denials (gate/policy rejections stay untouched); `get_api_examples` and `execute_api` are never annotated.
 - Product keys and `apis` keys are case-insensitive; a product value may be a plain string (product note only) or an object with `notes` / `apis`.
+- Optional top-level boolean `api_notes_in_list_apis` (default `true`): when `false`, `list_apis` items carry no API-level notes (top-level product notes and `get_api` merged notes are unaffected) — the generated help-center completion file sets this to `false` so `get_api` stays the only enriched surface.
 - Loaded at startup (no hot reload); invalid configs fail fast at startup. Without `--hints`, behavior is byte-for-byte unchanged.
 
 Example: `configs/openapi-hints.example.json`.
+
+### Help-center description completion (optional, build-time)
+
+`api-refresh` ships two extra stages (not part of the default refresh range) that harvest the richer "功能介绍" sections from the official help center and turn them into a hints file:
+
+```bash
+uv run api-refresh helpdocs    # crawl + parse help-center pages (sitemap seeds + same-docset link BFS, resumable)
+uv run api-refresh helphints   # match to apiexplorer APIs, diff, emit data/help_completions/ + data/hints/help-docs-hints.json
+uv run huaweicloud-open-mcp --hints data/hints/help-docs-hints.json
+```
+
+- Diff-only: an API enters the file only when the help-center intro is materially richer than the API Explorer description (`--min-gain`, default 20 chars).
+- Each note carries the full intro (capped via `--cap`, default 2000 chars, `…` marker) plus the official doc URL.
+- Rate-limited crawl (0.4s/page) with bot-verification backoff and resumable checkpoints; artifacts are rebuildable and not committed. See [AGENTS.md](AGENTS.md) for the full pipeline rules.
+
+The same pipeline emits a deprecated-API index (`data/help_completions/deprecated.json`) sourced from the help center's own `（废弃）` titles (API Explorer's `op.deprecated` metadata is unreliable — ECS pilot: 45 vs 1 flags). Mount it to govern the discovery surface:
+
+```bash
+uv run huaweicloud-open-mcp --deprecated-index data/help_completions/deprecated.json                 # annotate (default): list_apis items carry deprecated: true + replacement
+uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide                            # hide: deprecated APIs are filtered from list_apis (counts stay coherent)
+```
+
+- `annotate`/`hide` only affect the `list_apis` discovery surface; `get_api`/`execute_api` always work (narrowed discovery ≠ refused detail).
+- Without `--deprecated-index`, behavior is byte-for-byte unchanged.
 
 ## Configuration
 
@@ -298,6 +323,8 @@ Example: `configs/openapi-hints.example.json`.
 | `--region <id>` | `cn-north-4` | Default region |
 | `--gate <file>` | — | Optional product gate (allowlist; unlisted products are hidden from the agent) |
 | `--hints <file>` | — | Optional custom-hints file (deploy-side guidance injected into instructions and discovery results) |
+| `--deprecated-index <file>` | — | Optional deprecated-API index; enables `list_apis` annotate/hide governance |
+| `--deprecated-mode <annotate\|hide\|off>` | `annotate` (when index configured) | Deprecated-API handling mode for `list_apis`; requires `--deprecated-index` |
 | `--elicitation auto\|required\|off` | `off` | MCP-elicitation confirmation for policy changes |
 | `--spill-dir <dir>` | system temp dir (`hwc-mcp-spill`) | Where oversized responses/envelopes are spilled (empty or `off` disables spilling; pure truncation returns) |
 | `--audit-file <file>` | disabled | Audit trail (NDJSON): one `{ts, tool, input, ok}` line per tool call |
@@ -416,7 +443,7 @@ uv run ruff check src tests              # lint
 uv run mypy src                          # type check
 ```
 
-Companion CLIs: `api-refresh` (offline APIE pipeline: fetch API Explorer → OpenAPI 2.0 docs) and `api-docs` (metadata queries from the terminal). Details in [AGENTS.md](AGENTS.md).
+Companion CLIs: `api-refresh` (offline APIE pipeline: fetch API Explorer → OpenAPI 2.0 docs, plus help-center completion stages `helpdocs`/`helphints`) and `api-docs` (metadata queries from the terminal). Details in [AGENTS.md](AGENTS.md).
 
 ### Publishing
 

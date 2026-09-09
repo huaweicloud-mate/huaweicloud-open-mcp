@@ -23,6 +23,7 @@ from common.types import (
 )
 from safety.policy_store import PolicyStore
 
+from .deprecated import load_deprecated_index
 from .gate import Gate, load_gate_file
 from .hints import Hints, load_hints_file
 from .service import ServiceConfig, ToolService
@@ -114,6 +115,16 @@ def build_openapi_config(args: argparse.Namespace, *,
     hints_file = getattr(args, "hints", None) or os.environ.get("HUAWEICLOUD_MCP_OPENAPI_HINTS")
     audit_file = (getattr(args, "audit_file", None)
                   or os.environ.get("HUAWEICLOUD_MCP_AUDIT_FILE"))
+    deprecated_file = (getattr(args, "deprecated_index", None)
+                       or os.environ.get("HUAWEICLOUD_MCP_DEPRECATED_INDEX"))
+    deprecated_mode = (getattr(args, "deprecated_mode", None)
+                       or os.environ.get("HUAWEICLOUD_MCP_DEPRECATED_MODE"))
+    if deprecated_mode and not deprecated_file:
+        raise ValueError("--deprecated-mode 需要同时配置 --deprecated-index")
+    if deprecated_mode not in (None, "annotate", "hide", "off"):
+        raise ValueError(f"无效的 deprecated-mode: {deprecated_mode}"
+                         "（可选 annotate/hide/off）")
+    deprecated_index = load_deprecated_index(deprecated_file or None)
     policy_store = PolicyStore(policy_file) if policy_file else None
     spill_raw = getattr(args, "spill_dir", None)
     if spill_raw is None:
@@ -128,6 +139,8 @@ def build_openapi_config(args: argparse.Namespace, *,
         mock_passthrough=mock_passthrough,
         gate=load_gate_file(gate_file) if gate_file else Gate.unrestricted(),
         hints=load_hints_file(hints_file),
+        deprecated_index=deprecated_index,
+        deprecated_mode=deprecated_mode or ("annotate" if deprecated_file else "off"),
         audit_sink=sink_from_path(audit_file),
         spill=parse_spill_config(spill_raw, data_enabled=data_enabled),
     )

@@ -23,6 +23,11 @@ PROOT = str(project_root())
 STAGES = ["count", "products", "docs", "details", "retry", "split",
           "convert", "merge", "organize", "validate"]
 
+# 帮助中心补全阶段（方案 B）：子命令/status/显式 refresh --from 可用，
+# 但默认 refresh 范围仅覆盖 STAGES（避免全量刷新被 2-4h 爬取拖累）。
+HELP_STAGES = ["helpdocs", "helphints"]
+ALL_STAGES = STAGES + HELP_STAGES
+
 MODULE = {
     "docs": "fetch_apis",
     "details": "fetch_details",
@@ -31,6 +36,8 @@ MODULE = {
     "convert": "convert_openapi2",
     "merge": "merge_by_tag",
     "organize": "organize",
+    "helpdocs": "fetch_help_docs",
+    "helphints": "build_help_hints",
 }
 
 CURL = {
@@ -53,19 +60,20 @@ def artifact_of(stage: str, region: str | None = None) -> str | None:
                 "docs": "raw/apis_docs.json"}[stage]
     if stage in ("details", "retry"):
         return region_paths.raw_detail_path(r)
-    if stage == "split":
-        return region_paths.by_tag_dir(r)
-    if stage == "convert":
-        return region_paths.openapi2_dir(r)
-    if stage == "merge":
-        return region_paths.merged_dir(r)
-    if stage == "organize":
-        return region_paths.openapi_out_dir(r)
+    if stage in ("split", "convert", "merge", "organize"):
+        return {"split": region_paths.by_tag_dir(r),
+                "convert": region_paths.openapi2_dir(r),
+                "merge": region_paths.merged_dir(r),
+                "organize": region_paths.openapi_out_dir(r)}[stage]
+    if stage == "helpdocs":
+        return "raw/help_docs.json"
+    if stage == "helphints":
+        return "data/hints/help-docs-hints.json"
     return None
 
 
 def stage_index(stage: str) -> int:
-    return STAGES.index(stage)
+    return ALL_STAGES.index(stage)
 
 
 def run_cmd(args: list[str], dry_run: bool = False, env: dict[str, str] | None = None) -> int:
@@ -128,6 +136,8 @@ def stage_script(name: str, dry_run: bool, full: bool = False) -> int:
         if dry_run:
             print(f"+ env API_EXPLORER_REGION={current_region()}", flush=True)
     args = [sys.executable, "-m", f"apie.{MODULE[name]}"]
+    if name == "helphints":
+        args += ["--region", current_region()]
     import os as _os
     for var in ("HUAWEICLOUD_MCP_LOG_LEVEL", "HUAWEICLOUD_MCP_LOG_FILE"):
         if _os.environ.get(var) and (env is None or var not in env):
@@ -176,7 +186,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"region: {region}")
     print(f"{'stage':<10} {'artifact':<32} {'status'}")
     print("-" * 60)
-    for s in STAGES:
+    for s in ALL_STAGES:
         art = artifact_of(s, region)
         exists = os.path.exists(os.path.join(PROOT, art)) if art else True
         mark = "OK " if exists else "MISS"
@@ -212,12 +222,13 @@ def detail_region_matches(region: str) -> bool:
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
+    # 默认范围仅核心 STAGES；--from/--to 可显式选择帮助中心阶段（方案 B）
     start = stage_index(args.start) if args.start else 0
-    end = stage_index(args.end) if args.end else len(STAGES) - 1
+    end = stage_index(args.end) if args.end else stage_index(STAGES[-1])
     if start > end:
         print(f"无效范围: --from {args.start} 在 --to {args.end} 之后", file=sys.stderr)
         return 2
-    selected = STAGES[start:end + 1]
+    selected = ALL_STAGES[start:end + 1]
     print(f"将执行 {len(selected)} 个阶段: {' → '.join(selected)}", flush=True)
 
     for s in selected:
@@ -256,13 +267,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="查看各阶段产物状态", parents=[common])
 
-    for s in STAGES:
+    for s in ALL_STAGES:
         sp = sub.add_parser(s, help=f"单步执行 {s} 阶段", parents=[common])
         sp.set_defaults(single=s)
 
     rp = sub.add_parser("refresh", help="执行整条流水线（或 --from/--to 范围）", parents=[common])
-    rp.add_argument("--from", dest="start", choices=STAGES, help="起始阶段")
-    rp.add_argument("--to", dest="end", choices=STAGES, help="结束阶段")
+    rp.add_argument("--from", dest="start", choices=ALL_STAGES, help="起始阶段")
+    rp.add_argument("--to", dest="end", choices=ALL_STAGES, help="结束阶段")
 
     return p
 

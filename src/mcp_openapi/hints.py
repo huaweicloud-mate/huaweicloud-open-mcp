@@ -25,10 +25,15 @@ def _clean(text: Any, where: str) -> str | None:
 
 @dataclass(frozen=True)
 class Hints:
-    """提示注入值对象。products: {PRODUCT_UPPER: (notes, {API_LOWER: text})}。"""
+    """提示注入值对象。products: {PRODUCT_UPPER: (notes, {API_LOWER: text})}。
+
+    api_notes_in_list_apis（缺省 True = 现状）：False 时 list_apis 条目级
+    API 提示被抑制（顶层产品级与 get_api 合并提示不受影响）。
+    """
 
     instructions: str | None = None
     products: dict[str, tuple[str | None, dict[str, str]]] = field(default_factory=dict)
+    api_notes_in_list_apis: bool = True
 
     def product_notes(self, product: str) -> str | None:
         """产品级提示（未配置返回 None）。"""
@@ -60,10 +65,13 @@ def parse_hints(raw: Any) -> Hints:
     """
     if not isinstance(raw, dict):
         raise ValueError("hints 配置必须是 mapping")
-    unknown = set(raw) - {"instructions", "products"}
+    unknown = set(raw) - {"instructions", "products", "api_notes_in_list_apis"}
     if unknown:
         raise ValueError(f"hints 配置含未知键: {sorted(unknown)}")
     instructions = _clean(raw.get("instructions"), "hints instructions")
+    flag = raw.get("api_notes_in_list_apis", True)
+    if not isinstance(flag, bool):
+        raise ValueError("hints api_notes_in_list_apis 必须是布尔值")
     products: dict[str, tuple[str | None, dict[str, str]]] = {}
     raw_products = raw.get("products") or {}
     if not isinstance(raw_products, dict):
@@ -93,7 +101,8 @@ def parse_hints(raw: Any) -> Hints:
         else:
             raise ValueError(f"{where} 必须是字符串或 mapping")
         products[key.strip().upper()] = (notes, apis)
-    return Hints(instructions=instructions, products=products)
+    return Hints(instructions=instructions, products=products,
+                 api_notes_in_list_apis=flag)
 
 
 def load_hints_file(path: str | None) -> Hints:

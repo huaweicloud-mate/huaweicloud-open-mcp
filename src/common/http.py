@@ -21,6 +21,10 @@ class ApieHttpError(Exception):
     """APIE 请求最终失败（重试耗尽后的非 HTTP 错误）。"""
 
 
+class PermanentError(Exception):
+    """确定性 HTTP 错误（404/410 等）：重试无意义，调用方应快速失败。"""
+
+
 def _retry(fn: Callable[[], T], *, max_retries: int, backoff: float,
            logger_name: str = "common.http") -> T:
     """通用 HTTP 重试：429 指数退避，其他网络异常线性退避。"""
@@ -63,6 +67,20 @@ def open_url(url: str, *, timeout: int = 30) -> tuple[dict[str, Any], HttpError 
         except Exception:
             body = {"error_msg": str(e)}
         return body, e
+
+
+def open_text(url: str, *, timeout: int = 30,
+              headers: dict[str, str] | None = None) -> tuple[str, HttpError | None]:
+    """打开 URL 一次，返回原始响应文本（HTML 抓取用）。HTTP 错误返回 ("", err)。"""
+    merged = dict(HEADERS)
+    if headers:
+        merged.update(headers)
+    req = urllib.request.Request(url, headers=merged)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace"), None
+    except urllib.error.HTTPError as e:
+        return "", e
 
 
 def fetch_json(url: str, *, retries: int = 5, backoff: float = 2.0,
