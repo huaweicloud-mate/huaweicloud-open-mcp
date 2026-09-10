@@ -25,3 +25,23 @@ def config_path(name: str) -> Path:
         return local
     resource = files(_CONFIGS_PACKAGE) / "configs" / name
     return Path(str(resource))
+
+
+def resolve_config_arg(value: str) -> Path:
+    """启动参数配置路径解析：存在的显式路径原样使用，否则回退 configs/<value>。
+
+    优先级：显式存在的路径（绝对或 cwd 相对，现状零回归）> 仓库根 configs/<value>
+    > 包内 configs/<value>（经 config_path，支持 uvx/pip 安装态裸文件名）。
+    全部缺失抛 FileNotFoundError，消息列出全部尝试路径——调用方 fail-fast
+    直接透传，无需 try/except。value 须非空（空值分支由调用方守卫）。
+    """
+    explicit = Path(value)
+    if explicit.is_file():
+        return explicit
+    resolved = config_path(value)
+    if resolved.is_file():
+        return resolved
+    local = project_root() / "configs" / value
+    tried = [explicit, resolved] if local == resolved else [explicit, local, resolved]
+    tried_text = "、".join(str(p) for p in tried)
+    raise FileNotFoundError(f"配置文件不存在: {value}（已尝试: {tried_text}）")

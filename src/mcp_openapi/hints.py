@@ -13,6 +13,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from common.paths import resolve_config_arg
+
 
 def _clean(text: Any, where: str) -> str | None:
     """字符串原样保留；空串视为未配置；非字符串类型抛错（启动快速失败）。"""
@@ -105,10 +107,36 @@ def parse_hints(raw: Any) -> Hints:
                  api_notes_in_list_apis=flag)
 
 
+DEFAULT_HINTS_FILE = "help-docs-hints.json"
+
+
 def load_hints_file(path: str | None) -> Hints:
-    """加载 hints 配置文件。无路径时返回空提示（no-op）；JSON 非法抛错。"""
-    if not path:
+    """加载 hints 配置文件：CLI/env 原始值 → Hints 的唯一语义入口。
+
+    - None（--hints 与 env 均未配置）→ 缺省档：裸名 DEFAULT_HINTS_FILE 经
+      resolve_config_arg 解析（存在的显式路径 > 仓库根 configs/ > 包内
+      configs/），文件缺失静默 Hints.empty()（隐式缺省不 fail-fast）；
+    - 空串 / "off"（strip + 大小写不敏感，对齐 spill idiom）→ 显式禁用
+      Hints.empty()；
+    - 显式路径/裸名 → 解析加载，缺失 fail-fast（FileNotFoundError 列全候选）。
+    JSON 非法恒 fail-fast（静默仅豁免「文件不存在」，不豁免「内容写坏」）。
+    """
+    if path is None:
+        return _load(DEFAULT_HINTS_FILE, missing_ok=True)
+    stripped = path.strip()
+    if not stripped or stripped.lower() == "off":
         return Hints.empty()
-    with open(path, encoding="utf-8") as f:
+    return _load(path, missing_ok=False)
+
+
+def _load(path: str, *, missing_ok: bool) -> Hints:
+    """内部接缝：resolve + open + parse；missing_ok 仅豁免文件不存在。"""
+    try:
+        resolved = resolve_config_arg(path)
+    except FileNotFoundError:
+        if missing_ok:
+            return Hints.empty()
+        raise
+    with open(resolved, encoding="utf-8") as f:
         data = json.load(f)
     return parse_hints(data)

@@ -1,5 +1,7 @@
 """S10a：openapi 自定义提示注入 Hints 纯函数单测（parse/load/lookup/合并策略）。"""
 
+import tempfile
+
 import pytest
 
 from mcp_openapi.hints import Hints, load_hints_file, parse_hints
@@ -123,8 +125,80 @@ def test_load_hints_file(tmp_path):
     assert h.product_notes("ECS") == "n"
 
 
-def test_load_hints_file_none_is_empty():
-    assert load_hints_file(None).instructions is None
+def test_load_hints_file_bare_name_resolves_repo_configs(tmp_path, monkeypatch):
+    """裸文件名经 config_path 解析：仓库根 configs/ 优先（S0 委派，经 loader 接口验证）。"""
+    from common import paths
+
+    cfg = tmp_path / "configs" / "deploy-hints.json"
+    cfg.parent.mkdir()
+    cfg.write_text('{"instructions": "裸名解析"}', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)                       # cwd 无同名文件
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path)
+    assert load_hints_file("deploy-hints.json").instructions == "裸名解析"
+
+
+def test_load_hints_file_bare_name_real_repo_layout(monkeypatch):
+    """真实仓库布局 + 任意 cwd：包内随附示例 configs/openapi-hints.example.json 可裸名加载。"""
+    monkeypatch.chdir(tempfile.mkdtemp())
+    h = load_hints_file("openapi-hints.example.json")
+    assert isinstance(h, Hints)
+
+
+def test_load_hints_file_missing_everywhere_raises(tmp_path, monkeypatch):
+    """全缺失 fail-fast：FileNotFoundError 含全部尝试路径（显式 + 两条 configs 候选）。"""
+    from common import paths
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_hints_file("missing.json")
+    msg = str(excinfo.value)
+    assert str(tmp_path / "repo" / "configs" / "missing.json") in msg
+    assert "huaweicloud_open_mcp" in msg
+
+
+def test_load_hints_file_none_default_loads_configs_file(tmp_path, monkeypatch):
+    """None（--hints/env 均未配置）→ 缺省档：configs/help-docs-hints.json 加载。"""
+    from common import paths
+
+    cfg = tmp_path / "configs" / "help-docs-hints.json"
+    cfg.parent.mkdir()
+    cfg.write_text('{"instructions": "缺省档"}', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)                       # cwd 无同名文件
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path)
+    assert load_hints_file(None).instructions == "缺省档"
+
+
+def test_load_hints_file_none_missing_silent_empty(tmp_path, monkeypatch):
+    """None + 缺省文件全缺失 → 静默 Hints.empty()（隐式缺省不 fail-fast）。"""
+    from common import paths
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+    h = load_hints_file(None)
+    assert h.instructions is None
+    assert h.product_notes("ECS") is None
+
+
+def test_load_hints_file_off_disables_even_when_file_present(tmp_path, monkeypatch):
+    """显式 "off"（strip + 大小写不敏感，对齐 spill idiom）→ 禁用，优先于缺省文件存在。"""
+    from common import paths
+
+    cfg = tmp_path / "configs" / "help-docs-hints.json"
+    cfg.parent.mkdir()
+    cfg.write_text('{"instructions": "不应加载"}', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path)
+    assert load_hints_file("off").instructions is None
+    assert load_hints_file(" OFF ").instructions is None
+
+
+def test_load_hints_file_real_repo_default_loads(monkeypatch):
+    """真实仓库布局 + 任意 cwd：缺省档加载已入库 configs/help-docs-hints.json。"""
+    monkeypatch.chdir(tempfile.mkdtemp())
+    h = load_hints_file(None)
+    assert isinstance(h, Hints)
+    assert h.instructions is not None                 # 该文件 instructions 非空
 
 
 def test_load_hints_file_empty_path_is_empty():

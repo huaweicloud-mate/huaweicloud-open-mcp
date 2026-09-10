@@ -10,6 +10,7 @@ import pytest
 
 from apie.memory_store import MemoryStore
 from apie.metadata import list_apis
+from common import paths as common_paths
 from mcp_openapi.deprecated import (
     DeprecatedEntry,
     DeprecatedIndex,
@@ -18,6 +19,14 @@ from mcp_openapi.deprecated import (
 )
 from mcp_openapi.server import build_openapi_config
 from mcp_openapi.service import ServiceConfig, ToolService
+
+
+@pytest.fixture(autouse=True)
+def _seal_from_repo_configs(tmp_path, monkeypatch):
+    """隔离真实仓库 configs/：缺省 hints 装配不依赖宿主文件系统（本文件只测
+    deprecated 语义，hints 缺省档静默 empty 即可）。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(common_paths, "project_root", lambda: tmp_path / "repo")
 
 RAW = {
     "products": {
@@ -79,6 +88,31 @@ def test_load_deprecated_index(tmp_path):
     p.write_text('{"products": {"ECS": {"A": {"replacement": "B"}}}}', encoding="utf-8")
     idx = load_deprecated_index(str(p))
     assert idx.entry("ECS", "a").replacement == "B"
+
+
+def test_load_deprecated_index_bare_name_resolves_repo_configs(tmp_path, monkeypatch):
+    """裸文件名经 config_path 解析：仓库根 configs/ 优先（S0 委派，经 loader 接口验证）。"""
+    from common import paths
+
+    cfg = tmp_path / "configs" / "deprecated.json"
+    cfg.parent.mkdir()
+    cfg.write_text('{"products": {"ECS": {"A": {"replacement": "B"}}}}', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)                       # cwd 无同名文件
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path)
+    assert load_deprecated_index("deprecated.json").entry("ECS", "a").replacement == "B"
+
+
+def test_load_deprecated_index_missing_everywhere_raises(tmp_path, monkeypatch):
+    """全缺失 fail-fast：FileNotFoundError 含全部尝试路径（显式 + 两条 configs 候选）。"""
+    from common import paths
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_deprecated_index("missing.json")
+    msg = str(excinfo.value)
+    assert str(tmp_path / "repo" / "configs" / "missing.json") in msg
+    assert "huaweicloud_open_mcp" in msg
 
 
 def test_load_deprecated_index_none_is_empty():

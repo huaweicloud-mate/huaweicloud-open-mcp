@@ -2,7 +2,10 @@
 
 import argparse
 
+import pytest
+
 from apie import mock as apie_mock
+from common import paths
 from mcp_openapi.gate import Gate, parse_gate
 from mcp_openapi.hints import Hints, parse_hints
 from mcp_openapi.server import build_app, build_config, build_instructions
@@ -15,12 +18,23 @@ EXPECTED_TOOLS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _seal_from_repo_configs(tmp_path, monkeypatch):
+    """隔离真实仓库 configs/ 与宿主 cwd：缺省 hints 装配不受文件系统泄入影响
+    （需要 configs 文件的用例自行建 tmp configs 并覆写 project_root）。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+
+
 def _tool_names(app):
     return set(app._tool_manager._tools.keys())
 
 
-def _args(mock_base=None, policy_file=None):
-    return argparse.Namespace(mock=True, policy=policy_file, region=None, mock_base=mock_base)
+def _args(mock_base=None, policy_file=None, **kw):
+    ns = argparse.Namespace(mock=True, policy=policy_file, region=None, mock_base=mock_base)
+    for k, v in kw.items():
+        setattr(ns, k, v)
+    return ns
 
 
 def test_all_seven_tools_registered():
@@ -214,11 +228,47 @@ def test_build_config_hints_env(monkeypatch, tmp_path):
     assert cfg.hints.instructions == "g2"
 
 
-def test_build_config_hints_default_empty(monkeypatch):
+def test_build_config_hints_default_loads_configs_file(tmp_path, monkeypatch):
+    """未配置 --hints/env → 缺省档加载仓库 configs/help-docs-hints.json。"""
+    cfgdir = tmp_path / "repo" / "configs"
+    cfgdir.mkdir(parents=True)
+    (cfgdir / "help-docs-hints.json").write_text('{"instructions": "装配缺省"}',
+                                                 encoding="utf-8")
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+    cfg = build_config(_args())
+    assert cfg.hints.instructions == "装配缺省"
+
+
+def test_build_config_hints_default_missing_silent(tmp_path, monkeypatch):
+    """未配置且缺省文件全缺失 → 静默 empty（隐式缺省不 fail-fast）。"""
     monkeypatch.delenv("HUAWEICLOUD_MCP_OPENAPI_HINTS", raising=False)
     cfg = build_config(_args())
     assert cfg.hints.instructions is None
     assert cfg.hints.product_notes("ECS") is None
+
+
+def test_build_config_hints_off_disables(tmp_path, monkeypatch):
+    """--hints off → 显式禁用（即使缺省文件存在）。"""
+    cfgdir = tmp_path / "repo" / "configs"
+    cfgdir.mkdir(parents=True)
+    (cfgdir / "help-docs-hints.json").write_text('{"instructions": "不应加载"}',
+                                                 encoding="utf-8")
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+    cfg = build_config(_args(hints="off"))
+    assert cfg.hints.instructions is None
+
+
+def test_build_config_hints_env_off_disables(monkeypatch):
+    """env=off → 显式禁用。"""
+    monkeypatch.setenv("HUAWEICLOUD_MCP_OPENAPI_HINTS", "off")
+    cfg = build_config(_args())
+    assert cfg.hints.instructions is None
+
+
+def test_build_config_hints_explicit_missing_fail_fast(tmp_path, monkeypatch):
+    """显式路径缺失 → fail-fast（与缺省档静默相区分）。"""
+    with pytest.raises(FileNotFoundError):
+        build_config(_args(hints="nope.json"))
 
 
 def test_server_instructions_carry_hints():

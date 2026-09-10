@@ -55,14 +55,22 @@ def main() -> None:
                         help="openapi 产品门栓配置文件路径（环境变量 HUAWEICLOUD_MCP_OPENAPI_GATE）")
     parser.add_argument("--hints", default=None,
                         help="openapi 自定义提示注入配置文件路径"
-                             "（环境变量 HUAWEICLOUD_MCP_OPENAPI_HINTS）")
+                             "（缺省加载 configs/help-docs-hints.json，缺失静默跳过；"
+                             "off 或空串显式禁用；支持裸文件名："
+                             "显式路径 > 仓库根 configs > 包内 configs；"
+                             "环境变量 HUAWEICLOUD_MCP_OPENAPI_HINTS）")
     parser.add_argument("--deprecated-index", default=None,
-                        help="openapi 废弃接口索引文件路径"
-                             "（环境变量 HUAWEICLOUD_MCP_DEPRECATED_INDEX）")
+                        help="openapi 废弃接口索引文件路径（支持裸文件名，解析同 --hints；"
+                             "环境变量 HUAWEICLOUD_MCP_DEPRECATED_INDEX）")
     parser.add_argument("--deprecated-mode", default=None,
                         choices=["annotate", "hide", "off"],
-                        help="list_apis 废弃接口处理模式（缺省：配置索引即 annotate，"
-                             "未配置即 off；环境变量 HUAWEICLOUD_MCP_DEPRECATED_MODE）")
+                        help="list_apis 废弃接口处理模式："
+                             "annotate=条目附加 deprecated:true+replacement（总数/tag_groups 不变）；"
+                             "hide=分页前过滤废弃条目（计数同口径）；off=不治理；"
+                             "缺省：配置索引即 annotate，未配置即 off；"
+                             "仅影响 list_apis 发现面，get_api/execute_api 恒可用；"
+                             "显式传 mode 需同时配置 --deprecated-index"
+                             "（环境变量 HUAWEICLOUD_MCP_DEPRECATED_MODE）")
     parser.add_argument("--spill-dir", default=None,
                         help="openapi 超限响应/信封落盘目录（环境变量 "
                              "HUAWEICLOUD_MCP_SPILL_DIR；缺省为系统临时目录 "

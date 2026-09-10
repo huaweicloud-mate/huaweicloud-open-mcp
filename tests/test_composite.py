@@ -8,10 +8,12 @@ server 内闭环验证（真 mcp SDK client 内存回环；元数据网络 monke
 import argparse
 import asyncio
 
+import pytest
 from mcp import ClientSession
 from mcp.client._memory import InMemoryTransport
 
 from apie.memory_store import MemoryStore
+from common import paths as common_paths
 from huaweicloud_open_mcp.cli import parse_modes
 from huaweicloud_open_mcp.composite import build_composite_app, merge_instructions
 from mcp_openapi.service import ServiceConfig, ToolService
@@ -23,6 +25,13 @@ _OPENAPI_TOOLS = {"list_products", "get_product", "list_apis", "get_api",
 _DISCOVER_TOOLS = {"list_mcp_servers", "get_mcp_server", "connect_mcp_server",
                    "list_server_tools", "get_server_tool", "call_server_tool",
                    "disconnect_mcp_server", "manage_policy"}
+
+
+@pytest.fixture(autouse=True)
+def _seal_from_repo_configs(tmp_path, monkeypatch):
+    """隔离真实仓库 configs/：openapi 侧缺省 hints 装配不依赖宿主文件系统。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(common_paths, "project_root", lambda: tmp_path / "repo")
 
 
 def make_args(**overrides):

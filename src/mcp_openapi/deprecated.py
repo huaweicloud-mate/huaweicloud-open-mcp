@@ -13,6 +13,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from common.paths import resolve_config_arg
+
 
 def _clean_str(val: Any, where: str) -> str | None:
     """字符串原样保留；None 合法（未提供）；其它类型抛错（启动快速失败）。"""
@@ -85,9 +87,13 @@ def parse_deprecated_index(raw: Any) -> DeprecatedIndex:
 
 
 def load_deprecated_index(path: str | None) -> DeprecatedIndex:
-    """加载废弃索引文件。无路径时返回空索引（no-op）；JSON 非法抛错。"""
+    """加载废弃索引文件。无路径时返回空索引（no-op）；JSON 非法抛错。
+
+    路径支持裸文件名：经 common.paths.resolve_config_arg 解析
+    （存在的显式路径原样 > 仓库根 configs/ > 包内 configs/）。
+    """
     if not path:
         return DeprecatedIndex.empty()
-    with open(path, encoding="utf-8") as f:
+    with open(resolve_config_arg(path), encoding="utf-8") as f:
         data = json.load(f)
     return parse_deprecated_index(data)

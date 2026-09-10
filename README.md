@@ -281,9 +281,11 @@ A hints file lets a deployment inject its own guidance into the discovery chain:
 - Injected only on successful discovery results, never on denials (gate/policy rejections stay untouched); `get_api_examples` and `execute_api` are never annotated.
 - Product keys and `apis` keys are case-insensitive; a product value may be a plain string (product note only) or an object with `notes` / `apis`.
 - Optional top-level boolean `api_notes_in_list_apis` (default `true`): when `false`, `list_apis` items carry no API-level notes (top-level product notes and `get_api` merged notes are unaffected) — the generated help-center completion file sets this to `false` so `get_api` stays the only enriched surface.
-- Loaded at startup (no hot reload); invalid configs fail fast at startup. Without `--hints`, behavior is byte-for-byte unchanged.
+- Loaded at startup (no hot reload); invalid configs fail fast at startup.
+- Default file: with no `--hints` and no `HUAWEICLOUD_MCP_OPENAPI_HINTS`, `configs/help-docs-hints.json` (repo-root copy first, then the one bundled in the installed package) is loaded automatically; if absent it is skipped silently. Pass `--hints off` (or an empty env value) to disable explicitly. Explicit paths/bare names keep fail-fast semantics on a missing file.
+- The file path supports a bare filename: an existing explicit path (absolute or cwd-relative) is used as-is; otherwise it resolves as `configs/<name>` (repo-root `configs/` first, then the copy bundled in the installed package — handy for `uvx`/`pip` installs).
 
-Example: `configs/openapi-hints.example.json`.
+Example: `configs/openapi-hints.example.json` (loadable as `--hints openapi-hints.example.json`).
 
 ### Help-center description completion (optional, build-time)
 
@@ -298,6 +300,7 @@ uv run huaweicloud-open-mcp --hints data/hints/help-docs-hints.json
 - Diff-only: an API enters the file only when the help-center intro is materially richer than the API Explorer description (`--min-gain`, default 20 chars).
 - Each note carries the full intro (capped via `--cap`, default 2000 chars, `…` marker) plus the official doc URL.
 - Rate-limited crawl (0.4s/page) with bot-verification backoff and resumable checkpoints; artifacts are rebuildable and not committed. See [AGENTS.md](AGENTS.md) for the full pipeline rules.
+- `--hints` / `--deprecated-index` accept bare filenames resolved against `configs/` (repo root first, then the bundled package copy).
 
 The same pipeline emits a deprecated-API index (`data/help_completions/deprecated.json`) sourced from the help center's own `（废弃）` titles (API Explorer's `op.deprecated` metadata is unreliable — ECS pilot: 45 vs 1 flags). Mount it to govern the discovery surface:
 
@@ -307,7 +310,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 ```
 
 - `annotate`/`hide` only affect the `list_apis` discovery surface; `get_api`/`execute_api` always work (narrowed discovery ≠ refused detail).
-- Without `--deprecated-index`, behavior is byte-for-byte unchanged.
+- `off`: no governance even with the index mounted. Passing an explicit mode without `--deprecated-index` fails fast at startup.
+- Without `--deprecated-index`, behavior is byte-for-byte unchanged (no mode → no governance).
 
 ## Configuration
 
@@ -322,9 +326,9 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--policy <file>` | — | Safety policy file; missing → all executions denied |
 | `--region <id>` | `cn-north-4` | Default region |
 | `--gate <file>` | — | Optional product gate (allowlist; unlisted products are hidden from the agent) |
-| `--hints <file>` | — | Optional custom-hints file (deploy-side guidance injected into instructions and discovery results) |
-| `--deprecated-index <file>` | — | Optional deprecated-API index; enables `list_apis` annotate/hide governance |
-| `--deprecated-mode <annotate\|hide\|off>` | `annotate` (when index configured) | Deprecated-API handling mode for `list_apis`; requires `--deprecated-index` |
+| `--hints <file\|off>` | `configs/help-docs-hints.json` (silent skip if absent) | Optional custom-hints file (deploy-side guidance injected into instructions and discovery results); `off` disables; bare filename resolves against `configs/` |
+| `--deprecated-index <file>` | — | Optional deprecated-API index; enables `list_apis` annotate/hide governance; bare filename resolves against `configs/` |
+| `--deprecated-mode <annotate\|hide\|off>` | `annotate` (when index configured) | `annotate` = `list_apis` items carry `deprecated: true` + `replacement` (counts unchanged); `hide` = deprecated APIs filtered from `list_apis` before pagination (counts stay coherent); `off` = no governance; affects `list_apis` only — `get_api`/`execute_api` always work; explicit mode requires `--deprecated-index` (env `HUAWEICLOUD_MCP_DEPRECATED_MODE`) |
 | `--elicitation auto\|required\|off` | `off` | MCP-elicitation confirmation for policy changes |
 | `--spill-dir <dir>` | system temp dir (`hwc-mcp-spill`) | Where oversized responses/envelopes are spilled (empty or `off` disables spilling; pure truncation returns) |
 | `--audit-file <file>` | disabled | Audit trail (NDJSON): one `{ts, tool, input, ok}` line per tool call |
@@ -346,6 +350,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `HUAWEICLOUD_MCP_POLICY_FILE` | Same as `--policy` |
 | `HUAWEICLOUD_MCP_OPENAPI_GATE` | Same as `--gate` |
 | `HUAWEICLOUD_MCP_OPENAPI_HINTS` | Same as `--hints` |
+| `HUAWEICLOUD_MCP_DEPRECATED_INDEX` | Same as `--deprecated-index` |
+| `HUAWEICLOUD_MCP_DEPRECATED_MODE` | Same as `--deprecated-mode` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | Same as `--audit-file` |
 | `HUAWEICLOUD_MCP_SPILL_DIR` | Same as `--spill-dir` |
 | `HUAWEICLOUD_MCP_ELICIT` | Same as `--elicitation` |
