@@ -393,14 +393,14 @@ def _policy_file(tmp_path, entries):
     return p
 
 
-def test_manage_policy_grant_takes_effect_without_restart(tmp_path):
+def test_manage_policy_grant_takes_effect_without_restart(tmp_path, monkeypatch):
     """拒 → add（默认会话内）→ 同一 service 实例立即放行；文件不动，重启等价不可见。"""
     from safety.policy_store import PolicyStore
 
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
     p = _policy_file(tmp_path, ["*=deny"])
-    store = MemoryStore()
     mock_client = StubMockClient()
-    svc = ToolService(store=store, config=ServiceConfig(
+    svc = ToolService(store=_prep_store(products=False, apis=False), config=ServiceConfig(
         mock=True,
         policy_store=PolicyStore(str(p)),
         mock_client_factory=lambda: mock_client))
@@ -425,12 +425,13 @@ def test_manage_policy_grant_takes_effect_without_restart(tmp_path):
     assert other.execute_api("ECS", "ListServersDetails")["ok"] is False  # 重启等价：不可见
 
 
-def test_manage_policy_remove_revokes(tmp_path):
+def test_manage_policy_remove_revokes(tmp_path, monkeypatch):
     from safety.policy_store import PolicyStore
 
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
     p = _policy_file(tmp_path, ["ECS:*=allow"])
     mock_client = StubMockClient()
-    svc = ToolService(config=ServiceConfig(
+    svc = ToolService(store=_prep_store(products=False, apis=False), config=ServiceConfig(
         mock=True, policy_store=PolicyStore(str(p)),
         mock_client_factory=lambda: mock_client))
     assert svc.execute_api("ECS", "ListServersDetails")["ok"] is True
@@ -460,13 +461,14 @@ def test_manage_policy_list_and_errors(tmp_path):
     assert svc.manage_policy("add")["ok"] is False                         # 缺 line
 
 
-def test_manage_policy_scope_session_default(tmp_path):
+def test_manage_policy_scope_session_default(tmp_path, monkeypatch):
     """默认 add = 会话内：同实例立即放行，文件字节不动，新实例（重启等价）不可见。"""
     from safety.policy_store import PolicyStore
 
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
     p = _policy_file(tmp_path, ["*=deny"])
     mock_client = StubMockClient()
-    svc = ToolService(config=ServiceConfig(
+    svc = ToolService(store=_prep_store(products=False, apis=False), config=ServiceConfig(
         mock=True, policy_store=PolicyStore(str(p)),
         mock_client_factory=lambda: mock_client))
     before = p.read_text(encoding="utf-8")
