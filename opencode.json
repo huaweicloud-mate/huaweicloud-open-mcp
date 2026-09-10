@@ -4,7 +4,7 @@
   "mcp": {
     "huaweicloud-open-mcp": {
       "type": "local",
-      "command": ["uv", "run", "huaweicloud-open-mcp", "--policy", "configs/safety-policy.example.json", "--mode", "data,openapi"],
+      "command": ["uv", "run", "huaweicloud-open-mcp", "--policy", "configs/safety-policy.example.json", "--mode", "data,openapi", "--hints", "configs/help_completions.json", "--deprecated-index", "configs/deprecated.json"],
       "cwd": "./",
       "enabled": true
     }

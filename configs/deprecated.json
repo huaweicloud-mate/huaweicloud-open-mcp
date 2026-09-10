@@ -1,0 +1,412 @@
+{
+  "products": {
+    "ECS": {
+      "novalistavailabilityzones": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1801.html"
+      },
+      "registerservermonitor": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_02_1401.html"
+      },
+      "novalistversions": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0101.html"
+      },
+      "novashowversion": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0102.html"
+      },
+      "novacreateservers": {
+        "replacement": "CreatePostPaidServers",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0201.html"
+      },
+      "novaupdateserver": {
+        "replacement": "UpdateServer",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0202.html"
+      },
+      "novadeleteserver": {
+        "replacement": "DeleteServers",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0203.html"
+      },
+      "novalistservers": {
+        "replacement": "ListServersDetails",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0204.html"
+      },
+      "novalistserversdetails": {
+        "replacement": "ListServersDetails",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0205.html"
+      },
+      "novashowserver": {
+        "replacement": "ShowServer",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0206.html"
+      },
+      "novastartserver": {
+        "replacement": "BatchStartServers",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0301.html"
+      },
+      "novarebootserver": {
+        "replacement": "BatchRebootServers",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0302.html"
+      },
+      "novastopserver": {
+        "replacement": "BatchStopServers",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0303.html"
+      },
+      "novalockserver": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0304.html"
+      },
+      "novaunlockserver": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0305.html"
+      },
+      "novaassociatesecuritygroup": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0601.html"
+      },
+      "novadisassociatesecuritygroup": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0602.html"
+      },
+      "novalistserversecuritygroups": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0603.html"
+      },
+      "novalistflavors": {
+        "replacement": "ListFlavors",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0701.html"
+      },
+      "novalistflavorsdetails": {
+        "replacement": "ListFlavors",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0702.html"
+      },
+      "novashowflavor": {
+        "replacement": "ListFlavors",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0703.html"
+      },
+      "novalistserverinterfaces": {
+        "replacement": "ListServerInterfaces",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0801.html"
+      },
+      "novashowserverinterface": {
+        "replacement": "ListServerInterfaces",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0802.html"
+      },
+      "novaattachinterface": {
+        "replacement": "BatchAddServerNics",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0803.html"
+      },
+      "novadetachinterface": {
+        "replacement": "BatchDeleteServerNics",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0804.html"
+      },
+      "novalistservervolumes": {
+        "replacement": "ListServerVolumeAttachments",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0901.html"
+      },
+      "novashowservervolume": {
+        "replacement": "ShowServerBlockDevice",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0902.html"
+      },
+      "novaattachvolume": {
+        "replacement": "AttachServerVolume",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0903.html"
+      },
+      "novadetachvolume": {
+        "replacement": "DetachServerVolume",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_0904.html"
+      },
+      "novaupdateservermetadata": {
+        "replacement": "UpdateServerMetadata",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1001.html"
+      },
+      "novacreateservermetadata": {
+        "replacement": "UpdateServerMetadata",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1002.html"
+      },
+      "novadeleteservermetadataitem": {
+        "replacement": "DeleteServerMetadata",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1003.html"
+      },
+      "novashowservermetadata": {
+        "replacement": "ShowServer",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1004.html"
+      },
+      "novashowservermetadataitem": {
+        "replacement": "ShowServer",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1005.html"
+      },
+      "novaupdateservermetadataitem": {
+        "replacement": "UpdateServerMetadata",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1006.html"
+      },
+      "novalistkeypairs": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1201.html"
+      },
+      "novashowkeypair": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1202.html"
+      },
+      "novacreatekeypair": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1203.html"
+      },
+      "novadeletekeypair": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1204.html"
+      },
+      "novacreateservergroup": {
+        "replacement": "CreateServerGroup",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1401.html"
+      },
+      "novalistservergroups": {
+        "replacement": "ListServerGroups",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1402.html"
+      },
+      "novashowservergroup": {
+        "replacement": "ShowServerGroup",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1403.html"
+      },
+      "novadeleteservergroup": {
+        "replacement": "DeleteServerGroup",
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1404.html"
+      },
+      "novalistserveractions": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1501.html"
+      },
+      "novashowserveraction": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-ecs/ecs_03_1502.html"
+      }
+    },
+    "CCE": {
+      "pauseupgradeclustertask": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-cce/PauseUpgradeClusterTask.html"
+      },
+      "continueupgradeclustertask": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-cce/ContinueUpgradeClusterTask.html"
+      }
+    },
+    "DLI": {
+      "listdatabaseusers": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0040.html"
+      },
+      "deletedatasourceconnection": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0155.html"
+      },
+      "updatetableowner": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0165.html"
+      },
+      "showdatasourceconnection": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0145.html"
+      },
+      "deletedatabase": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0030.html"
+      },
+      "listtables": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0105.html"
+      },
+      "listdatasourceconnections": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0146.html"
+      },
+      "uploadjobresources": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0130.html"
+      },
+      "listtableusers": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0041.html"
+      },
+      "deletetable": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0035.html"
+      },
+      "createdatasourceconnection": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0144.html"
+      },
+      "uploadpythonfilejobresources": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0170.html"
+      },
+      "updatedatabaseowner": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0164.html"
+      },
+      "createtable": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0034.html"
+      },
+      "createdatabase": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0028.html"
+      },
+      "listdatabases": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0029.html"
+      },
+      "importtable": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0019.html"
+      },
+      "showtable": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0033.html"
+      },
+      "showsparkjoblog": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0128.html"
+      },
+      "previewtable": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0108.html"
+      },
+      "uploadfilejobresources": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0171.html"
+      },
+      "uploadjarjobresources": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0169.html"
+      },
+      "listtableprivileges": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0042.html"
+      },
+      "registerauthorizedqueue": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0037.html"
+      },
+      "listqueueusers": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0038.html"
+      },
+      "deletejobresource": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0173.html"
+      },
+      "listpartitions": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0250.html"
+      },
+      "createiefsystemevents": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0289.html"
+      },
+      "registerbucket": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0225.html"
+      },
+      "createdliagency": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0299.html"
+      },
+      "createiefmessagechannel": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0286.html"
+      },
+      "listsqlsampletemplates": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0349.html"
+      },
+      "updatequeuecidr": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0222.html"
+      },
+      "createqueueplan": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0291.html"
+      },
+      "listqueueplans": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0292.html"
+      },
+      "batchdeletequeueplans": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0293.html"
+      },
+      "deletequeueplan": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0294.html"
+      },
+      "updatequeueplan": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0295.html"
+      },
+      "listauthinfo": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-dli/dli_02_0340.html"
+      }
+    },
+    "EVS": {
+      "cinderlistvolumetypes": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-evs/evs_04_3035.html"
+      }
+    },
+    "FUNCTIONGRAPH": {
+      "listbridgeversions": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-functiongraph/functiongraph_23_1031_03.html"
+      }
+    },
+    "SMN": {
+      "publishappmessage": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/PublishAppMessage_0.html"
+      },
+      "listapplicationendpoints": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/ListApplicationEndpoints_0.html"
+      },
+      "deleteapplicationendpoint": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/DeleteApplicationEndpoint_0.html"
+      },
+      "listapplications": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/ListApplications_0.html"
+      },
+      "createapplicationendpoint": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/CreateApplicationEndpoint_0.html"
+      },
+      "updateapplicationendpoint": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/UpdateApplicationEndpoint_0.html"
+      },
+      "listapplicationendpointattributes": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/ListApplicationEndpointAttributes_0.html"
+      },
+      "deleteapplication": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/DeleteApplication_0.html"
+      },
+      "createapplication": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/CreateApplication_0.html"
+      },
+      "updateapplication": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/UpdateApplication_0.html"
+      },
+      "listapplicationattributes": {
+        "replacement": null,
+        "doc_url": "https://support.huaweicloud.com/api-smn/ListApplicationAttributes_0.html"
+      }
+    }
+  }
+}
