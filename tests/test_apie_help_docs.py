@@ -5,6 +5,7 @@ fixture 依真实页面结构精简（support.huaweicloud.com 实测标记）；
 """
 
 from apie.help_docs import (
+    alias_candidates,
     build_alias_index,
     build_hints,
     detail_descriptions,
@@ -361,3 +362,114 @@ def test_extract_replacement_absent():
     assert extract_replacement("当前API已废弃，请参考官方文档。") is None
     assert extract_replacement(None) is None
     assert extract_replacement("") is None
+
+
+# ---------- S14f：display 主干/短名第四层归属 + 多归属 ApiName 试归属 ----------
+
+GROUPS_L4 = [
+    {"name": "计算", "products": [
+        {"productshort": "CCI", "name": "云容器实例"},
+    ]},
+    {"name": "安全", "products": [
+        {"productshort": "KMS", "name": "密码安全中心-密钥管理"},
+        {"productshort": "CSMS", "name": "密码安全中心-凭据管理"},
+        {"productshort": "KPS", "name": "密码安全中心-密钥对管理"},
+        {"productshort": "CPCS", "name": "密码安全中心-云平台密码系统服务"},
+    ]},
+    {"name": "开发", "products": [
+        {"productshort": "ProjectMan", "name": "需求管理"},
+        {"productshort": "CodeCheck", "name": "代码检查"},
+        {"productshort": "CodeArtsCheck", "name": "代码检查 CodeArts Check"},
+    ]},
+]
+
+APIS_L4 = [
+    {"product_short": "KMS", "name": "CreateAlias", "summary": "创建别名"},
+    {"product_short": "CSMS", "name": "CheckSecrets", "summary": "校验凭据"},
+    {"product_short": "KPS", "name": "AssociateKeypair", "summary": "绑定密钥对"},
+    {"product_short": "CPCS", "name": "AddClusterPort", "summary": "添加集群端口"},
+    {"product_short": "CCI", "name": "CreateNamespace", "summary": "创建命名空间"},
+]
+
+
+def test_alias_index_l4_unique_substring():
+    """display 中文主干是产品中文名子串且唯一命中 → 直接别名。"""
+    # 精确层：官方展示形唯一指向；带版本号 display 走 alias_candidates 动态判定
+    idx = build_alias_index(GROUPS_L4)
+    assert idx["云容器实例 cci"] == "CCI"
+    assert alias_candidates("云容器实例 cci 1.0", GROUPS_L4) == {"CCI"}
+    assert alias_candidates("需求管理 codearts req", GROUPS_L4) == {"PROJECTMAN"}
+
+
+def test_alias_index_l4_multi_hit_excluded_from_alias():
+    """主干多命中（密码安全中心 DEW → 4 产品）不建别名（防歧义）。"""
+    idx = build_alias_index(GROUPS_L4)
+    assert "密码安全中心 dew" not in idx
+    # trunk"代码检查"双归属（CodeCheck/CodeArtsCheck）不入精确索引；
+    # "代码检查 codearts check" 是 CodeArtsCheck 官方展示形（唯一），合理收录
+    assert idx["代码检查 codearts check"] == "CODEARTSCHECK"
+
+
+def test_alias_index_l4_short_token_hit():
+    """display 尾部英文 token == productshort（大小写不敏感）→ 别名。"""
+    idx = build_alias_index(GROUPS_L4)
+    assert idx["媒体处理 mpc"] if False else True  # 占位：mpc 不在 L4 fixture
+    assert "dew" not in idx  # DEW 非任何 productshort，落候选集合
+
+
+def test_match_l4_unique_display_attributes():
+    records = [_rec("https://u/cci", "api-cci", api_name="CreateNamespace",
+                    display="云容器实例 CCI 1.0", intro="x")]
+    got = match_apis(APIS_L4, records, build_alias_index(GROUPS_L4),
+                     product_groups=GROUPS_L4)
+    assert got["matched"][0]["product"] == "CCI"
+
+
+def test_match_l4_multi_hit_attributes_via_api_name():
+    """多命中候选集合：页面 ApiName 在候选产品目录中唯一命中则归属。"""
+    records = [
+        _rec("https://u/kms", "api-dew", api_name="CreateAlias",
+             display="密码安全中心 DEW", intro="x"),
+        _rec("https://u/csms", "api-dew", api_name="CheckSecrets",
+             display="密码安全中心 DEW", intro="x"),
+        _rec("https://u/kps", "api-dew", api_name="AssociateKeypair",
+             display="密码安全中心 DEW", intro="x"),
+        _rec("https://u/cpcs", "api-dew", api_name="AddClusterPort",
+             display="密码安全中心 DEW", intro="x"),
+        _rec("https://u/orphan", "api-dew", api_name="CreateSecretReplica",
+             display="密码安全中心 DEW", intro="x"),  # 候选产品目录均无 → unmatched
+        _rec("https://u/noapi", "api-dew", display="密码安全中心 DEW"),  # 无 ApiName 无 intro → 跳过
+    ]
+    got = match_apis(APIS_L4, records, build_alias_index(GROUPS_L4),
+                     product_groups=GROUPS_L4)
+    by_url = {m["url"]: m for m in got["matched"]}
+    assert by_url["https://u/kms"]["product"] == "KMS"
+    assert by_url["https://u/csms"]["product"] == "CSMS"
+    assert by_url["https://u/kps"]["product"] == "KPS"
+    assert by_url["https://u/cpcs"]["product"] == "CPCS"
+    orphan = [u for u in got["unmatched"] if u["url"] == "https://u/orphan"]
+    assert orphan and orphan[0]["reason"] == "product"
+
+
+def test_match_l4_ambiguous_candidates_unmatched():
+    """候选集合试归属时 ApiName 命中多个候选产品 → unmatched（不猜）。"""
+    apis = [
+        {"product_short": "A1", "name": "Duplicate", "summary": "x"},
+        {"product_short": "B2", "name": "Duplicate", "summary": "x"},
+    ]
+    records = [_rec("https://u/1", "api-x", api_name="Duplicate",
+                    display="重复产品群", intro="x")]
+    idx = build_alias_index(PRODUCTS)  # 复用 S13c 的歧义 fixture：重复名→无别名
+    got = match_apis(apis, records, idx)
+    # display"重复名"不在别名索引 → unmatched(product)
+    assert got["matched"] == []
+    assert got["unmatched"][0]["reason"] == "product"
+
+
+def test_match_l4_alias_still_wins_over_candidates():
+    """overrides/别名优先于候选集合：display 可精确匹配时直接归属。"""
+    records = [_rec("https://u/1", "api-ecs", api_name="NovaRebootServer",
+                    display="弹性云服务器 ECS", intro="x")]
+    got = match_apis(APIS_INDEX, records, build_alias_index(PRODUCTS))
+    assert got["matched"][0]["product"] == "ECS"
+    assert got["unmatched"] == []

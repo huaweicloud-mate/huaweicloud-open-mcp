@@ -161,14 +161,25 @@ def _norm(s: str | None) -> str:
     return _HWS.sub(" ", (s or "")).strip()
 
 
-def build_alias_index(product_groups: list[dict[str, Any]]) -> dict[str, str]:
-    """产品展示名/短名 → PRODUCT_UPPER 别名索引（帮助中心 product_display 匹配用）。
+_BRAND_PREFIX = re.compile(r"^(codearts|huawei(?:\s?cloud)?)\s*")
+_TRAIL_TOKEN = re.compile(r"[a-z0-9. ]+$", re.IGNORECASE)
+_MIN_TRUNK = 3
 
-    每个产品生成三个别名：productshort、中文名、`中文名 productshort` 展示形；
-    同名别名指向多个产品时丢弃（歧义不入索引，走 overrides 消解）。
-    """
-    alias: dict[str, str] = {}
+
+def _trunk(s: str) -> str:
+    """display/产品名主干：去括号段、去尾部英文 token/版本号、去品牌前缀。"""
+    s = re.sub(r"[（(][^）)]*[）)]", "", s)
+    s = _TRAIL_TOKEN.sub("", s)
+    s = _BRAND_PREFIX.sub("", s)
+    return s.strip()
+
+
+def _alias_group_tables(product_groups: list[dict[str, Any]]) -> tuple[
+        dict[str, set[str]], dict[str, set[str]], set[str]]:
+    """别名层共用表：精确别名 owners / 产品主干 trunk_owners / productshort 小写集。"""
     owners: dict[str, set[str]] = {}
+    trunk_owners: dict[str, set[str]] = {}
+    shorts: set[str] = set()
     for g in product_groups or []:
         for p in g.get("products") or []:
             short = (p.get("productshort") or "").strip()
@@ -176,17 +187,65 @@ def build_alias_index(product_groups: list[dict[str, Any]]) -> dict[str, str]:
             if not short:
                 continue
             upper = short.upper()
+            shorts.add(short.lower())
             candidates = {short.lower(), name.lower()}
             if name:
                 candidates.add(f"{name} {short}".lower())
             for c in candidates:
-                if not c:
-                    continue
-                owners.setdefault(c, set()).add(upper)
+                if c:
+                    owners.setdefault(c, set()).add(upper)
+            t = _trunk(name)
+            if len(t) >= _MIN_TRUNK:
+                trunk_owners.setdefault(t, set()).add(upper)
+    return owners, trunk_owners, shorts
+
+
+def _l4_candidates(display: str, trunk_owners: dict[str, set[str]],
+                   shorts: set[str]) -> set[str]:
+    """L4 归属候选：中文主干互嵌（≥3 字）+ display 英文 token 恰为某 productshort。
+
+    token 仅在命中已知 productshort（大小写不敏感）时计入——`CodeArts Check`
+    这类品牌词不因拆词而混入候选。
+    """
+    hits: set[str] = set()
+    t = _trunk(display)
+    if len(t) >= _MIN_TRUNK:
+        for trunk, ups in trunk_owners.items():
+            if trunk and len(trunk) >= _MIN_TRUNK and (t in trunk or trunk in t):
+                hits |= ups
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9]*", display):
+        up = token.upper()
+        if token.lower() in shorts:
+            hits.add(up)
+    return hits
+
+
+def build_alias_index(product_groups: list[dict[str, Any]]) -> dict[str, str]:
+    """产品展示名/短名 → PRODUCT_UPPER 别名索引（帮助中心 product_display 匹配用）。
+
+    - 精确层：productshort、中文名、`中文名 productshort` 展示形；同名/多归属
+      别名丢弃（歧义不入索引，如 trunk `密码安全中心` 同时归属
+      KMS/CSMS/KPS/CPCS 四产品——由 match_apis 的候选试归属消解）。
+    - L4（主干/token 命中判定）不在索引内预展开——真实 display 带版本号等变体
+      无法穷举，统一在 match_apis 侧经 alias_candidates 动态判定。
+    """
+    owners, _trunk_owners, _shorts = _alias_group_tables(product_groups)
+    alias: dict[str, str] = {}
     for c, ups in owners.items():
         if len(ups) == 1:
             alias[c] = next(iter(ups))
     return alias
+
+
+def alias_candidates(display: str,
+                     product_groups: list[dict[str, Any]]) -> set[str]:
+    """display 的 L4 归属候选集合（多命中场景，供 match_apis ApiName 试归属）。
+
+    规则：display 中文主干与产品中文名互嵌（≥3 字），或 display 英文 token
+    恰为某 productshort；返回 PRODUCT_UPPER 集合（可空、可多命中）。
+    """
+    _, trunk_owners, shorts = _alias_group_tables(product_groups)
+    return _l4_candidates(display or "", trunk_owners, shorts)
 
 
 def _cn_base(cn: str) -> str:
@@ -203,11 +262,14 @@ def match_apis(apis_index: list[dict[str, Any]],
                records: list[dict[str, Any]],
                alias_index: dict[str, str],
                *,
-               overrides: dict[str, str] | None = None) -> dict[str, Any]:
+               overrides: dict[str, str] | None = None,
+               product_groups: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """把爬取的页面记录匹配到 (product, api)。
 
     - records 仅接纳 is_api_ref=True 且（有 api_name 或有 func_intro）的条目；
-    - 产品归属：overrides[docset] 优先，其次 alias_index[product_display.lower()]；
+    - 产品归属：overrides[docset] → alias_index[product_display] 精确层 → L4
+      （display 中文主干/英文 token 产生的候选集合：ApiName 在候选产品目录中
+      唯一命中则归属——唯一与多命中同一路径，不预展开、不猜）→ unmatched(product)；
     - 接口匹配：api_name（大小写不敏感）优先，未中回退 cn_name 去括号后缀 == summary；
     - (product, api) 重复命中只保留首个（unmatched reason=duplicate）。
 
@@ -221,6 +283,16 @@ def match_apis(apis_index: list[dict[str, Any]],
         product = (a.get("product_short") or "").upper()
         by_name[(product, (a.get("name") or "").lower())] = a
         by_summary.setdefault((product, _norm(a.get("summary"))), []).append(a)
+    # L4 候选判定需要 display→候选 的表构建（每条记录重算太贵），有 product_groups
+    # 时先取精确别名之外的形态：candidates 本身做缓存（display 相同复用）。
+    cand_cache: dict[str, set[str]] = {}
+
+    def _l4(display: str) -> set[str]:
+        if not product_groups or not display:
+            return set()
+        if display not in cand_cache:
+            cand_cache[display] = alias_candidates(display, product_groups)
+        return cand_cache[display]
 
     matched: list[dict[str, Any]] = []
     unmatched: list[dict[str, Any]] = []
@@ -233,8 +305,18 @@ def match_apis(apis_index: list[dict[str, Any]],
             continue
         url = r.get("url") or ""
         docset = r.get("docset") or ""
-        product = overrides.get(docset) \
-            or alias_index.get((r.get("product_display") or "").strip().lower())
+        display = (r.get("product_display") or "").strip()
+        product = overrides.get(docset) or alias_index.get(display.lower())
+        if not product:
+            # L4：候选集合中 ApiName 唯一命中才归属（不猜；带版本号 display 主干
+            # 相同，天然落进同一候选集合）
+            api_name = r.get("api_name")
+            if api_name:
+                hits = _l4(display)
+                hit_products = sorted({p for p in hits
+                                       if (p, api_name.lower()) in by_name})
+                if len(hit_products) == 1:
+                    product = hit_products[0]
         if not product:
             unmatched.append({"url": url, "reason": "product", "product": None})
             continue

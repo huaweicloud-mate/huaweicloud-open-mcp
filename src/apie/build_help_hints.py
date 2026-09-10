@@ -55,7 +55,8 @@ def build_completions(raw_dir: Path, data_dir: Path, *,
     apis_detail = _read_json(detail_file) if detail_file.exists() else {"apis": {}}
 
     alias_index = build_alias_index(product_groups)
-    m = match_apis(apis_index, records, alias_index, overrides=overrides)
+    m = match_apis(apis_index, records, alias_index, overrides=overrides,
+                   product_groups=product_groups)
     matched = m["matched"]
     if products:
         wanted = {p.upper() for p in products}
