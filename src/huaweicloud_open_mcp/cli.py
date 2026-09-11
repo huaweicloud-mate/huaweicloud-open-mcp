@@ -71,6 +71,12 @@ def main() -> None:
                              "仅影响 list_apis 发现面，get_api/execute_api 恒可用；"
                              "显式传 mode 需同时配置 --deprecated-index"
                              "（环境变量 HUAWEICLOUD_MCP_DEPRECATED_MODE）")
+    parser.add_argument("--entity-index", default=None,
+                        help="openapi 实体关联图谱索引（api-refresh graph 产物，"
+                             "跨产品 search_apis 检索；支持裸文件名，解析同 --hints；"
+                             "缺省加载 configs/entity-index.json，缺失静默禁用；"
+                             "off 或空串显式禁用；"
+                             "环境变量 HUAWEICLOUD_MCP_ENTITY_INDEX）")
     parser.add_argument("--spill-dir", default=None,
                         help="openapi 超限响应/信封落盘目录（环境变量 "
                              "HUAWEICLOUD_MCP_SPILL_DIR；缺省为系统临时目录 "

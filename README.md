@@ -18,7 +18,7 @@ Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `ope
 
 ## How it works
 
-- **Progressive workflow** — the agent explores step by step: `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`, narrowing 17,000+ APIs to one concrete call. Each step keeps the LLM context bounded; the full guide is baked into the server instructions.
+- **Progressive workflow** — the agent explores step by step: `search_apis` (entity-graph cross-product search when the intent doesn't name a product) → `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`, narrowing 17,000+ APIs to one concrete call. Each step keeps the LLM context bounded; the full guide is baked into the server instructions.
 - **Metadata-driven, zero SDK** — API metadata is fetched live from Huawei Cloud API Explorer and cached in memory; requests are signed locally (SDK-HMAC-SHA256, self-implemented) and sent straight to Huawei Cloud.
 - **Secure by default** — every `execute_api` must pass a safety policy (allowlist/denylist); with no policy configured, everything is denied. Rules hot-reload, and the agent can request minimal grants via `manage_policy`.
 
@@ -124,7 +124,7 @@ args = ["huaweicloud-open-mcp", "--policy", "/home/you/hwc-policy.json"]
 
 Replace the example path with your own absolute path from Step 2 (on Windows, e.g. `C:\Users\you\hwc-policy.json`; inside JSON/TOML strings write it with escaped backslashes: `"C:\\Users\\you\\hwc-policy.json"`).
 
-**Output:** start your agent — the seven gateway tools appear, prefixed with your server name (`huaweicloud_list_products`, `huaweicloud_get_product`, `huaweicloud_list_apis`, `huaweicloud_get_api`, `huaweicloud_get_api_examples`, `huaweicloud_execute_api`, `huaweicloud_manage_policy`). In Codex, `codex mcp list` shows the server and `/mcp` in the TUI confirms it is connected.
+**Output:** start your agent — the eight gateway tools appear, prefixed with your server name (`huaweicloud_search_apis`, `huaweicloud_list_products`, `huaweicloud_get_product`, `huaweicloud_list_apis`, `huaweicloud_get_api`, `huaweicloud_get_api_examples`, `huaweicloud_execute_api`, `huaweicloud_manage_policy`). In Codex, `codex mcp list` shows the server and `/mcp` in the TUI confirms it is connected.
 
 Credentials come from Step 1 — no secrets in the client config. If you prefer inline environment variables instead, see [Credentials](#credentials).
 
@@ -219,6 +219,7 @@ Rules that matter:
 
 | Tool | Purpose |
 | --- | --- |
+| `search_apis` | Entity-graph cross-product search (workflow step 0): when the user intent doesn't name a product, returns candidate products + representative APIs + `matched_via` evidence (aliases / colloquial keywords / tags); build-time snapshot, mounted via `--entity-index` |
 | `list_products` | Full Huawei Cloud product catalog — identifier, display name, category, product link; `keyword`/`category` filter |
 | `get_product` | One product's details (classification, API count, global vs regional) |
 | `list_apis` | A product's API directory with `tag_groups` overview; `tag`/`search`/`limit`/`offset` to narrow |
@@ -295,6 +296,16 @@ Example: `configs/openapi-hints.example.json` (loadable as `--hints openapi-hint
 uv run api-refresh helpdocs    # crawl + parse help-center pages (sitemap seeds + same-docset link BFS, resumable)
 uv run api-refresh helphints   # match to apiexplorer APIs, diff, emit data/help_completions/ + data/hints/help-docs-hints.json
 uv run huaweicloud-open-mcp --hints data/hints/help-docs-hints.json
+```
+
+### Entity graph and `search_apis` (build-time)
+
+`api-refresh graph` deterministically builds the entity association graph from `apis_docs.json` + `huawei_products.json` (product/API/tag nodes, same-name twins, attributions, tag coverage), merged with the `configs/entity-knowledge.json` knowledge base; `--llm` additionally runs build-time LLM extraction of colloquial aliases, product semantic relations and per-API query keywords (`ENTITY_LLM_BASE_URL/API_KEY/MODEL`, fingerprint-incremental reruns touch only changed products, curated entries are never overwritten):
+
+```bash
+uv run api-refresh graph            # deterministic build (data/graph/entity-index.json + configs copy shipped in wheel)
+uv run api-refresh graph --llm      # build-time LLM extraction (~150 calls, resumable via fingerprints)
+uv run huaweicloud-open-mcp         # runtime defaults to configs/entity-index.json (silently disabled if missing)
 ```
 
 - Diff-only: an API enters the file only when the help-center intro is materially richer than the API Explorer description (`--min-gain`, default 20 chars).
@@ -449,7 +460,7 @@ uv run ruff check src tests              # lint
 uv run mypy src                          # type check
 ```
 
-Companion CLIs: `api-refresh` (offline APIE pipeline: fetch API Explorer → OpenAPI 2.0 docs, plus help-center completion stages `helpdocs`/`helphints`) and `api-docs` (metadata queries from the terminal). Details in [AGENTS.md](AGENTS.md).
+Companion CLIs: `api-refresh` (offline APIE pipeline: fetch API Explorer → OpenAPI 2.0 docs; `graph` entity-graph build with `--llm` semantic extraction; help-center completion stages `helpdocs`/`helphints`) and `api-docs` (metadata queries from the terminal). Details in [AGENTS.md](AGENTS.md).
 
 ### Publishing
 

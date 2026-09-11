@@ -13,7 +13,7 @@ from mcp_openapi.service import ServiceConfig, ToolService
 from safety import policy
 
 EXPECTED_TOOLS = {
-    "list_products", "get_product", "list_apis", "get_api",
+    "search_apis", "list_products", "get_product", "list_apis", "get_api",
     "get_api_examples", "execute_api", "manage_policy",
 }
 
@@ -52,7 +52,7 @@ def test_policy_loaded(tmp_path):
     p.write_text('["ECS:*=allow", "*=deny"]', encoding="utf-8")
     rules = policy.load_policy_file(str(p))
     app = build_app(ToolService(ServiceConfig(policy_rules=rules)))
-    assert len(_tool_names(app)) == 7
+    assert len(_tool_names(app)) == 8
 
 
 def test_build_config_mock_base_arg():

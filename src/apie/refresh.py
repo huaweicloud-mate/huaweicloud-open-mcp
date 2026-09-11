@@ -20,7 +20,7 @@ logger = logging.getLogger("apie.refresh")
 
 PROOT = str(project_root())
 
-STAGES = ["count", "products", "docs", "details", "retry", "split",
+STAGES = ["count", "products", "docs", "graph", "details", "retry", "split",
           "convert", "merge", "organize", "validate"]
 
 # 帮助中心补全阶段（方案 B）：子命令/status/显式 refresh --from 可用，
@@ -30,6 +30,7 @@ ALL_STAGES = STAGES + HELP_STAGES
 
 MODULE = {
     "docs": "fetch_apis",
+    "graph": "build_entity_graph",
     "details": "fetch_details",
     "retry": "retry_failed",
     "split": "split_by_tag",
@@ -58,6 +59,8 @@ def artifact_of(stage: str, region: str | None = None) -> str | None:
         return {"count": "raw/apis_count.json",
                 "products": "raw/huawei_products.json",
                 "docs": "raw/apis_docs.json"}[stage]
+    if stage == "graph":
+        return "data/graph/entity-index.json"
     if stage in ("details", "retry"):
         return region_paths.raw_detail_path(r)
     if stage in ("split", "convert", "merge", "organize"):
@@ -129,7 +132,8 @@ def stage_products(dry_run: bool) -> int:
     return 0
 
 
-def stage_script(name: str, dry_run: bool, full: bool = False) -> int:
+def stage_script(name: str, dry_run: bool, full: bool = False,
+                 llm: bool = False) -> int:
     env = None
     if name in ("details", "retry"):
         env = {"API_EXPLORER_REGION": current_region()}
@@ -138,6 +142,8 @@ def stage_script(name: str, dry_run: bool, full: bool = False) -> int:
     args = [sys.executable, "-m", f"apie.{MODULE[name]}"]
     if name == "helphints":
         args += ["--region", current_region()]
+    if name == "graph" and llm:
+        args += ["--llm"]
     import os as _os
     for var in ("HUAWEICLOUD_MCP_LOG_LEVEL", "HUAWEICLOUD_MCP_LOG_FILE"):
         if _os.environ.get(var) and (env is None or var not in env):
@@ -198,6 +204,8 @@ def cmd_single(args: argparse.Namespace, name: str) -> int:
         "count": lambda: stage_count(args.dry_run),
         "products": lambda: stage_products(args.dry_run),
         "validate": lambda: stage_validate(args.dry_run, args.full),
+        "graph": lambda: stage_script("graph", args.dry_run,
+                                      llm=getattr(args, "llm", False)),
     }
     fn = handlers.get(name)
     if fn is None:
@@ -270,6 +278,11 @@ def build_parser() -> argparse.ArgumentParser:
     for s in ALL_STAGES:
         sp = sub.add_parser(s, help=f"单步执行 {s} 阶段", parents=[common])
         sp.set_defaults(single=s)
+        if s == "graph":
+            sp.add_argument("--llm", action="store_true",
+                            help="构建期 LLM 语义抽取（别名/产品关联/API 关键词，"
+                                 "需 ENTITY_LLM_BASE_URL/API_KEY/MODEL 环境变量；"
+                                 "指纹增量，仅重抽变化产品）")
 
     rp = sub.add_parser("refresh", help="执行整条流水线（或 --from/--to 范围）", parents=[common])
     rp.add_argument("--from", dest="start", choices=ALL_STAGES, help="起始阶段")

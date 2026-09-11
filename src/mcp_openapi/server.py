@@ -19,11 +19,13 @@ from common.types import (
     ExecuteResult,
     ProductListResult,
     ProductResult,
+    SearchApisResult,
     ToolError,
 )
 from safety.policy_store import PolicyStore
 
 from .deprecated import load_deprecated_index
+from .entity_graph import load_entity_index
 from .gate import Gate, load_gate_file
 from .hints import Hints, load_hints_file
 from .service import ServiceConfig, ToolService
@@ -33,6 +35,8 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 
 ## 推荐工作流（渐进收窄，LLM 决策）
 
+0. `search_apis`：用户意图未指明产品/API 时先用本工具跨产品检索（实体图谱，
+   返回候选产品 + 代表 API + matched_via 匹配证据），再进入 1-5 步收窄；
 1. `list_products`：获取产品列表（含中文名/分类/是否全局级服务），基于用户任务语义确定产品范围；
 2. `list_apis`：获取选定产品的 API 目录；返回结果含 `tag_groups` 全量 tag 概览，
    先用 `tag` 参数收窄目录，接口较多时配合 `search`/`limit`/`offset` 分页浏览；
@@ -125,6 +129,8 @@ def build_openapi_config(args: argparse.Namespace, *,
         raise ValueError(f"无效的 deprecated-mode: {deprecated_mode}"
                          "（可选 annotate/hide/off）")
     deprecated_index = load_deprecated_index(deprecated_file or None)
+    entity_index_file = (getattr(args, "entity_index", None)
+                         or os.environ.get("HUAWEICLOUD_MCP_ENTITY_INDEX"))
     policy_store = PolicyStore(policy_file) if policy_file else None
     spill_raw = getattr(args, "spill_dir", None)
     if spill_raw is None:
@@ -141,6 +147,7 @@ def build_openapi_config(args: argparse.Namespace, *,
         hints=load_hints_file(hints_file),
         deprecated_index=deprecated_index,
         deprecated_mode=deprecated_mode or ("annotate" if deprecated_file else "off"),
+        entity_graph=load_entity_index(entity_index_file),
         audit_sink=sink_from_path(audit_file),
         spill=parse_spill_config(spill_raw, data_enabled=data_enabled),
     )
@@ -172,6 +179,19 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         # product=产品级（scope=session，会话内生效）
         grant = functools.partial(svc.manage_policy, "add")
         return PolicyConsent(consent_mode, ctx_elicit_fn(ctx), grant)
+
+    @server.tool()
+    def search_apis(query: str, limit: int = 8,
+                    category: str | None = None) -> SearchApisResult | ToolError:
+        """第 0 步：跨产品全局检索（实体图谱）。用户意图未指明产品/API 时先用本工具。
+
+        返回候选产品（中文名/分类/link）+ 每产品代表 API + matched_via 匹配证据
+        （别名/口语关键词/tag 命中），据此再用 list_apis/get_api 收窄。
+        图谱为构建期快照（非实时）；未配置实体索引时返回拒绝。
+
+        授权范围见 instructions；越界产品不出现在结果中。
+        """
+        return svc.search_apis(query, limit=limit, category=category)
 
     @server.tool()
     def list_products(category: str | None = None,

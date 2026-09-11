@@ -1,0 +1,12 @@
+id: nav_create_disk
+prompt: 给我创建一块 100G 的数据盘，之后挂到虚拟机 srv-001 上
+expect:
+  execute:
+    - {product: EVS, api: CreateVolume}
+  answer: 云硬盘
+  constraints:
+    max_calls: 12
+labels:
+  capability: navigation
+  difficulty: medium
+repeat: 2

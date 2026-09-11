@@ -1,0 +1,12 @@
+id: nav_vm_reboot
+prompt: 我那几台虚拟机（srv-001, srv-002）都卡死了，帮我批量重启一下
+expect:
+  execute:
+    - {product: ECS, api: BatchRebootServers}
+  answer: 重启
+  constraints:
+    max_calls: 12
+labels:
+  capability: navigation
+  difficulty: medium
+repeat: 2

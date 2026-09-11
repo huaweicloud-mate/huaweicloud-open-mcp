@@ -26,6 +26,7 @@ from common.types import (
     ExecuteResult,
     ProductListResult,
     ProductResult,
+    SearchApisResult,
     ToolError,
 )
 from safety import policy as safety_policy
@@ -33,6 +34,7 @@ from safety.policy_store import PolicyStore
 
 from . import execute, execute_obs
 from .deprecated import DeprecatedIndex
+from .entity_graph import EntityGraph
 from .execute_obs import ObsHttpClient
 from .gate import Gate
 from .hints import Hints
@@ -88,6 +90,7 @@ class ServiceConfig:
     hints: Hints = Hints.empty()
     deprecated_index: DeprecatedIndex = DeprecatedIndex.empty()
     deprecated_mode: str = "off"
+    entity_graph: EntityGraph = EntityGraph.empty()
     audit_sink: AuditSink | None = None
     spill: SpillConfig | None = field(default_factory=SpillConfig.default)
 
@@ -274,6 +277,27 @@ class ToolService:
             {**a, "hints": text} if text else a for a, text in annotated]}
 
     # ---------- 元数据工具 ----------
+
+    @_audited
+    @_guarded
+    def search_apis(self, query: str, limit: int = 8,
+                    category: str | None = None) -> SearchApisResult | ToolError:
+        """第 0 步：实体图谱跨产品检索（构建期快照，非实时）。"""
+        logger.info("search_apis query=%r limit=%s category=%s",
+                    query, limit, category or "-")
+        graph = self.config.entity_graph
+        if graph.version == 0:
+            logger.warning("search_apis entity_index=missing")
+            return {"ok": False,
+                    "reason": "实体索引未配置（部署侧 --entity-index），"
+                              "请改用 list_products 定位产品"}
+        # gate 收紧时排名前过滤（total/truncated 语义与过滤后集合一致）
+        allowed = None
+        if self.config.gate.restrict:
+            allowed = frozenset(ps for ps in graph.products
+                                if self.config.gate.allows(ps))
+        return graph.search_apis(query, limit=limit, category=category,
+                                 allowed=allowed)
 
     @_audited
     @_guarded

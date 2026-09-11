@@ -96,6 +96,42 @@ class TagGroup(TypedDict):
     api_count: int
 
 
+# ---------- 实体图谱检索：search_apis 信封 ----------
+
+class SearchApiHit(TypedDict):
+    name: str
+    method: str
+    summary: str
+    tags: str
+
+
+class SearchRelated(TypedDict):
+    product: str
+    kind: str
+    via: NotRequired[str]
+
+
+class SearchProductHit(TypedDict):
+    product: str
+    name: str
+    category: str
+    is_global: bool | None
+    link: str | None
+    score: int
+    matched_via: list[str]
+    apis: list[SearchApiHit]
+    related: list[SearchRelated]
+
+
+class SearchApisResult(TypedDict):
+    ok: Literal[True]
+    query: str
+    total: int
+    limit: int
+    products: list[SearchProductHit]
+    truncated: bool
+
+
 class ApiExample(TypedDict):
     description: str | None
     example: Any

@@ -138,6 +138,33 @@ def fetch_json_429(url: str, *, retries: int = 10, backoff_429: float = 20.0,
     raise ApieHttpError(f"429 rate-limited after {retries} retries: {url}")
 
 
+def post_json(url: str, *, body: Any, headers: dict[str, str] | None = None,
+              timeout: int = 120) -> Any:
+    """单次 POST JSON 并解析响应（OpenAI-compatible API 调用用）。"""
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    merged = {"Content-Type": "application/json", "Accept": "application/json"}
+    merged.update(headers or {})
+    req = urllib.request.Request(url, data=data, headers=merged, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def post_json_retry(url: str, *, body: Any, headers: dict[str, str] | None = None,
+                    retries: int = 4, backoff: float = 4.0,
+                    timeout: int = 120) -> Any:
+    """带重试的 POST JSON：429 指数退避，其它瞬时异常常规退避。"""
+
+    def _do() -> Any:
+        return post_json(url, body=body, headers=headers, timeout=timeout)
+
+    try:
+        return _retry(_do, max_retries=retries - 1, backoff=backoff)
+    except urllib.error.HTTPError:
+        raise
+    except Exception as e:
+        raise ApieHttpError(f"post failed after {retries} retries: {e}") from e
+
+
 def query_url(base: str, params: dict[str, Any]) -> str:
     return f"{base}?{urllib.parse.urlencode(params)}"
 

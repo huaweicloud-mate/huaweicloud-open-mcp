@@ -20,8 +20,8 @@ from mcp_openapi.service import ServiceConfig, ToolService
 from safety.policy_store import PolicyStore
 from tests.test_elicit_mcp import _OPENAPI_DOC, _StubMockClient, result_dict
 
-_OPENAPI_TOOLS = {"list_products", "get_product", "list_apis", "get_api",
-                  "get_api_examples", "execute_api", "manage_policy"}
+_OPENAPI_TOOLS = {"search_apis", "list_products", "get_product", "list_apis",
+                  "get_api", "get_api_examples", "execute_api", "manage_policy"}
 _DISCOVER_TOOLS = {"list_mcp_servers", "get_mcp_server", "connect_mcp_server",
                    "list_server_tools", "get_server_tool", "call_server_tool",
                    "disconnect_mcp_server", "manage_policy"}
@@ -77,7 +77,7 @@ def test_openapi_data_toolset_with_dedup():
                               openapi_service=make_openapi_service())
     names = list_tool_names(app)
     assert set(names) == _OPENAPI_TOOLS | {"query_data", "transform_data"}
-    assert len(names) == 9  # manage_policy 去重：7 openapi + 2 data 工具
+    assert len(names) == 10  # manage_policy 去重：8 openapi + 2 data 工具
     assert names.count("manage_policy") == 1
 
 
@@ -93,7 +93,7 @@ def test_all_three_modes_toolset():
     app = build_composite_app(["openapi", "discover", "data"], make_args())
     names = list_tool_names(app)
     assert set(names) == _OPENAPI_TOOLS | _DISCOVER_TOOLS | {"query_data", "transform_data"}
-    assert len(names) == 16
+    assert len(names) == 17
     assert names.count("manage_policy") == 1
 
 

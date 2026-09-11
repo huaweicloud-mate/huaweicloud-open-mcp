@@ -1,0 +1,12 @@
+id: nav_vm_tag
+prompt: 给虚拟机 srv-001 打个标签 env=prod
+expect:
+  execute:
+    - {product: ECS, api: BatchCreateServerTags}
+  answer: 标签
+  constraints:
+    max_calls: 12
+labels:
+  capability: navigation
+  difficulty: medium
+repeat: 2

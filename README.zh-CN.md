@@ -19,7 +19,7 @@
 
 ## 工作原理
 
-- **渐进式工作流** —— Agent 逐步探索：`list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`，从 17000+ API 收窄到一次具体调用。每一步都把 LLM 上下文控制在有界范围；完整工作流指引已内置于 server instructions。
+- **渐进式工作流** —— Agent 逐步探索：`search_apis`（意图未指明产品时，实体图谱跨产品检索）→ `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`，从 17000+ API 收窄到一次具体调用。每一步都把 LLM 上下文控制在有界范围；完整工作流指引已内置于 server instructions。
 - **元数据驱动、零 SDK** —— API 元数据从华为云 API Explorer 实时拉取并缓存在内存；请求在本地签名（自实现 SDK-HMAC-SHA256）后直连华为云。
 - **默认安全** —— 每次 `execute_api` 必须通过 safety policy（allowlist/denylist）；未配置 policy 时全部拒绝。规则热更新，Agent 可经 `manage_policy` 申请最小授予。
 
@@ -125,7 +125,7 @@ args = ["huaweicloud-open-mcp", "--policy", "/home/you/hwc-policy.json"]
 
 把示例路径换成步骤 2 里你自己的绝对路径（Windows 形如 `C:\Users\you\hwc-policy.json`；JSON/TOML 字符串中需写成转义反斜杠形式 `"C:\\Users\\you\\hwc-policy.json"`）。
 
-**输出：** 启动你的 Agent —— 七个网关工具出现，以 server 名为前缀（`huaweicloud_list_products`、`huaweicloud_get_product`、`huaweicloud_list_apis`、`huaweicloud_get_api`、`huaweicloud_get_api_examples`、`huaweicloud_execute_api`、`huaweicloud_manage_policy`）。Codex 中 `codex mcp list` 可见该 server，TUI 内 `/mcp` 确认已连接。
+**输出：** 启动你的 Agent —— 八个网关工具出现，以 server 名为前缀（`huaweicloud_search_apis`、`huaweicloud_list_products`、`huaweicloud_get_product`、`huaweicloud_list_apis`、`huaweicloud_get_api`、`huaweicloud_get_api_examples`、`huaweicloud_execute_api`、`huaweicloud_manage_policy`）。Codex 中 `codex mcp list` 可见该 server，TUI 内 `/mcp` 确认已连接。
 
 凭证来自步骤 1 —— 客户端配置中不含任何密钥。若偏好环境变量内联，见[凭证](#凭证)。
 
@@ -220,6 +220,7 @@ curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-st
 
 | 工具 | 职责 |
 | --- | --- |
+| `search_apis` | 实体图谱跨产品检索（工作流第 0 步）：用户意图未指明产品时，按口语/关键词返回候选产品 + 代表 API + `matched_via` 匹配证据（别名/口语关键词/tag）；构建期快照，`--entity-index` 挂载 |
 | `list_products` | 全量华为云产品目录 —— 标识符、显示名、分类、产品页链接；`keyword`/`category` 过滤 |
 | `get_product` | 单产品详情（分类、API 数、是否全局级） |
 | `list_apis` | 产品 API 目录，含 `tag_groups` 全量 tag 概览；`tag`/`search`/`limit`/`offset` 收窄 |
@@ -296,6 +297,16 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 uv run api-refresh helpdocs    # 抓取解析帮助中心页面（sitemap 种子 + 同文档集链接 BFS，断点续传）
 uv run api-refresh helphints   # 匹配 apiexplorer 接口并差集比较，产出 data/help_completions/ 与 data/hints/help-docs-hints.json
 uv run huaweicloud-open-mcp --hints data/hints/help-docs-hints.json
+```
+
+### 实体图谱与 search_apis（构建期）
+
+`api-refresh graph` 从 `apis_docs.json` + `huawei_products.json` 确定性构建实体关联图谱（产品/API/tag 节点、同名孪生、归属、tag 覆盖计数），并与 `configs/entity-knowledge.json` 知识库合并；`--llm` 额外用构建期 LLM 抽取口语别名、产品语义关联与每 API 口语查询关键词（`ENTITY_LLM_BASE_URL/API_KEY/MODEL`，指纹增量重跑只抽变化产品，curated 条目永不覆盖）：
+
+```bash
+uv run api-refresh graph            # 确定性构建（产物 data/graph/entity-index.json + configs 副本随 wheel）
+uv run api-refresh graph --llm      # 构建期 LLM 语义抽取（约 150 次调用，指纹增量可断点续跑）
+uv run huaweicloud-open-mcp         # 运行时缺省加载 configs/entity-index.json（缺失静默禁用）
 ```
 
 - 仅差集口径：仅当帮助中心功能介绍明显比 API Explorer 描述更完善时才补全（`--min-gain`，默认 20 字符）。
@@ -450,7 +461,7 @@ uv run ruff check src tests              # lint
 uv run mypy src                          # 类型检查
 ```
 
-配套 CLI：`api-refresh`（离线 APIE 管道：抓取 API Explorer → OpenAPI 2.0 文档，含帮助中心补全阶段 `helpdocs`/`helphints`）与 `api-docs`（终端元数据查询）。详见 [AGENTS.md](AGENTS.md)。
+配套 CLI：`api-refresh`（离线 APIE 管道：抓取 API Explorer → OpenAPI 2.0 文档；`graph` 实体图谱构建含 `--llm` 语义抽取；帮助中心补全阶段 `helpdocs`/`helphints`）与 `api-docs`（终端元数据查询）。详见 [AGENTS.md](AGENTS.md)。
 
 ### 发布
 
