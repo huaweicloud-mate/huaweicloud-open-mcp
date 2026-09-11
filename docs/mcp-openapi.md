@@ -25,7 +25,7 @@ sequenceDiagram
     U->>L: 自然语言任务（如「查 cn-north-4 云服务器列表」）
     L->>M: list_products(keyword?)
     M->>C: v5/products（首次拉取，缓存到内存）
-    M-->>L: 产品列表（中文名/分类/接口数/is_global）
+    M-->>L: 产品列表（中文名/分类/is_global）
     Note over L: ① 基于任务语义决策产品范围（ECS）
     L->>M: list_apis(product=ECS)
     M->>C: v3/apis?product_short=ECS（首次拉取，缓存到内存）

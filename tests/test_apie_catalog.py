@@ -132,19 +132,3 @@ def test_find_api_doc_remote_error(monkeypatch):
     monkeypatch.setattr(catalog.http, "fetch_json",
                         lambda url, **kw: (_ for _ in ()).throw(OSError("fail")))
     assert catalog.find_api_doc(store, "ECS", "NopeApi", "cn-north-4") is None
-
-
-# ---------- get_api_counts ----------
-
-def test_get_api_counts_from_products(monkeypatch):
-    store = _store()
-    monkeypatch.setattr(catalog.http, "fetch_json",
-                        lambda url, **kw: {"groups": FIXTURE_GROUPS})
-    catalog.get_products(store)
-    counts = catalog.get_api_counts(store)
-    assert counts == {"ECS": 2}
-
-
-def test_get_api_counts_empty_when_no_products():
-    store = _store()
-    assert catalog.get_api_counts(store) == {}

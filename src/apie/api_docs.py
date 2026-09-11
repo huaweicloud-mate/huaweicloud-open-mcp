@@ -56,20 +56,19 @@ def print_table(data: dict) -> None:
 
 def cmd_products(args: argparse.Namespace) -> int:
     groups = catalog.get_products(_store) or []
-    r = metadata.list_products(groups, counts=catalog.get_api_counts(_store),
-                               category=args.category, keyword=args.keyword)
+    r = metadata.list_products(groups, category=args.category, keyword=args.keyword)
     products = r["products"]
     trows = [dict(p) for p in products]
     out = {"total_products": len(products), "products": products}
-    out["_table"] = {"columns": ["product", "name", "api_count", "is_global",
-                                  "category"], "rows": trows}
+    out["_table"] = {"columns": ["product", "name", "is_global",
+                                 "category"], "rows": trows}
     emit(out, args.fmt)
     return 0
 
 
 def cmd_product(args: argparse.Namespace) -> int:
     groups = catalog.get_products(_store) or []
-    p = metadata.get_product(groups, args.product, counts=catalog.get_api_counts(_store))
+    p = metadata.get_product(groups, args.product)
     if p is None:
         logger.error("产品 %s 未找到", args.product)
         return 2

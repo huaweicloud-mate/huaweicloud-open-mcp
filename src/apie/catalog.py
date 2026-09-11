@@ -72,20 +72,6 @@ def get_apis(store: MemoryStore, product: str) -> list[dict[str, Any]] | None:
         return None
 
 
-def get_api_counts(store: MemoryStore) -> dict[str, int]:
-    """从已缓存的产品列表计算接口计数表。"""
-    products = store.products()
-    if products is None:
-        return {}
-    counts: dict[str, int] = {}
-    for g in products:
-        for p in g.get("products", []):
-            ps = p.get("productshort")
-            if ps:
-                counts[ps.upper()] = p.get("api_count", 0)
-    return counts
-
-
 def find_api_doc(store: MemoryStore, product: str, api: str,
                  region: str) -> ApiHit | None:
     """查找接口 OpenAPI 文档。内存缓存命中直接返回；

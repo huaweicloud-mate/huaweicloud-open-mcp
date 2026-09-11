@@ -285,8 +285,7 @@ class ToolService:
             logger.warning("list_products metadata=missing")
             return {"ok": False, "reason": "产品列表不可用（远端拉取失败）"}
         groups = self.config.gate.filter_products(groups)
-        out = metadata.list_products(groups, counts=catalog.get_api_counts(self.store),
-                                     category=category, keyword=keyword)
+        out = metadata.list_products(groups, category=category, keyword=keyword)
         return cast(ProductListResult, self._annotate_product_items(out))
 
     @_audited
@@ -301,7 +300,7 @@ class ToolService:
         if groups is None:
             logger.warning("get_product product=%s metadata=missing", product)
             return {"ok": False, "reason": "产品列表不可用（远端拉取失败）"}
-        out = metadata.get_product(groups, product, counts=catalog.get_api_counts(self.store))
+        out = metadata.get_product(groups, product)
         if out is None:
             logger.warning("get_product product=%s result=not_found", product)
             return {"ok": False, "reason": f"产品 {product} 未找到"}

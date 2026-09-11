@@ -3,37 +3,33 @@
 from apie import metadata
 
 
-def _count_map():
-    return {"ECS": 4, "RABBITMQ": 2}
-
-
 def test_list_products(mini_products):
-    out = metadata.list_products(mini_products["groups"], counts=_count_map())
+    out = metadata.list_products(mini_products["groups"])
     assert out["total"] == 2
     by_name = {p["product"]: p for p in out["products"]}
     assert by_name["ECS"]["name"] == "弹性云服务器"
-    assert by_name["ECS"]["api_count"] == 4
+    assert "api_count" not in by_name["ECS"]  # 远端恒 0，字段已删（回归红线）
     assert by_name["ECS"]["is_global"] is False
 
 
 def test_list_products_category_filter(mini_products):
-    out = metadata.list_products(mini_products["groups"], counts=_count_map(), category="计算")
+    out = metadata.list_products(mini_products["groups"], category="计算")
     assert out["total"] == 1
     assert out["products"][0]["product"] == "ECS"
 
 
 def test_list_products_keyword_filter(mini_products):
-    out = metadata.list_products(mini_products["groups"], counts=_count_map(), keyword="rabbit")
+    out = metadata.list_products(mini_products["groups"], keyword="rabbit")
     assert out["total"] == 1
     assert out["products"][0]["product"] == "RabbitMQ"
 
 
 def test_get_product(mini_products):
-    p = metadata.get_product(mini_products["groups"], "ECS", counts=_count_map())
+    p = metadata.get_product(mini_products["groups"], "ECS")
     assert p["product"] == "ECS"
     assert p["name"] == "弹性云服务器"
     assert p["category"] == "计算"
-    assert p["api_count"] == 4
+    assert "api_count" not in p  # 回归红线
 
 
 def test_get_product_case_insensitive(mini_products):

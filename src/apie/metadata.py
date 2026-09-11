@@ -23,11 +23,9 @@ from common.types import (
 # ---------- 产品 ----------
 
 def list_products(groups: list[dict[str, Any]], *,
-                  counts: dict[str, int] | None = None,
                   category: str | None = None,
                   keyword: str | None = None) -> ProductListResult:
-    """groups: huawei_products.json 的 groups；counts: {PRODUCT_UPPER: api_count}。"""
-    counts = counts or {}
+    """groups: huawei_products.json 的 groups。"""
     kw = (keyword or "").lower()
     products: list[ProductItem] = []
     for g in groups:
@@ -43,16 +41,13 @@ def list_products(groups: list[dict[str, Any]], *,
                 "product": ps,
                 "name": name,
                 "category": gname,
-                "api_count": counts.get(ps.upper(), 0),
                 "is_global": p.get("is_global"),
                 "link": p.get("link") or None,
             })
     return {"ok": True, "total": len(products), "products": products}
 
 
-def get_product(groups: list[dict[str, Any]], product: str, *,
-                counts: dict[str, int] | None = None) -> ProductResult | None:
-    counts = counts or {}
+def get_product(groups: list[dict[str, Any]], product: str) -> ProductResult | None:
     target = (product or "").lower()
     for g in groups:
         for p in g.get("products", []):
@@ -63,7 +58,6 @@ def get_product(groups: list[dict[str, Any]], product: str, *,
                     "product": ps,
                     "name": p.get("name"),
                     "category": g.get("name"),
-                    "api_count": counts.get(ps.upper(), 0),
                     "is_global": p.get("is_global"),
                     "link": p.get("link") or None,
                 }

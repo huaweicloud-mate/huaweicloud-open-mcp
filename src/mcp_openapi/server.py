@@ -33,7 +33,7 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 
 ## 推荐工作流（渐进收窄，LLM 决策）
 
-1. `list_products`：获取产品列表（含中文名/分类/接口数），基于用户任务语义确定产品范围；
+1. `list_products`：获取产品列表（含中文名/分类/是否全局级服务），基于用户任务语义确定产品范围；
 2. `list_apis`：获取选定产品的 API 目录；返回结果含 `tag_groups` 全量 tag 概览，
    先用 `tag` 参数收窄目录，接口较多时配合 `search`/`limit`/`offset` 分页浏览；
 3. `get_api`：确定候选接口后，调用前**必读**接口文档（必填参数、类型、枚举、x-constraint 约束）；
@@ -176,7 +176,7 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
     @server.tool()
     def list_products(category: str | None = None,
                       keyword: str | None = None) -> ProductListResult | ToolError:
-        """第一步：列出华为云产品（分类、中文名、接口数、是否全局级服务）。
+        """第一步：列出华为云产品（分类、中文名、是否全局级服务）。
 
         基于用户任务语义选择目标产品；不确定时用 keyword 按产品名/中文名搜索。
         选定产品后用 list_apis 浏览其 API 目录。
@@ -188,7 +188,7 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
     @server.tool()
     def get_product(product: str) -> ProductResult | ToolError:
-        """确认单个产品详情（分类/接口数/是否全局级服务）。全局级服务（is_global=true）认证模型不同。
+        """确认单个产品详情（分类/是否全局级服务）。全局级服务（is_global=true）认证模型不同。
 
         授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """

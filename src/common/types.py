@@ -77,7 +77,6 @@ class ProductItem(TypedDict):
     product: str
     name: str
     category: str
-    api_count: int
     is_global: bool | None
     link: str | None
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
@@ -115,7 +114,6 @@ class ProductResult(TypedDict):
     product: str
     name: str | None
     category: str | None
-    api_count: int
     is_global: bool | None
     link: str | None
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
