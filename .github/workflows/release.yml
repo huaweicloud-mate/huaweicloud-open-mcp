@@ -19,6 +19,7 @@ jobs:
   publish:
     name: Publish (${{ github.event_name == 'push' && 'prod (tag)' || inputs.target }})
     runs-on: ubuntu-latest
+    environment: PUBLISH
     timeout-minutes: 15
     env:
       TARGET: ${{ github.event_name == 'push' && 'prod' || inputs.target }}
