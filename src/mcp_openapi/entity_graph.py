@@ -114,11 +114,16 @@ class EntityGraph:
         """跨产品检索：术语切分 → 产品评分（别名/关键词/tag-IDF/孪生归并）
         → 排名短名单。allowed / exclude_apis 为机制参数（gate 过滤后的产品
         白名单、hide 模式的 (product_lower → api_lower) 排除集，均排名前
-        过滤保证 total/truncated 语义一致）；模块对 Gate/废弃索引零认知。"""
+        过滤保证 total/truncated 语义一致）；模块对 Gate/废弃索引零认知。
+        limit 缺省 8、上限 _LIMIT_MAX；limit=-1 为不限制哨兵（返回全部命中，
+        信封回显 -1 且 truncated 恒 False），其余值 clamp 到 [1, _LIMIT_MAX]。"""
         try:
-            limit = max(1, min(int(limit), _LIMIT_MAX))
+            limit = int(limit)
         except (TypeError, ValueError):
             limit = 8
+        unlimited = limit == -1
+        if not unlimited:
+            limit = max(1, min(limit, _LIMIT_MAX))
         empty: SearchApisResult = {"ok": True, "query": query, "total": 0,
                                    "limit": limit, "products": [],
                                    "truncated": False}
@@ -153,7 +158,7 @@ class EntityGraph:
             if ext != terms:
                 ext_rows, _ = _rank(ext)
                 rows = _union_rows(rows, ext_rows)
-        page = rows[:limit]
+        page = rows if unlimited else rows[:limit]
         return {"ok": True, "query": query, "total": len(rows), "limit": limit,
                 "products": page, "truncated": len(rows) > len(page)}
 

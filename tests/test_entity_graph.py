@@ -168,6 +168,54 @@ def test_search_limit_and_truncated():
     assert out["limit"] == 1
 
 
+def _wide_graph(n: int) -> EntityGraph:
+    """n 个产品共享同一关键词的合成图谱（验证 limit=-1 越过 20 上限）。"""
+    raw = {
+        "version": 1,
+        "products": [
+            {"product": f"P{i:02d}", "name": f"服务{i:02d}", "category": "计算",
+             "is_global": False, "link": None, "aliases": [], "related": []}
+            for i in range(n)
+        ],
+        "apis": [
+            {"n": f"Action{i:02d}", "m": "post", "s": "执行操作",
+             "t": "操作管理", "p": f"P{i:02d}", "k": ["重启"]}
+            for i in range(n)
+        ],
+        "tag_products": {"操作管理": n},
+    }
+    return parse_entity_index(raw)
+
+
+def test_search_limit_minus_one_unlimited():
+    """limit=-1 哨兵：越过 20 上限返回全部命中，信封回显 -1。"""
+    out = _wide_graph(25).search_apis("重启", limit=-1)
+    assert out["total"] == 25
+    assert out["limit"] == -1
+    assert out["truncated"] is False
+    assert len(out["products"]) == out["total"]
+
+
+def test_search_limit_minus_one_blank_query_echo():
+    out = _wide_graph(25).search_apis("  ", limit=-1)
+    assert out == {"ok": True, "query": "  ", "total": 0, "limit": -1,
+                   "products": [], "truncated": False}
+
+
+def test_search_limit_clamp_regression():
+    """默认 8 / 超 20 clamp 20 / 0 与非 -1 负数 clamp ≥1（现状回归）。"""
+    g = _wide_graph(25)
+    out = g.search_apis("重启")
+    assert out["limit"] == 8 and len(out["products"]) == 8
+    assert out["truncated"] is True
+    out = g.search_apis("重启", limit=100)
+    assert out["limit"] == 20 and len(out["products"]) == 20
+    out = g.search_apis("重启", limit=0)
+    assert out["limit"] == 1 and len(out["products"]) == 1
+    out = g.search_apis("重启", limit=-2)
+    assert out["limit"] == 1 and len(out["products"]) == 1
+
+
 def test_search_empty_and_blank_query():
     for q in ("", "   ", "、。"):
         out = _graph().search_apis(q)
@@ -273,6 +321,20 @@ def test_service_search_audited(tmp_path):
     assert event["tool"] == "search_apis"
     assert event["ok"] is True
     assert event["input"] == {"query": "云主机", "limit": 3, "category": None}
+
+
+def test_service_search_limit_minus_one_passthrough(tmp_path):
+    from common.audit import NdjsonAuditSink
+    from mcp_openapi.service import ServiceConfig, ToolService
+    audit = tmp_path / "audit.jsonl"
+    svc = ToolService(ServiceConfig(
+        entity_graph=parse_entity_index(RAW),
+        audit_sink=NdjsonAuditSink(audit)))
+    out = svc.search_apis("云主机", limit=-1)
+    assert out["total"] == 1
+    assert out["limit"] == -1
+    event = json.loads(audit.read_text(encoding="utf-8").strip())
+    assert event["input"] == {"query": "云主机", "limit": -1}
 
 
 def _args(**kw):

@@ -37,6 +37,7 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 
 0. `search_apis`：用户意图未指明产品/API 时先用本工具跨产品检索（实体图谱，
    返回候选产品 + 代表 API + matched_via 匹配证据），再进入 1-5 步收窄；
+   结果截断（truncated=true）时可用 `limit=-1` 取全部命中；
 1. `list_products`：获取产品列表（含中文名/分类/是否全局级服务），基于用户任务语义确定产品范围；
 2. `list_apis`：获取选定产品的 API 目录；返回结果含 `tag_groups` 全量 tag 概览，
    先用 `tag` 参数收窄目录，接口较多时配合 `search`/`limit`/`offset` 分页浏览；
@@ -187,6 +188,7 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
         返回候选产品（中文名/分类/link）+ 每产品代表 API + matched_via 匹配证据
         （别名/口语关键词/tag 命中），据此再用 list_apis/get_api 收窄。
+        limit 默认 8、上限 20；limit=-1 为不限制哨兵（返回全部命中，truncated 恒 false）。
         废弃接口治理同 list_apis（--deprecated-mode annotate 标注 / hide 隐藏）。
         图谱为构建期快照（非实时）；未配置实体索引时返回拒绝。
 
