@@ -3,6 +3,8 @@
 import json
 import os
 
+import pytest
+
 from common.auth import Credentials
 from common.types import ClientResponse
 from mcp_openapi import execute
@@ -264,6 +266,55 @@ def test_execute_allow_calls_client(mini_detail):
     assert out["ok"] is True
     assert out["status"] == 200
     assert client.calls[0][0] == "GET"
+
+
+# ---------- 服务方言：无 body 请求默认 Content-Type（_DEFAULT_JSON_CT_PRODUCTS） ----------
+
+# 独立真值：2026-09 全量探测矩阵（219 产品/397 探针），无 Content-Type 的 GET 被
+# 这些服务的头校验拒绝（MRS/LTS/UGO 415、GES/AAD/MSGSMS/WAF 400），加 CT 后越过。
+DIALECT_PRODUCTS = ["MRS", "LTS", "GES", "AAD", "MSGSMS", "WAF", "UGO"]
+
+
+def test_dialect_roster_matches_probe_matrix():
+    """roster 与探测矩阵一致，防意外漂移（新增/删除产品须同步本清单）。"""
+    assert execute._DEFAULT_JSON_CT_PRODUCTS == frozenset(DIALECT_PRODUCTS)
+
+
+@pytest.mark.parametrize("product", DIALECT_PRODUCTS)
+def test_execute_api_dialect_product_defaults_content_type(mini_detail, product):
+    """方言产品无 body GET 自动携带默认 Content-Type（网关转调缺头致 415/400 的修复）。"""
+    doc, path, method, op = _get_op(mini_detail)
+    client = StubClient()
+    execute.execute_api(doc, path, method, op, product, "ListServers", "cn-north-4",
+                        {}, client=client,
+                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    headers = client.calls[0][5]
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_execute_api_non_dialect_product_no_default_content_type(mini_detail):
+    """非方言产品：无 body GET 不携带 Content-Type（191 个无 CT 即 200 的产品回归红线）。"""
+    doc, path, method, op = _get_op(mini_detail)
+    client = StubClient()
+    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
+                        {}, client=client,
+                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    headers = client.calls[0][5]
+    assert "Content-Type" not in headers
+
+
+def test_execute_api_dialect_product_explicit_content_type_wins(mini_detail):
+    """显式传入的 Content-Type 不被默认值覆盖（setdefault 语义）。"""
+    doc, path, method, op = _get_op(mini_detail)
+    op = dict(op)
+    op["parameters"] = list(op.get("parameters") or []) + [
+        {"name": "Content-Type", "in": "header", "type": "string"}]
+    client = StubClient()
+    execute.execute_api(doc, path, method, op, "MRS", "ListServers", "cn-north-4",
+                        {"Content-Type": "text/plain"}, client=client,
+                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    headers = client.calls[0][5]
+    assert headers["Content-Type"] == "text/plain"
 
 
 # ---------- validate_params（OpenAPI 元数据校验，policy 接缝） ----------

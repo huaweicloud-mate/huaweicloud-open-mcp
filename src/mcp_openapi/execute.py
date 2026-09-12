@@ -34,6 +34,15 @@ _AUTH_HEADERS = frozenset({
     "Authorization",
 })
 
+# 服务方言：无 body 请求仍要求 JSON Content-Type 的产品（缺失时以 415/400 拒绝，
+# 三种错误形态：MRS/UGO/LTS 415、GES/AAD/MSGSMS/WAF 400）。2026-09 全量探测实证
+# （219 产品/397 探针矩阵：方言产品 +CT 后越过头校验；191 个产品无 CT 即 200，
+# 加头无害——SDK-HMAC-SHA256 签名排除 content-type，官方 SDK 全局携带为既成先例）。
+# Graduation trigger：规则超出「产品名单 + 通用默认头」形态（如按产品注入
+# X-Environment-Id/Client-Request-Id 等用户上下文头）时，升级为独立方言模块
+# （OBS lane 先例）。
+_DEFAULT_JSON_CT_PRODUCTS = frozenset({"MRS", "LTS", "GES", "AAD", "MSGSMS", "WAF", "UGO"})
+
 
 class ApiExecutor(Protocol):
     """执行层协议：execute_api 只依赖 request()，不耦合具体客户端实现。"""
@@ -314,6 +323,9 @@ def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
     if err:
         return _refuse(err)
     assert filled is not None
+
+    if product in _DEFAULT_JSON_CT_PRODUCTS:
+        headers.setdefault("Content-Type", "application/json")
 
     host = doc.get("host")
     if not isinstance(host, str) or not host:
