@@ -13,6 +13,7 @@ OpenAI-compatible /chat/completions（urllib，429 退避）。
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any, Callable
 
@@ -24,9 +25,17 @@ KNOWLEDGE_VERSION = 1
 PRODUCTS_FP = "__products__"
 ALIAS_MAX = 8
 KEYWORD_MAX = 12
-KEYWORDS_PER_API = 8
+KEYWORDS_PER_API = 5
 NOTE_MAX = 60
 BATCH_SLEEP = 0.5
+
+# 域约束闸门：ASCII token ≥3 字符才可作判别证据（es/ip 之类短片段噪声大）。
+_DOMAIN_TOKEN_MIN = 3
+# 支配性闸门：alias 被 > _ALIAS_SUBSUME_MAX 个非 target 产品的别名包含 →
+# 泛词非判别（服务器 ⊆ 云服务器/物理服务器/边缘服务器…；云主机 仅被
+# 专属云主机 包含 → 合法）。
+_ALIAS_SUBSUME_MAX = 2
+_ASCII_RUN = re.compile(r"[A-Za-z0-9]+")
 
 Transport = Callable[[list[dict[str, str]]], str]
 
@@ -121,6 +130,43 @@ def _roster_lines(node_products: list[str], info: dict[str, Any],
 
 # ---------- LLM 输出严格解析与校验 ----------
 
+def _domain_tokens(info: dict[str, dict[str, Any]],
+                   node_products: list[str],
+                   current: dict[str, Any]) -> dict[str, set[str]]:
+    """token(casefold) → 认领产品集合（域约束闸门的目录级预计算）。
+
+    池：每产品的 product_short + 中文名 + 现有别名（curated+llm，别名按
+    targets 逐产品认领）。恰被一个产品认领的 token 为判别性——关键词/
+    别名含**他产品**的判别 token 即域外污染（如 CSS 被塞 hadoop 关键词，
+    实测）；多产品共认领（孪生 HCSECS alias=ECS、共享词 gpu）不判别、
+    不闸。"""
+    claims: dict[str, set[str]] = {}
+
+    def _claim(text: str, ps: str) -> None:
+        for run in _ASCII_RUN.findall(text or ""):
+            if len(run) >= _DOMAIN_TOKEN_MIN:
+                claims.setdefault(run.casefold(), set()).add(ps)
+
+    for ps in node_products:
+        _claim(ps, ps)  # product_short 整认领（孪生 alias 指向同 short 共享）
+        _claim(info[ps]["name"], ps)
+    for entry in current.get("aliases") or []:
+        alias = entry.get("alias")
+        targets = entry.get("targets")
+        if not isinstance(alias, str) or not isinstance(targets, list):
+            continue
+        for t in targets:
+            if isinstance(t, str) and t.strip() in info:
+                _claim(alias, t.strip())
+    return claims
+
+
+def _foreign_tokens(claims: dict[str, set[str]], ps: str) -> frozenset[str]:
+    """产品 ps 的域外判别 token 集（恰单认领且不属于 ps）。"""
+    return frozenset(t for t, owners in claims.items()
+                     if len(owners) == 1 and ps not in owners)
+
+
 def _parse_llm_json(text: str) -> dict[str, Any]:
     """宽松定位 JSON 对象（容忍 markdown 围栏与前后缀文本），严格结构校验。"""
     if not isinstance(text, str):
@@ -141,9 +187,20 @@ def _parse_llm_json(text: str) -> dict[str, Any]:
 
 
 def _valid_alias_entries(data: dict[str, Any], node_set: set[str],
-                         name_set: set[str]) -> list[dict[str, Any]]:
+                         name_set: set[str],
+                         claims: dict[str, set[str]] | None = None,
+                         alias_corpus: dict[str, frozenset[str]] | None = None,
+                         ) -> list[dict[str, Any]]:
     """别名合法性：非空 1-8 字、目标在图内；等于产品中文名或 product_short
-    一律丢弃（子串匹配已覆盖官方名，别名只收口语增量）。"""
+    一律丢弃（子串匹配已覆盖官方名，别名只收口语增量）。
+
+    域约束闸门（逐条目）：alias 的 ASCII 判别 token 认领者与 targets 无
+    交集 → 域外污染丢弃并记台账（如为 GACS 提议含 hadoop 的别名——hadoop
+    仅 ECS 认领）。多认领（孪生/共享词）不闸。
+
+    支配性闸门：alias 是**非 target 产品**别名串的真子串 → 非判别丢弃
+    （实测 HCSECS 被塞 服务器——它 ⊆ 云服务器/物理服务器，任何含 服务器的
+    查询都误命中；targets 含该产品时不算，共享别名合法）。"""
     entries = []
     for item in data.get("aliases") or []:
         if not isinstance(item, dict):
@@ -162,6 +219,24 @@ def _valid_alias_entries(data: dict[str, Any], node_set: set[str],
                  if isinstance(t, str) and t.strip() in node_set]
         if not valid:
             continue
+        if claims:
+            toks = {r.casefold() for r in _ASCII_RUN.findall(folded)
+                    if len(r) >= _DOMAIN_TOKEN_MIN}
+            owners = set().union(*(claims.get(t, set()) for t in toks)) \
+                if toks else set()
+            if owners and owners.isdisjoint(valid):
+                logger.warning("alias 域外污染丢弃: %r（判别 token 认领者"
+                               " %s 与 targets 无交集）", alias, owners)
+                continue
+        if alias_corpus:
+            target_set = {t.casefold() for t in valid}
+            subsumed = sum(1 for ps, strings in alias_corpus.items()
+                           if ps not in target_set
+                           and any(folded in s for s in strings))
+            if subsumed > _ALIAS_SUBSUME_MAX:
+                logger.warning("alias 支配性丢弃: %r（被 %d 个非 target "
+                               "产品的别名包含）", alias, subsumed)
+                continue
         entries.append({"alias": alias, "targets": valid, "source": "llm"})
     return entries
 
@@ -187,9 +262,12 @@ def _valid_relation_entries(data: dict[str, Any],
 
 
 def _valid_keyword_entries(data: dict[str, Any],
-                           menu_map: dict[str, str]) -> dict[str, list[str]]:
+                           menu_map: dict[str, str],
+                           foreign: frozenset[str] = frozenset(),
+                           ) -> dict[str, list[str]]:
     """合并全部条目后按 API 去重并封顶 ≤KEYWORDS_PER_API。
-    键保留规范 API 名（menu_map: lower→canonical），仅匹配用小写。"""
+    键保留规范 API 名（menu_map: lower→canonical），仅匹配用小写。
+    关键词含他产品判别 token（域外污染）丢弃并记台账。"""
     collected: dict[str, list[str]] = {}
     for item in data.get("keywords") or []:
         if not isinstance(item, dict):
@@ -204,8 +282,13 @@ def _valid_keyword_entries(data: dict[str, Any],
             if not isinstance(kw, str):
                 continue
             kw = kw.strip()
-            if 1 <= len(kw) <= KEYWORD_MAX and kw not in bucket:
-                bucket.append(kw)
+            if not 1 <= len(kw) <= KEYWORD_MAX or kw in bucket:
+                continue
+            if any(tok in kw.casefold() for tok in foreign):
+                logger.warning("keyword 域外污染丢弃: %r（含他产品判别 token）",
+                               kw)
+                continue
+            bucket.append(kw)
     return {menu_map[api]: kws[:KEYWORDS_PER_API]
             for api, kws in collected.items()}
 
@@ -273,10 +356,12 @@ def refresh_knowledge(current: dict[str, Any] | None,
                       sleep_fn: Callable[[float], None] = time.sleep,
                       batch_products: int = 20,
                       batch_apis: int = 80,
-                      on_update: Callable[[dict[str, Any]], None] | None = None
+                      on_update: Callable[[dict[str, Any]], None] | None = None,
+                      force: bool = False,
                       ) -> dict[str, Any]:
     """指纹增量抽取：roster 变化→产品级全量重抽（aliases+relations）；
-    API 清单变化的产品→重抽该产品关键词。批失败跳过（指纹不更新，
+    API 清单变化的产品→重抽该产品关键词。force=True 绕过全部指纹
+    （prompt/闸门调整后的全量重抽入口）。批失败跳过（指纹不更新，
     下次重跑自动重试）。纯数据进出，不改输入。
 
     on_update（增量落盘回调）：产品级完成、每产品 API 批完成时以合并后
@@ -303,7 +388,19 @@ def refresh_knowledge(current: dict[str, Any] | None,
     tags_by_product = _discriminative_tags(apis_by_product, tag_coverage)
 
     current = current or {}
-    fps = current.get("fingerprints") or {}
+    fps = {} if force else (current.get("fingerprints") or {})
+    claims = _domain_tokens(info, node_products, current)
+    alias_corpus: dict[str, set[str]] = {}
+    for entry in current.get("aliases") or []:
+        alias = entry.get("alias")
+        targets = entry.get("targets")
+        if not isinstance(alias, str) or not isinstance(targets, list):
+            continue
+        for t in targets:
+            if isinstance(t, str) and t.strip() in info:
+                alias_corpus.setdefault(t.strip().casefold(), set()).add(
+                    alias.casefold())
+    corpus = {ps: frozenset(v) for ps, v in alias_corpus.items()}
     roster_fp = _fingerprint("\n".join(
         f"{ps}\t{info[ps]['name']}\t{info[ps]['category']}"
         for ps in node_products))
@@ -328,7 +425,8 @@ def refresh_knowledge(current: dict[str, Any] | None,
                 "华为云产品清单（product_short | 中文名 | 分类 | 判别性标签）：\n"
                 + "\n".join(chunk)
                 + "\n\n任务一 aliases：为产品列出用户口语中可能的别名"
-                  "（如 云主机），不含产品中文名本身，多产品共用时 targets 列全。\n"
+                  "（如 云主机），不含产品中文名本身，多产品共用时 targets 列全；"
+                  "别名只能用对应产品自己领域的口语词汇。\n"
                   "任务二 relations：提出有助于从用户意图定位产品的产品间语义关联"
                   "（如 弹性伸缩管理弹性云服务器），附简短 note（≤30字）。\n"
                 '只输出 JSON：{"aliases": [{"alias": "...", "targets": ["产品"]}],'
@@ -338,7 +436,8 @@ def refresh_knowledge(current: dict[str, Any] | None,
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}]))
                 pl_aliases.extend(
-                    _valid_alias_entries(data, node_set, name_set))
+                    _valid_alias_entries(data, node_set, name_set, claims,
+                                         corpus))
                 pl_relations.extend(_valid_relation_entries(data, node_set))
             except Exception:
                 ok = False
@@ -370,13 +469,19 @@ def refresh_knowledge(current: dict[str, Any] | None,
                 + "\n".join(lines)
                 + "\n\n为每个 API 抽取用户口语查询关键词（如 重启服务器/开机/扩容），"
                   f"每个 1-{KEYWORD_MAX} 字，每个 API 最多 {KEYWORDS_PER_API} 个，"
-                  "不照抄整句 summary。\n"
+                  "不照抄整句 summary；只使用本产品（"
+                  f"{info[ps]['name']}/{ps}）领域的词汇，"
+                  "禁用其他华为云产品的专属词（专有名词/技术栈名，"
+                  "如其他产品才用的组件或框架名）；"
+                  "覆盖该 API 的常见口语说法（查询/创建/删除/修改/扩容/缩容/"
+                  "重启/绑定/解绑 等生命周期动词短语，按语义取用）。\n"
                 '只输出 JSON：{"keywords": [{"api": "name", "keywords": ["..."]}]}')
             try:
                 data = _parse_llm_json(transport([
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": prompt}]))
-                collected.update(_valid_keyword_entries(data, menu_map))
+                collected.update(_valid_keyword_entries(
+                    data, menu_map, _foreign_tokens(claims, ps)))
             except Exception:
                 ok = False
                 logger.warning("api keyword batch %s@%d failed, skipped",

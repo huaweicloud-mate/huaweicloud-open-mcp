@@ -126,7 +126,7 @@ def stage_products(dry_run: bool) -> int:
 
 
 def stage_script(name: str, dry_run: bool, full: bool = False,
-                 llm: bool = False) -> int:
+                 llm: bool = False, llm_force: bool = False) -> int:
     env = None
     if name in ("details", "retry"):
         env = {"API_EXPLORER_REGION": current_region()}
@@ -137,6 +137,8 @@ def stage_script(name: str, dry_run: bool, full: bool = False,
         args += ["--region", current_region()]
     if name == "graph" and llm:
         args += ["--llm"]
+    if name == "graph" and llm_force:
+        args += ["--llm-force"]
     import os as _os
     for var in ("HUAWEICLOUD_MCP_LOG_LEVEL", "HUAWEICLOUD_MCP_LOG_FILE"):
         if _os.environ.get(var) and (env is None or var not in env):
@@ -198,7 +200,9 @@ def cmd_single(args: argparse.Namespace, name: str) -> int:
         "products": lambda: stage_products(args.dry_run),
         "validate": lambda: stage_validate(args.dry_run, args.full),
         "graph": lambda: stage_script("graph", args.dry_run,
-                                      llm=getattr(args, "llm", False)),
+                                      llm=getattr(args, "llm", False),
+                                      llm_force=getattr(args, "llm_force",
+                                                        False)),
     }
     fn = handlers.get(name)
     if fn is None:
@@ -276,6 +280,8 @@ def build_parser() -> argparse.ArgumentParser:
                             help="构建期 LLM 语义抽取（别名/产品关联/API 关键词，"
                                  "需 ENTITY_LLM_BASE_URL/API_KEY/MODEL 环境变量；"
                                  "指纹增量，仅重抽变化产品）")
+            sp.add_argument("--llm-force", action="store_true",
+                            help="绕过指纹台账全量重抽（prompt/闸门调整后用）")
 
     rp = sub.add_parser("refresh", help="执行整条流水线（或 --from/--to 范围）", parents=[common])
     rp.add_argument("--from", dest="start", choices=ALL_STAGES, help="起始阶段")

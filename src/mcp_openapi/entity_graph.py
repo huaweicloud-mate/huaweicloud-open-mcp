@@ -225,6 +225,12 @@ class EntityGraph:
             if term in name_lower:
                 score += W_NAME
                 _ev(_PRIO_NAME, f"name:{term}")
+            elif name_lower and name_lower != term and name_lower in term:
+                # name 嵌句档（镜像 alias 嵌句）：产品中文名作为子串嵌入
+                # 用户原句（裸金属服务器 ⊆ 裸金属服务器重装操作系统）。
+                # term==name 已由上一分支覆盖，防双计。
+                score += W_NAME
+                _ev(_PRIO_NAME, f"name:{name_lower}")
             if category_lower and term in category_lower:
                 score += W_CATEGORY
             for hit in hits:

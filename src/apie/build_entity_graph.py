@@ -209,12 +209,14 @@ def _write_json_atomic(path: Path, data: Any) -> None:
 def refresh_knowledge_file(root: Path, *,
                            transport: Any = None,
                            batch_products: int = 20,
-                           batch_apis: int = 80) -> dict[str, Any]:
+                           batch_apis: int = 80,
+                           force: bool = False) -> dict[str, Any]:
     """--llm 路径：LLM 抽取 → 合并 → 原子写 knowledge 文件 → 返回新 knowledge。
 
     transport 注入点（测试用 fake；生产经 env 构造真实 OpenAI-compatible
     transport）。env 未配置且未注入 transport 时记 WARNING 跳过，返回原
-    knowledge。on_update 增量落盘：每产品完成即合并原子写（长任务中断后
+    knowledge。force=True 绕过指纹全量重抽（prompt/闸门调整后用）。
+    on_update 增量落盘：每产品完成即合并原子写（长任务中断后
     凭指纹台账续跑，只补缺口）。
     """
     from .entity_extract import (
@@ -241,7 +243,7 @@ def refresh_knowledge_file(root: Path, *,
     updated = refresh_knowledge(current, apis, groups, transport=transport,
                                 batch_products=batch_products,
                                 batch_apis=batch_apis,
-                                on_update=_persist)
+                                on_update=_persist, force=force)
     _write_json_atomic(knowledge_path, updated)
     logger.info("knowledge refreshed: aliases=%d relations=%d "
                 "api_keywords_products=%d",
@@ -291,6 +293,8 @@ def main() -> int:
     p.add_argument("--llm", action="store_true",
                    help="构建期 LLM 语义抽取（需 ENTITY_LLM_BASE_URL/"
                         "API_KEY/MODEL 环境变量；指纹增量+增量落盘，可断点续跑）")
+    p.add_argument("--llm-force", action="store_true",
+                   help="绕过指纹台账全量重抽（prompt/闸门调整后用）")
     p.add_argument("--batch-products", type=int, default=20,
                    help="产品级抽取批大小（默认 20；端点吞吐慢时调小）")
     p.add_argument("--batch-apis", type=int, default=80,
@@ -303,7 +307,8 @@ def main() -> int:
     root = Path(project_root())
     if args.llm:
         refresh_knowledge_file(root, batch_products=args.batch_products,
-                               batch_apis=args.batch_apis)
+                               batch_apis=args.batch_apis,
+                               force=args.llm_force)
     build_artifact_files(root)
     return 0
 

@@ -221,10 +221,10 @@ def test_api_keywords_validation():
                       '{"api": "novarebootservers", "keywords": ["小写命中"]}]}',
                       _kw_response({"ResizeGpuServer": ["变更大卡机"]}))
     out = refresh_knowledge({}, APIS, GROUPS, transport=t)
-    # 合并后按 API 封顶 ≤8：7 条合法 + 小写归一化并入的第 8 条
+    # 合并后按 API 封顶 ≤5（S15e 收紧：密集关键词拉长 BM25 字段恶化长度
+    # 归一化）：7 条合法取前 5
     kws = out["api_keywords"]["ECS"]["NovaRebootServers"]
-    assert kws == ["重启服务器", "开机", "重启", "关机", "重启机器",
-                   "再来一次", "第九条", "小写命中"]
+    assert kws == ["重启服务器", "开机", "重启", "关机", "重启机器"]
     assert "NoSuchApi" not in out["api_keywords"]["ECS"]
 
 
@@ -291,3 +291,103 @@ def test_progressive_persistence_callback():
         _ok_product_batch(),
         _kw_response({"NovaRebootServers": ["重启服务器"]}),
         _kw_response({"ResizeGpuServer": ["变更大卡机"]})))
+
+
+# ---------- S15e 扩展：域约束闸门（判别性 ASCII token） ----------
+
+def _current_with_domain():
+    """curated 别名注入域 token：hadoop 仅 ECS 认领（判别），gpu 双产品
+    认领（非判别）。"""
+    return {"aliases": [
+        {"alias": "Hadoop服务", "targets": ["ECS"], "source": "curated"},
+        {"alias": "GPU加速", "targets": ["ECS", "GACS"], "source": "curated"},
+    ]}
+
+
+def test_keyword_foreign_domain_token_dropped(caplog):
+    """关键词含他产品判别 token → 丢弃；自有 token 与共享 token 放行。"""
+    import logging
+    t = FakeTransport(
+        _ok_product_batch(),
+        _kw_response({"NovaRebootServers": ["重启服务器", "hadoop迁移"]}),
+        _kw_response({"ResizeGpuServer": ["变更大卡机", "hadoop集群",
+                                          "gpu规格变更"]}))
+    with caplog.at_level(logging.WARNING, logger="apie.entity_extract"):
+        out = refresh_knowledge(_current_with_domain(), APIS, GROUPS,
+                                transport=t, sleep_fn=lambda _s: None)
+    # ECS：自有 token（hadoop 属 ECS）放行
+    assert out["api_keywords"]["ECS"]["NovaRebootServers"] == \
+        ["重启服务器", "hadoop迁移"]
+    # GACS：hadoop（属 ECS）丢弃；gpu（双认领非判别）放行
+    assert out["api_keywords"]["GACS"]["ResizeGpuServer"] == \
+        ["变更大卡机", "gpu规格变更"]
+    assert "hadoop集群" in caplog.text
+
+
+def test_alias_foreign_domain_token_dropped(caplog):
+    """产品级别名提议含他产品判别 token → 丢弃。"""
+    import logging
+    canned = ('{"aliases": [{"alias": "Hadoop分析", "targets": ["GACS"]},'
+              ' {"alias": "GPU盒子", "targets": ["GACS"]}],'
+              ' "relations": []}')
+    t = FakeTransport(canned, _kw_response({}), _kw_response({}))
+    with caplog.at_level(logging.WARNING, logger="apie.entity_extract"):
+        out = refresh_knowledge(_current_with_domain(), APIS, GROUPS,
+                                transport=t, sleep_fn=lambda _s: None)
+    assert out["aliases"] == [
+        {"alias": "Hadoop服务", "targets": ["ECS"], "source": "curated"},
+        {"alias": "GPU加速", "targets": ["ECS", "GACS"], "source": "curated"},
+        {"alias": "GPU盒子", "targets": ["GACS"], "source": "llm"}]
+    assert "Hadoop分析" in caplog.text
+
+
+def test_force_ignores_fingerprints():
+    canned = [_ok_product_batch(),
+              _kw_response({"NovaRebootServers": ["重启服务器"]}),
+              _kw_response({"ResizeGpuServer": ["变更大卡机"]})]
+    first = refresh_knowledge({}, APIS, GROUPS, transport=FakeTransport(*canned),
+                              sleep_fn=lambda _s: None)
+    # 无 force：指纹命中 → 零调用
+    t_noop = FakeTransport()
+    refresh_knowledge(first, APIS, GROUPS, transport=t_noop,
+                      sleep_fn=lambda _s: None)
+    assert t_noop.calls == []
+    # force：绕过指纹全量重抽，结果与全新跑等价
+    t_force = FakeTransport(*canned)
+    out = refresh_knowledge(first, APIS, GROUPS, transport=t_force,
+                            force=True, sleep_fn=lambda _s: None)
+    assert len(t_force.calls) == 3
+    fresh = refresh_knowledge({}, APIS, GROUPS,
+                              transport=FakeTransport(*canned),
+                              sleep_fn=lambda _s: None)
+    assert out == fresh
+
+
+def test_alias_subsumed_by_other_product_alias_dropped(caplog):
+    """支配性闸门（覆盖度）：alias 被 >2 个非 target 产品的别名包含 → 泛词
+    丢弃；targets 成员不计入（共享别名合法）。"""
+    import logging
+    groups4 = [{"name": "计算", "products": GROUPS[0]["products"] + [
+        {"name": "裸金属服务器", "productshort": "BMS", "is_global": False,
+         "link": "b"},
+        {"name": "智能边缘云", "productshort": "IEC", "is_global": False,
+         "link": "i"}]}]
+    current = {"aliases": [
+        {"alias": "云服务器", "targets": ["ECS"], "source": "curated"},
+        {"alias": "物理服务器", "targets": ["BMS"], "source": "curated"},
+        {"alias": "边缘服务器", "targets": ["IEC"], "source": "curated"},
+        {"alias": "云主机", "targets": ["ECS"], "source": "curated"}]}
+    canned = ('{"aliases": [{"alias": "服务器", "targets": ["GACS"]},'
+              ' {"alias": "服务器", "targets": ["ECS", "GACS"]}],'
+              ' "relations": []}')
+    t = FakeTransport(canned, _kw_response({}), _kw_response({}))
+    with caplog.at_level(logging.WARNING, logger="apie.entity_extract"):
+        out = refresh_knowledge(current, APIS, groups4, transport=t,
+                                sleep_fn=lambda _s: None)
+    # APIS 无 BMS/IEC 的 API → node_products 只有 ECS/GACS；GACS 版被
+    # ECS/BMS/IEC 三个别名包含 → 丢弃；共享版非 target 包含者仅 BMS/IEC
+    # ≤2 → 合法
+    kept = {(x["alias"], tuple(x["targets"])) for x in out["aliases"]
+            if x["source"] == "llm"}
+    assert kept == {("服务器", ("ECS", "GACS"))}
+    assert "支配性" in caplog.text

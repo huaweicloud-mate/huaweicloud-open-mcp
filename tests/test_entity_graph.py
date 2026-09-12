@@ -521,3 +521,21 @@ def test_service_search_deprecated_off_noop():
     nova = next(a for a in row["apis"] if a["name"] == "NovaRebootServers")
     assert "deprecated" not in nova
     assert "replacement" not in nova
+
+
+# ---------- name 嵌句档（S16b 扩展） ----------
+
+def test_search_name_embedded_in_phrase():
+    """产品中文名整体嵌入用户原句（非相等）：W_NAME 嵌句档生效。"""
+    out = _graph().search_apis("给弹性云服务器扩个容")
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    assert "name:弹性云服务器" in row["matched_via"]
+    assert row["score"] >= 5.0
+
+
+def test_search_name_embed_no_double_count():
+    """term == name 走常规 name 分支，嵌句档不双计（分数不翻倍）。"""
+    out = _graph().search_apis("弹性云服务器")
+    row = out["products"][0]
+    assert row["matched_via"].count("name:弹性云服务器") == 1
+
