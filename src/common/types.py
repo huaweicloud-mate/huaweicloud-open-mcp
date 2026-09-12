@@ -79,6 +79,7 @@ class ProductItem(TypedDict):
     category: str
     is_global: bool | None
     link: str | None
+    api_count: int  # v4/products 真实计数（2026-09 恢复：v5 恒 0 时代删除，v4 有真值）
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
 
 
@@ -154,6 +155,7 @@ class ProductResult(TypedDict):
     category: str | None
     is_global: bool | None
     link: str | None
+    api_count: int
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
 
 

@@ -29,7 +29,8 @@
 │     manager.py  session registry（空闲超时 / LRU 上限）
 │     config.py   DiscoverConfig
 ├─ APIE 元数据层（参考 ../apis 项目重新实现，管道设计保持一致）
-│     console.huaweicloud.com/apiexplorer 远端 API Explorer 为唯一数据源
+│     apiexplorer.cn-north-4.myhuaweicloud.com 注册域为唯一数据源
+│     （/v4/products /v2/apis /v3/apis/detail，apie/explorer.py 方言归一）
 │     ★ 不落盘，纯内存缓存 + 远端实时回退
 ├─ 执行层
 │     src/mcp_openapi/signer/  自实现 SDK-HMAC-SHA256 签名（不依赖官方 SDK）
@@ -50,20 +51,21 @@
 
 核心原则：
 
-- **渐进式工作流**：LLM 决策驱动收窄——意图未指明产品时先 `search_apis`（实体图谱跨产品检索，返回候选产品 + 代表 API + matched_via 证据，S15）→ `list_products` 定产品 → `list_apis`（含 `tag_groups` 全量 tag 概览）定目录 → `get_api` 读文档 → `execute_api` 执行；完整指引写在 server instructions（initialize 响应）与各工具 description。`list_products`/`get_product` 输出不含 `api_count`（远端 v5/products 该字段恒 0，2026-09 删除；产品级计数非有效信号，规模信息由 `list_apis` 的 `total`/`tag_groups` 承担）；`apie/catalog.get_api_counts` 已随之删除，管道 count 阶段（`raw/apis_count.json`，`fetch_apis` 翻页依赖）不受影响。
+- **渐进式工作流**：LLM 决策驱动收窄——意图未指明产品时先 `search_apis`（实体图谱跨产品检索，返回候选产品 + 代表 API + matched_via 证据，S15）→ `list_products` 定产品 → `list_apis`（含 `tag_groups` 全量 tag 概览）定目录 → `get_api` 读文档 → `execute_api` 执行；完整指引写在 server instructions（initialize 响应）与各工具 description。`list_products`/`get_product` 输出携带真实 `api_count`（2026-09 恢复：数据源切至 apiexplorer 注册域 `/v4/products` 后计数有真值；v5/products 时代恒 0 曾删除，`apie/catalog.get_api_counts` 同期删除未恢复）；管道 count 阶段（`raw/apis_count.json`）改由 v4/products 平铺派生，`fetch_apis` 翻页以响应 `count`+空批终止，计数产物仅作产品 roster 与 parity 参考。
 - **实时回退**：元数据不走本地磁盘，全部通过 API Explorer 远端实时拉取；`apie/memory_store.py` 纯内存缓存（产品列表/API 列表永驻，API 详情 LRU 上限 500）；`catalog.py` 缓存优先→远端回退。
 - **TDD**：red→green 垂直切片，一次一个接缝、一个测试、一个最小实现。测试只写在预先确认的接缝（S1–S13）上；只 mock 系统边界（外部 HTTP），不 mock 自有模块；期望值必须来自独立真值（官方签名向量、已知 mock 响应），禁止同义反复断言。写测试前如接缝清单有变，先与用户确认。
 - **APIE 管道参考 `../apis` 项目重新实现**：阶段划分、断点续传、tag 映射、Swagger 2.0 校验规则与其保持一致；本仓库为独立实现，不 import apis 代码。
 - **安全**：openapi 模式可配产品门栓（`Gate`，产品级白名单）在提示词与元数据层隐藏越界产品；`execute_api` 依次过门栓（产品粗滤）→ safety policy（API 级 allowlist/denylist 模式匹配）；未配置 policy 时拒绝所有执行；凭证必须是最小权限 IAM 用户的 AK/SK。
 - **mock 端点**（`https://apiexplorer.cn-north-4.myhuaweicloud.com/v1/mock/<product_short>/<api_name>?status_code=200&number=1&region_id=<region_id>`）：开放端点、无需凭证，用于集成测试与 `--mock` 模式全链路验证。实测行为：HTTP 状态恒为 200；`status_code=200` 返回与真实 API 同构的 mock 成功数据，其它 status_code 返回空 body（错误路径用单元层 urllib 打桩覆盖）。
+- **API Explorer 注册域数据源（`apie/explorer.py`，2026-09 起）**：元数据端点从 console 前端内部接口（console.huaweicloud.com/apiexplorer/new/vN）整体切至 API Explorer 自身注册的开放接口域 apiexplorer.cn-north-4.myhuaweicloud.com（与 mock 端点同域、无需凭证）——产品列表 `/v4/products`、接口索引 `/v2/apis?offset&limit&productshort`、接口详情 `/v3/apis/detail?productshort&name&region_id`；count 阶段无注册等价接口，改由 `/v4/products` 平铺派生（`api_count>0` 过滤；产物契约 `{total_api_count,total_products,groups,source}` 不变，键由 v1/count 的大写变为源站驼峰）。方言知识（URL/参数名/信封键 `apis`↔`api_basic_infos`/字段名 `productshort`→`product_short`/method 大小写/1055 双兜底）全部沉入 explorer 实现，出口恒为项目内部契约，catalog/live_fallback/fetch_apis/fetch_details/retry_failed/refresh 全部委托之（detail 注入 `fetch_json_retry`/`fetch_json_429` 两档 fetcher，console 域不再使用）；`/v2/apis` 的 productshort 大小写不敏感，翻页以响应 `count`+空批终止（v4 api_count 对齐 v1 计数后 0 欠计、5 产品多计，break-on-empty 语义下无害）。实测 parity：`/v3/apis/detail` 与 console `/new/v4/apis/detail` 的 paths/definitions 逐字节一致（1055=HTTP 400 同形）；`is_global` 修复（v5 把 IAM/CDN/TMS 等 53 个全局服务误标 false，v4 正确 true；HCS* 栈产品亦标 true 保持源样）；`is_recommend` 12 处差异为展示字段。
 - 数据产物（`raw/`、`data/`）可从 API 重建，不入库。
 
 ## 目录结构与数据流
 
 | 路径 | 内容 | 生成脚本 | 可重建 |
 | --- | --- | --- | --- |
-| `raw/apis_count.json` | 产品接口计数 | `api-refresh count`（curl） | 是 |
-| `raw/huawei_products.json` | 产品信息 | `api-refresh products`（curl） | 是 |
+| `raw/apis_count.json` | 产品接口计数 | `api-refresh count`（explorer /v4/products 派生） | 是 |
+| `raw/huawei_products.json` | 产品信息 | `api-refresh products`（explorer /v4/products） | 是 |
 | `raw/apis_docs.json` | 接口索引（id/name/method/summary/tags/product_short/info_version），支撑 `list_apis` | `api-refresh docs` | 是 |
 | `raw/apis_detail.json` | 全量接口详情（断点文件 `raw/apis_detail_partial.json`）；非默认 region 在 `raw/{region}/` | `api-refresh details` + `retry` | 是 |
 | `raw/help_docs.json` | 帮助中心文档页解析记录（url/docset/api_name/cn_name/product_display/func_intro/links；仅构建期，不入库） | `api-refresh helpdocs`（断点 `raw/help_docs_partial.json`） | 是 |
@@ -73,7 +75,7 @@
 | `configs/entity-knowledge.json` | 实体知识库（三 section：`aliases`/`relations` 带 provenance、`api_keywords`/`fingerprints` 指纹台账）；curated 种子 + `--llm` 抽取合并（curated 永不覆盖） | `api-refresh graph --llm`（指纹增量） | LLM 条目不可确定性重建（提交入库） |
 | `data/graph/entity-index.json` | 实体关联图谱产物（products/apis/tag_products，运行时 `search_apis` 唯一数据契约；提交副本 `configs/entity-index.json` 随 wheel） | `api-refresh graph` | 是 |
 | `data/openapi/` | 管道产物：`{Product}/{Tag}.json` OpenAPI 2.0 文档；MCP server 不依赖此目录 | `api-refresh`（split→convert→merge→organize） | 是 |
-| `src/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端）+ `memory_store.py` 纯内存缓存 + `catalog.py` 远端优先功能接口（缓存命中直接返回，未命中实时拉取）+ 帮助中心补全管线（`help_docs.py` 解析/匹配/差集/hints 生成纯函数核心 + `fetch_help_docs.py` 种子探测+BFS 抓取编排 + `build_help_hints.py` 差集派生落盘）+ 实体图谱构建管线（`build_entity_graph.py` 确定性构建纯函数 + `entity_extract.py` LLM 构建期语义抽取编排：transport/sleep 注入、三道闸校验、指纹增量、curated 优先合并） | — | — |
+| `src/apie/` | APIE 管道实现（fetch/split/convert/merge/organize/refresh/api_docs + http 抓取助手 + mock 端点客户端）+ `explorer.py` 注册域数据源深模块（v4/products / v2/apis / v3/apis/detail；方言归一：productshort→product_short、method 小写、信封键改写；1055 去 region 兜底、ApiNotFoundError；counts v4 派生）+ `memory_store.py` 纯内存缓存 + `catalog.py` 远端优先功能接口（缓存命中直接返回，未命中实时拉取）+ 帮助中心补全管线（`help_docs.py` 解析/匹配/差集/hints 生成纯函数核心 + `fetch_help_docs.py` 种子探测+BFS 抓取编排 + `build_help_hints.py` 差集派生落盘）+ 实体图谱构建管线（`build_entity_graph.py` 确定性构建纯函数 + `entity_extract.py` LLM 构建期语义抽取编排：transport/sleep 注入、三道闸校验、指纹增量、curated 优先合并） | — | — |
 | `src/mcp_openapi/signer/` | SDK-HMAC-SHA256 签名 + 真实模式 HTTP 客户端（超时/429 退避/错误解析） | — | — |
 | `src/mcp_openapi/signer/obs.py` | OBS Header 签名（HMAC-SHA1）：`Authorization: OBS AK:Signature`，CanonicalizedResource/子资源白名单/对象名编码，对齐官方 Go SDK；含预签发 URL 口径 `url_string_to_sign`/`sign_obs_url`（Expires 替换 Date 位） | — | — |
 | `src/mcp_openapi/execute_obs.py` | OBS 执行 lane：`is_obs` 路由谓词 + `OBJECT_DATA_APIS`/`is_object_data_api` 对象数据面名单（真实模式恒走 presign 单口径）+ 桶寻址（带桶 virtual-hosted/无桶端点根）+ consumes 三态 body 分流（json/xml/octet-stream）+ 开关型子资源自动补全 + `Content-MD5` 自动计算 + dict→XML 序列化（根元素经转换管线 `x-xml-root` 保留）+ XML `<Error>` 解析 + 二进制响应占位 + `_presign` 预签发编排（零字节搬运）+ `ObsHttpClient` 适配器 + 编排 | — | — |
@@ -261,7 +263,7 @@ benchmark 设计见 `benchmarks/README.md`（用例 schema、分层评分口径�
 | S2b | `safety/policy_store.py` PolicyStore（rules 热重载 / add_rule(scope, ttl_seconds) / remove_rule 跨层 / text / list_rules，文件↔内存双向同步 + 四档 scope overlay + `authorize`/`authorize_server` 原子授权门（once 用后即焚、并发恰一放行）） | 单测：tmp 文件注入 + 内容哈希 stat 替身 + 注入时钟（time_fn）；服务层「拒→add→同实例立即放行」 | 直接回读磁盘原始内容 + `parse_policy` 交叉验证 |
 | S3 | 各工具业务函数 `mcp_openapi.service` / `apie.metadata`（含 manage_policy 编排；`_audited` 审计挂钩：8 工具统一记 `{ts, tool, input, ok}` NDJSON，input 为显式入参快照，异常路径记 ok=False；execute_api 一次性授权消费点（校验失败/接口未找到不烧）+ manage_policy 误路由引导） | 单测，迷你样本 fixture；audit sink 以 tmp 文件/内存替身注入 | 自建迷你 OpenAPI 片段（仿 apis fixtures 设计，不依赖真实 raw/ data/）+ 回读磁盘原始 NDJSON |
 | S4 | `execute_api` HTTP 边界（含 mock passthrough：`--mock-passthrough` 开启时标量→query、body→POST JSON、`_` 控制键剥离，编码对齐 real 模式 HttpClient；默认关保持 API Explorer 契约） | 集成测试直连 mock 端点 + 本地回环 CaptureServer + 单元层 urllib 打桩注入错误（429/4xx/5xx） | mock 端点返回（HTTP 恒 200；`status_code` 非 200 返回空 body）+ 回环 stub 请求台账 |
-| S5 | APIE 管道各阶段转换 + `apie.memory_store` 内存缓存层（set/get/clear/LRU）+ `apie.catalog` 功能接口（内存缓存优先→远端回退决策，monkeypatch `apie.http.fetch_json` 边界） | 纯函数单测 + 迷你样本集成 + `@pytest.mark.e2e` 全量 | Swagger 2.0 schema 校验；monkeypatch 注入 HTTP 响应控制远端回退路径 |
+| S5 | APIE 管道各阶段转换 + `apie.memory_store` 内存缓存层（set/get/clear/LRU）+ `apie.explorer` 注册域数据源（方言归一矩阵：productshort→product_short/method 小写/信封键改写；1055 双兜底→ApiNotFoundError；分页 count+空批终止；counts 派生；fake fetcher 注入）+ `apie.catalog` 功能接口（内存缓存优先→远端回退决策，monkeypatch `apie.http.fetch_json`/`fetch_json_retry` 边界，detail 走 explorer 委托） | 纯函数单测 + 迷你样本集成 + `@pytest.mark.e2e` 全量 | Swagger 2.0 schema 校验；monkeypatch 注入 HTTP 响应控制远端回退路径 |
 | S6 | benchmark 纯函数（`benchmarks/cases.py` 加载校验（含可选 `fixture`/`labels`/`policy` 扩展字段）、`scorer.py` 分层评分 + `event_to_toolcall`（审计事件→trace 输入适配，双消费者：legacy runner 与 harbor verifier）、`report.py` 统计/基线对比、`trace.py` export/NDJSON 提取 + export JSON info 的 token 读取、`stub_server.py` 本地回环、`runner.py build_benchdir_config`（legacy 与 harbor agent 双适配器）、`harbor/exporter.py` render_task 纯核/export_dataset 薄壳、`harbor/conventions.py build_agent_opencode_config`、`harbor/task_templates/stub_server.py` fixture 引擎（resolve_response/append_ledger 纯核 + GET/POST 回环）） | 纯函数单测（trace 用 spike 实测格式的迷你 fixture；stub 用回环 HTTP；exporter 用 mini project_root + 金标字面量） | 手写字面量 + 独立构造的样例调用序列 |
 | S7a | `mcp_discover/catalog.py` 目录加载/搜索/缓存/clear | 纯函数单测，迷你目录 fixture + 注入 CatalogSource | 文件系统状态变化（删除文件后仍缓存命中） |
 | S7b | `safety.evaluate_server(policy, server, tool) → allow/deny` | 纯函数单测，手写字面量矩阵（含向后兼容 product 规则） | 手写策略文件 + 预期字面量 |

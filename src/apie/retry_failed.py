@@ -1,4 +1,8 @@
-"""重试 raw/apis_detail.json 中 failed 项（429 大退避）。"""
+"""重试 raw/apis_detail.json 中 failed 项（429 大退避）。
+
+详情拉取委托 apie.explorer（注册域 /v3/apis/detail，方言归一；
+1055 去 region 兜底在 explorer 内部），注入 429 大退避 fetcher。
+"""
 
 import json
 import logging
@@ -7,30 +11,28 @@ from typing import Any
 
 from common import http
 
-from . import region_paths
+from . import explorer, region_paths
 
 logger = logging.getLogger("apie.retry_failed")
 
-BASE = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
-REGION = region_paths.current_region()
 DETAIL_PATH = region_paths.raw_detail_path()
 
 
 def fetch_detail(product_short: str, name: str) -> tuple[dict[str, Any], Any]:
-    """拉取单个接口详情（429 自动大退避重试）。返回 (body, error)。"""
-    params = {"product_short": product_short, "name": name, "region_id": REGION}
-    data, err = http.fetch_json_429(http.query_url(BASE, params))
-    if err is None:
-        return data, None
-    if data.get("error_code") == "APIEXPLORER.1055":
-        fallback = {"product_short": product_short, "name": name}
-        data2, err2 = http.fetch_json_429(http.query_url(BASE, fallback))
-        if err2 is None:
-            return data2, None
-        if data2.get("error_code") == "APIEXPLORER.1055":
-            return {"product_short": product_short, "name": name, "empty": True}, None
-        return data2, err2
-    return data, err
+    """拉取单个接口详情（429 自动大退避重试）。返回 (body, error)。
+
+    - 正常返回详情文档（explorer 归一 product_short）
+    - 二次 1055（接口不存在）返回 {"empty": True} 占位
+    - 其它 HTTP/网络错误返回 ({}, err)
+    """
+    try:
+        return explorer.fetch_detail(
+            product_short, name, region_paths.current_region(),
+            fetch_json=http.fetch_json_429), None
+    except explorer.ApiNotFoundError:
+        return {"product_short": product_short, "name": name, "empty": True}, None
+    except Exception as e:
+        return {}, e
 
 
 def main() -> None:

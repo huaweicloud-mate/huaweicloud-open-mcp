@@ -1,6 +1,6 @@
 """apie.catalog 单元测试：store 注入 + 远端回退（monkeypatch HTTP，不联网）。"""
 
-from apie import catalog
+from apie import catalog, explorer
 from apie.memory_store import MemoryStore
 
 FIXTURE_GROUPS = [
@@ -8,7 +8,16 @@ FIXTURE_GROUPS = [
         {"productshort": "ECS", "name": "弹性云服务器", "api_count": 2}]},
 ]
 
+# 注册域索引条目实测形制：productshort（无下划线）、method 大写
 FIXTURE_APIS = [
+    {"id": "a1", "name": "ListServers", "method": "GET", "summary": "查询",
+     "tags": "管理", "productshort": "ECS"},
+    {"id": "a2", "name": "CreateServers", "method": "POST", "summary": "创建",
+     "tags": "管理", "productshort": "ECS"},
+]
+
+# explorer 归一后的出口契约
+FIXTURE_APIS_NORMALIZED = [
     {"id": "a1", "name": "ListServers", "method": "get", "summary": "查询",
      "tags": "管理", "product_short": "ECS"},
     {"id": "a2", "name": "CreateServers", "method": "post", "summary": "创建",
@@ -45,7 +54,7 @@ def test_get_products_remote_fetch(monkeypatch):
         calls[0] += 1
         return {"groups": FIXTURE_GROUPS}
 
-    monkeypatch.setattr(catalog.http, "fetch_json", _fetcher)
+    monkeypatch.setattr(explorer.http, "fetch_json", _fetcher)
     r = catalog.get_products(store)
     assert r == FIXTURE_GROUPS
     assert calls[0] == 1
@@ -56,7 +65,7 @@ def test_get_products_remote_fetch(monkeypatch):
 
 def test_get_products_remote_error(monkeypatch):
     store = _store()
-    monkeypatch.setattr(catalog.http, "fetch_json",
+    monkeypatch.setattr(explorer.http, "fetch_json",
                         lambda url, **kw: (_ for _ in ()).throw(OSError("fail")))
     assert catalog.get_products(store) is None
 
@@ -67,7 +76,7 @@ def test_get_products_cache_isolation(monkeypatch):
     s1.set_products(FIXTURE_GROUPS)
     assert catalog.get_products(s1) == FIXTURE_GROUPS
     # s2 is empty — remote must fail to return None
-    monkeypatch.setattr(catalog.http, "fetch_json",
+    monkeypatch.setattr(explorer.http, "fetch_json",
                         lambda url, **kw: (_ for _ in ()).throw(OSError("fail")))
     assert catalog.get_products(s2) is None
 
@@ -80,20 +89,20 @@ def test_get_apis_remote_fetch(monkeypatch):
 
     def _fetcher(url, **kw):
         calls[0] += 1
-        return {"api_basic_infos": FIXTURE_APIS, "count": len(FIXTURE_APIS)}
+        return {"apis": FIXTURE_APIS, "count": len(FIXTURE_APIS)}
 
-    monkeypatch.setattr(catalog.http, "fetch_json", _fetcher)
+    monkeypatch.setattr(explorer.http, "fetch_json", _fetcher)
     r = catalog.get_apis(store, "ECS")
-    assert r == FIXTURE_APIS
+    assert r == FIXTURE_APIS_NORMALIZED
     assert calls[0] == 1
     r2 = catalog.get_apis(store, "ECS")
-    assert r2 == FIXTURE_APIS
+    assert r2 == FIXTURE_APIS_NORMALIZED
     assert calls[0] == 1
 
 
 def test_get_apis_remote_error(monkeypatch):
     store = _store()
-    monkeypatch.setattr(catalog.http, "fetch_json",
+    monkeypatch.setattr(explorer.http, "fetch_json",
                         lambda url, **kw: (_ for _ in ()).throw(OSError("fail")))
     assert catalog.get_apis(store, "ECS") is None
 
@@ -106,9 +115,9 @@ def test_find_api_doc_remote_fetch(monkeypatch):
 
     def _fetcher(url, **kw):
         calls[0] += 1
-        return dict(RAW_DETAIL)
+        return dict(RAW_DETAIL), None
 
-    monkeypatch.setattr(catalog.http, "fetch_json", _fetcher)
+    monkeypatch.setattr(explorer.http, "fetch_json_retry", _fetcher)
     hit = catalog.find_api_doc(store, "ECS", "ListServersDetails", "cn-north-4")
     assert hit is not None
     doc, path, method, op = hit
@@ -122,13 +131,13 @@ def test_find_api_doc_remote_fetch(monkeypatch):
 
 def test_find_api_doc_invalid_raw(monkeypatch):
     store = _store()
-    monkeypatch.setattr(catalog.http, "fetch_json",
-                        lambda url, **kw: {"error_code": "SOME_ERROR"})
+    monkeypatch.setattr(explorer.http, "fetch_json_retry",
+                        lambda url, **kw: ({"error_code": "SOME_ERROR"}, None))
     assert catalog.find_api_doc(store, "ECS", "ListServersDetails", "cn-north-4") is None
 
 
 def test_find_api_doc_remote_error(monkeypatch):
     store = _store()
-    monkeypatch.setattr(catalog.http, "fetch_json",
+    monkeypatch.setattr(explorer.http, "fetch_json_retry",
                         lambda url, **kw: (_ for _ in ()).throw(OSError("fail")))
     assert catalog.find_api_doc(store, "ECS", "NopeApi", "cn-north-4") is None

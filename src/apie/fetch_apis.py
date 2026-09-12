@@ -1,33 +1,21 @@
-"""抓取接口索引 → raw/apis_docs.json。"""
+"""抓取接口索引 → raw/apis_docs.json。
+
+索引拉取委托 apie.explorer（注册域 /v2/apis，方言归一、内部分页）。
+"""
 
 import json
 import logging
 import time
 from typing import Any
 
-from common import http
+from . import explorer
 
 logger = logging.getLogger("apie.fetch_apis")
 
-BASE = "https://console.huaweicloud.com/apiexplorer/new/v3/apis"
-PAGE_SIZE = 100
 
-
-def fetch_product(product_short: str, api_count: int) -> list[dict[str, Any]]:
-    apis: list[dict[str, Any]] = []
-    offset = 0
-    while offset < api_count:
-        params = {"offset": offset, "limit": PAGE_SIZE, "product_short": product_short}
-        data = http.fetch_json(http.query_url(BASE, params))
-        if "api_basic_infos" not in data:
-            raise RuntimeError(f"{product_short} offset={offset}: unexpected response: {data}")
-        batch = data["api_basic_infos"]
-        apis.extend(batch)
-        if not batch:
-            break
-        offset += len(batch)
-        time.sleep(0.3)
-    return apis
+def fetch_product(product_short: str) -> list[dict[str, Any]]:
+    """拉取产品全量接口索引（explorer 内分页，页间礼貌限速）。"""
+    return explorer.fetch_apis(product_short, page_sleep=0.3)
 
 
 def main() -> None:
@@ -42,7 +30,7 @@ def main() -> None:
         short, n = p["product_short"], p["api_count"]
         logger.info("[%d/%d] %s (%d)", i, len(products), short, n)
         try:
-            apis = fetch_product(short, n)
+            apis = fetch_product(short)
             all_apis.extend(apis)
             if len(apis) != n:
                 logger.warning("%s expected %d, got %d", short, n, len(apis))
@@ -57,7 +45,7 @@ def main() -> None:
         "total_apis": len(all_apis),
         "failed": failed,
         "apis": all_apis,
-        "source": BASE,
+        "source": explorer.BASE,
     }
     with open("raw/apis_docs.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)

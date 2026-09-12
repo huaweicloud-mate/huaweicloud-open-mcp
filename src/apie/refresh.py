@@ -14,7 +14,7 @@ import time
 from common.logconf import configure_logging
 from common.paths import project_root
 
-from . import region_paths
+from . import explorer, region_paths
 
 logger = logging.getLogger("apie.refresh")
 
@@ -41,10 +41,8 @@ MODULE = {
     "helphints": "build_help_hints",
 }
 
-CURL = {
-    "count": ("https://console.huaweicloud.com/apiexplorer/new/v1/products/apis/count", "raw/apis_count.json"),
-    "products": ("https://console.huaweicloud.com/apiexplorer/new/v5/products", "raw/huawei_products.json"),
-}
+# count/products 阶段原为 curl 直拉 console 域，2026-09 起改由 apie.explorer
+# （注册域 /v4/products）python 拉取派生。
 
 _REGION = {"region": "cn-north-4"}
 
@@ -90,45 +88,40 @@ def run_cmd(args: list[str], dry_run: bool = False, env: dict[str, str] | None =
 
 
 def stage_count(dry_run: bool) -> int:
-    url, out = CURL["count"]
-    tmp = out + ".tmp"
-    os.makedirs(os.path.join(PROOT, "raw"), exist_ok=True)
-    rc = run_cmd(["curl", "-s", url, "-o", tmp], dry_run)
-    if dry_run or rc != 0:
-        return rc
-    with open(os.path.join(PROOT, tmp), encoding="utf-8") as f:
-        raw = json.load(f)
-    groups = raw.get("groups", [])
-    result = {
-        "total_api_count": sum(g["api_count"] for g in groups),
-        "total_products": len(groups),
-        "groups": groups,
-        "source": url,
-    }
-    with open(os.path.join(PROOT, out), "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-    os.remove(os.path.join(PROOT, tmp))
+    """count 阶段：explorer.counts() 派生（v4/products，api_count>0 过滤）。"""
+    out = os.path.join(PROOT, "raw/apis_count.json")
+    if dry_run:
+        return 0
+    try:
+        doc = explorer.counts()
+    except Exception as e:
+        logger.error("count stage failed: %s", e)
+        return 1
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False, indent=2)
     return 0
 
 
 def stage_products(dry_run: bool) -> int:
-    url, out = CURL["products"]
-    tmp = out + ".tmp"
-    rc = run_cmd(["curl", "-s", url, "-o", tmp], dry_run)
-    if dry_run or rc != 0:
-        return rc
-    with open(os.path.join(PROOT, tmp), encoding="utf-8") as f:
-        raw = json.load(f)
-    groups = raw.get("groups", [])
+    """products 阶段：explorer.fetch_products()（v4/products groups 直通）。"""
+    out = os.path.join(PROOT, "raw/huawei_products.json")
+    if dry_run:
+        return 0
+    try:
+        groups = explorer.fetch_products()
+    except Exception as e:
+        logger.error("products stage failed: %s", e)
+        return 1
     result = {
         "total_groups": len(groups),
         "total_products": sum(len(g["products"]) for g in groups),
         "groups": groups,
-        "source": url,
+        "source": f"{explorer.BASE}/v4/products",
     }
-    with open(os.path.join(PROOT, out), "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-    os.remove(os.path.join(PROOT, tmp))
     return 0
 
 

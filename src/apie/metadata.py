@@ -43,6 +43,7 @@ def list_products(groups: list[dict[str, Any]], *,
                 "category": gname,
                 "is_global": p.get("is_global"),
                 "link": p.get("link") or None,
+                "api_count": p.get("api_count") or 0,
             })
     return {"ok": True, "total": len(products), "products": products}
 
@@ -60,6 +61,7 @@ def get_product(groups: list[dict[str, Any]], product: str) -> ProductResult | N
                     "category": g.get("name"),
                     "is_global": p.get("is_global"),
                     "link": p.get("link") or None,
+                    "api_count": p.get("api_count") or 0,
                 }
     return None
 

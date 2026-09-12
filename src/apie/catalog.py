@@ -2,56 +2,27 @@
 
 service 与 api-docs CLI 的共用元数据入口；不依赖本地文件。
 store 由调用方注入（ToolService 或 api-docs CLI）。
+远端拉取委托 apie.explorer（注册域数据源，方言归一）。
 """
 
 import logging
-import urllib.parse
-from typing import Any, cast
+from typing import Any
 
-from common import http
-
+from . import explorer
 from .live_fallback import LiveFallback
 from .memory_store import ApiHit, MemoryStore
 
 logger = logging.getLogger("apie.catalog")
 
-BASE_PRODUCTS = "https://console.huaweicloud.com/apiexplorer/new/v5/products"
-BASE_APIS = "https://console.huaweicloud.com/apiexplorer/new/v3/apis"
-PAGE_SIZE = 100
 
-
-# ---------- 实时抓取 ----------
-
-def _fetch_products() -> list[dict[str, Any]]:
-    d = http.fetch_json(BASE_PRODUCTS, retries=4, backoff=2.0)
-    return cast(list[dict[str, Any]], d.get("groups", []))
-
-
-def _fetch_apis(product_short: str) -> list[dict[str, Any]]:
-    apis: list[dict[str, Any]] = []
-    offset = 0
-    while True:
-        params = urllib.parse.urlencode(
-            {"offset": offset, "limit": PAGE_SIZE, "product_short": product_short})
-        d = http.fetch_json(f"{BASE_APIS}?{params}", retries=4, backoff=2.0)
-        batch = cast(list[dict[str, Any]], d.get("api_basic_infos", []))
-        apis.extend(batch)
-        if not batch:
-            break
-        offset += len(batch)
-        if offset >= (d.get("count") or offset + 1):
-            break
-    return apis
-
-
-# ---------- 公共接口 ----------
+# ---------- 实时抓取（委托 explorer：注册域方言归一） ----------
 
 def get_products(store: MemoryStore) -> list[dict[str, Any]] | None:
     products = store.products()
     if products is not None:
         return products
     try:
-        live_products = _fetch_products()
+        live_products = explorer.fetch_products()
         store.set_products(live_products)
         return live_products
     except Exception:
@@ -64,7 +35,7 @@ def get_apis(store: MemoryStore, product: str) -> list[dict[str, Any]] | None:
     if cached is not None:
         return cached
     try:
-        live_apis = _fetch_apis(product)
+        live_apis = explorer.fetch_apis(product)
         store.set_apis(product, live_apis)
         return live_apis
     except Exception:

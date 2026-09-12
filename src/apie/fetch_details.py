@@ -1,4 +1,8 @@
-"""抓取全量接口详情 → raw/apis_detail.json（断点续传）。"""
+"""抓取全量接口详情 → raw/apis_detail.json（断点续传）。
+
+详情拉取委托 apie.explorer（注册域 /v3/apis/detail，方言归一；
+1055 去 region 兜底在 explorer 内部）。
+"""
 
 import json
 import logging
@@ -6,14 +10,10 @@ import os
 import time
 from typing import Any, cast
 
-from common import http
-
-from . import region_paths
+from . import explorer, region_paths
 
 logger = logging.getLogger("apie.fetch_details")
 
-BASE = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
-REGION = region_paths.current_region()
 OUT = region_paths.raw_detail_path()
 CHECKPOINT = region_paths.raw_detail_partial_path()
 
@@ -21,23 +21,14 @@ CHECKPOINT = region_paths.raw_detail_partial_path()
 def fetch_detail(product_short: str, name: str) -> dict[str, Any]:
     """拉取单个接口详情。
 
-    - 正常返回详情文档
-    - APIEXPLORER.1055（不分区产品）去掉 region_id 兜底重试
-    - 两次 1055 返回 {"empty": True} 占位
+    - 正常返回详情文档（explorer 归一 product_short）
+    - 二次 1055（接口不存在）返回 {"empty": True} 占位
+    - 其它 HTTP/网络错误原样抛出（进 failed 台账）
     """
-    params = {"product_short": product_short, "name": name, "region_id": REGION}
-    data, err = http.fetch_json_retry(http.query_url(BASE, params))
-    if err is None:
-        return data
-    if data.get("error_code") == "APIEXPLORER.1055":
-        fallback = {"product_short": product_short, "name": name}
-        data2, err2 = http.fetch_json_retry(http.query_url(BASE, fallback))
-        if err2 is None:
-            return data2
-        if data2.get("error_code") == "APIEXPLORER.1055":
-            return {"product_short": product_short, "name": name, "empty": True}
-        raise err2
-    raise err
+    try:
+        return explorer.fetch_detail(product_short, name, region_paths.current_region())
+    except explorer.ApiNotFoundError:
+        return {"product_short": product_short, "name": name, "empty": True}
 
 
 def load_checkpoint() -> dict[str, Any]:
@@ -82,11 +73,11 @@ def main() -> None:
         time.sleep(0.2)
 
     result = {
-        "region_id": REGION,
+        "region_id": region_paths.current_region(),
         "total_apis": len(done),
         "failed": failed,
         "apis": done,
-        "source": BASE,
+        "source": explorer.BASE,
     }
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
@@ -94,6 +85,8 @@ def main() -> None:
         os.remove(CHECKPOINT)
 
     logger.info("Done. total=%d failed=%d", len(done), len(failed))
+    if failed:
+        logger.error("Failed items: %s", [(f["product_short"], f["name"]) for f in failed])
 
 
 if __name__ == "__main__":

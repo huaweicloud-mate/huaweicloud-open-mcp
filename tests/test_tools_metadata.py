@@ -8,7 +8,8 @@ def test_list_products(mini_products):
     assert out["total"] == 2
     by_name = {p["product"]: p for p in out["products"]}
     assert by_name["ECS"]["name"] == "弹性云服务器"
-    assert "api_count" not in by_name["ECS"]  # 远端恒 0，字段已删（回归红线）
+    assert by_name["ECS"]["api_count"] == 4  # v4/products 真实计数（2026-09 恢复）
+    assert by_name["RabbitMQ"]["api_count"] == 0  # 源缺字段 → 0 兜底
     assert by_name["ECS"]["is_global"] is False
 
 
@@ -29,7 +30,7 @@ def test_get_product(mini_products):
     assert p["product"] == "ECS"
     assert p["name"] == "弹性云服务器"
     assert p["category"] == "计算"
-    assert "api_count" not in p  # 回归红线
+    assert p["api_count"] == 4  # v4/products 真实计数（2026-09 恢复）
 
 
 def test_get_product_case_insensitive(mini_products):

@@ -24,18 +24,18 @@ sequenceDiagram
 
     U->>L: 自然语言任务（如「查 cn-north-4 云服务器列表」）
     L->>M: list_products(keyword?)
-    M->>C: v5/products（首次拉取，缓存到内存）
+    M->>C: /v4/products（首次拉取，缓存到内存）
     M-->>L: 产品列表（中文名/分类/is_global）
     Note over L: ① 基于任务语义决策产品范围（ECS）
     L->>M: list_apis(product=ECS)
-    M->>C: v3/apis?product_short=ECS（首次拉取，缓存到内存）
+    M->>C: /v2/apis?productshort=ECS（首次拉取，缓存到内存）
     M-->>L: 目录 + tag_groups 全量 tag 概览
     Note over L: ② 决策目录范围（如选「状态管理」tag 收窄）
     L->>M: list_apis(product=ECS, tag=状态管理)
     M-->>L: 该 tag 接口列表（name/summary）（内存命中）
     Note over L: ③ 决策候选接口（ListServersDetails）
     L->>M: get_api(ECS, ListServersDetails)
-    M->>C: v4/apis/detail（首次拉取，缓存到内存 LRU）
+    M->>C: /v3/apis/detail?productshort=ECS&name=ListServersDetails（首次拉取，缓存到内存 LRU）
     M-->>L: 接口文档（参数/必填/枚举/x-constraint）
     L->>M: get_api_examples(ECS, ListServersDetails)
     M-->>L: 官方请求示例（内存命中）
@@ -137,7 +137,7 @@ flowchart LR
 flowchart LR
     A["ToolService 工具调用"] --> B{"MemoryStore 缓存命中？"}
     B -->|是| C["直接返回（O(1)）"]
-    B -->|否| D["远端拉取<br/>v5/products / v3/apis / v4/detail"]
+    B -->|否| D["远端拉取（explorer 归一）<br/>v4/products / v2/apis / v3/apis/detail"]
     D --> E["convert / 写入 MemoryStore"]
     E --> C
     D -->|失败| F["返回 miss"]
@@ -155,19 +155,19 @@ flowchart LR
 
 | 数据 | 端点 | 缓存位置 |
 |---|---|---|
-| 产品列表 | `v5/products` | `_products` |
-| 单产品 API 列表 | `v3/apis?product_short=ECS` | `_apis[ecs]` |
-| API 详情 | `v4/apis/detail?product_short=ECS&name=ListServers` | `_api_details` |
+| 产品列表 | `/v4/products` | `_products` |
+| 单产品 API 列表 | `/v2/apis?productshort=ECS` | `_apis[ecs]` |
+| API 详情 | `/v3/apis/detail?productshort=ECS&name=ListServers` | `_api_details` |
 
 ## 7. APIE 元数据管道
 
 ```mermaid
 flowchart LR
-    A["console.huaweicloud.com<br/>/apiexplorer/new/vN"]
-    B1["v1/products/apis/count<br/>→ raw/apis_count.json"]
-    B2["v5/products<br/>→ raw/huawei_products.json"]
-    B3["v3/apis<br/>→ raw/apis_docs.json<br/>(17666 条索引)"]
-    B4["v4/apis/detail<br/>→ raw/apis_detail.json<br/>(断点续传)"]
+    A["apiexplorer.cn-north-4.myhuaweicloud.com<br/>（explorer 方言归一）"]
+    B1["explorer.counts()<br/>（/v4/products 平铺派生）<br/>→ raw/apis_count.json"]
+    B2["/v4/products<br/>→ raw/huawei_products.json"]
+    B3["/v2/apis<br/>→ raw/apis_docs.json<br/>(17963 条索引)"]
+    B4["/v3/apis/detail<br/>→ raw/apis_detail.json<br/>(断点续传)"]
     C["split_by_tag<br/>按 产品/tag 切分"]
     D["convert_openapi2<br/>规范化 + 脏点修复"]
     E["merge_by_tag<br/>tag 内合并为完整文档"]

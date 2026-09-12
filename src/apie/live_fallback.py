@@ -3,14 +3,11 @@
 import logging
 from typing import Any
 
-from common import http
-
 from . import convert_openapi2 as conv
+from . import explorer
 from .memory_store import ApiHit, MemoryStore
 
 logger = logging.getLogger("apie.live_fallback")
-
-BASE_DETAIL = "https://console.huaweicloud.com/apiexplorer/new/v4/apis/detail"
 
 
 def _find_api_in_doc(doc: dict[str, Any], api_name: str) -> tuple[str, str, dict[str, Any]] | None:
@@ -31,16 +28,6 @@ def _find_api_in_doc(doc: dict[str, Any], api_name: str) -> tuple[str, str, dict
     return None
 
 
-def _fetch_detail(product_short: str, name: str, region: str) -> dict[str, Any]:
-    params = (f"?product_short={product_short}&name={name}&region_id={region}")
-    d = http.fetch_json(f"{BASE_DETAIL}{params}", retries=4, backoff=2.0)
-    if isinstance(d, dict) and d.get("error_code") == "APIEXPLORER.1055":
-        d = http.fetch_json(
-            f"{BASE_DETAIL}?product_short={product_short}&name={name}",
-            retries=4, backoff=2.0)
-    return d
-
-
 class LiveFallback:
     """实时回退适配器：抓取 → 转换 → 缓存。"""
 
@@ -48,7 +35,10 @@ class LiveFallback:
         self._store = store
 
     def fetch(self, product: str, api: str, region: str) -> ApiHit | None:
-        raw = _fetch_detail(product, api, region)
+        try:
+            raw = explorer.fetch_detail(product, api, region)
+        except explorer.ApiNotFoundError:
+            return None
         if not isinstance(raw, dict) or not raw.get("paths"):
             return None
         doc = conv.convert_api(raw)
