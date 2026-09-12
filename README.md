@@ -37,7 +37,7 @@ Connect once — your agent explores the rest.
 
 **Supported** — per package metadata:
 
-- **OS**: Windows, macOS, Linux — the base package is pure Python, so any platform that runs Python works; the optional `[datafusion]` extra (data mode) ships native wheels for Windows x86_64, macOS x86_64/arm64, and Linux x86_64/aarch64 (manylinux)
+- **OS**: Windows, macOS, Linux — the base package is pure Python plus `tantivy` (search_apis BM25 engine), which ships native wheels for the major platforms; the optional `[datafusion]` extra (data mode) ships native wheels for Windows x86_64, macOS x86_64/arm64, and Linux x86_64/aarch64 (manylinux)
 - **Python**: 3.10+ (`requires-python = ">=3.10"`); the `[datafusion]` extra covers the same range
 
 **Tested** — full unit + integration suite (`uv run pytest`, e2e excluded; data-mode tests included via the dev dependency group), Linux x86_64:
@@ -219,7 +219,7 @@ Rules that matter:
 
 | Tool | Purpose |
 | --- | --- |
-| `search_apis` | Entity-graph cross-product search (workflow step 0): when the user intent doesn't name a product, returns candidate products + representative APIs + `matched_via` evidence (aliases / colloquial keywords / tags); deprecated-API governance mirrors `list_apis` (annotate / hide); build-time snapshot, mounted via `--entity-index` |
+| `search_apis` | Entity-graph cross-product search (workflow step 0): when the user intent doesn't name a product, returns candidate products + representative APIs + `matched_via` evidence (aliases / colloquial keywords / tags); ranking = tantivy BM25 over API text (in-RAM index built at startup) + hand-tuned identity signals; deprecated-API governance mirrors `list_apis` (annotate / hide); build-time snapshot, mounted via `--entity-index` |
 | `list_products` | Full Huawei Cloud product catalog — identifier, display name, category, product link; `keyword`/`category` filter |
 | `get_product` | One product's details (classification, API count, global vs regional) |
 | `list_apis` | A product's API directory with `tag_groups` overview; `tag`/`search`/`limit`/`offset` to narrow |
@@ -307,6 +307,8 @@ uv run api-refresh graph            # deterministic build (data/graph/entity-ind
 uv run api-refresh graph --llm      # build-time LLM extraction (~150 calls, resumable via fingerprints)
 uv run huaweicloud-open-mcp         # runtime defaults to configs/entity-index.json (silently disabled if missing)
 ```
+
+At runtime `search_apis` feeds the snapshot through a tantivy BM25 engine: the ~18k API texts are tokenized (ASCII words + camelCase splits; CJK 2-grams) into an in-RAM index built once at startup (~0.6s), queries run in a few ms, and a hand-tuned identity layer (aliases, product names, discriminative tags, product-breadth prior) is merged with the BM25 scores. Ranking quality is pinned by a human-labeled golden set (`tests/fixtures/entity_eval.json`, 45 cases) that runs as part of the test suite.
 
 - Diff-only: an API enters the file only when the help-center intro is materially richer than the API Explorer description (`--min-gain`, default 20 chars).
 - Each note carries the full intro (capped via `--cap`, default 2000 chars, `…` marker) plus the official doc URL.

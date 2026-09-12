@@ -1,0 +1,308 @@
+{
+  "version": 1,
+  "note": "search_apis 金评集（人工标注，独立真值）。检查语义：top1=归并后首行产品必须等于该值；top3=期望产品须出现在前三甲；family=期望家族任一成员进前三甲即可（多 DB/近似服务混排的宽容档）。",
+  "cases": [
+    {
+      "query": "重启服务器",
+      "expect": {
+        "top1": "ECS"
+      }
+    },
+    {
+      "query": "帮我把虚拟机重启一下",
+      "expect": {
+        "top1": "ECS"
+      }
+    },
+    {
+      "query": "查一下我的云服务器列表",
+      "expect": {
+        "top1": "ECS"
+      }
+    },
+    {
+      "query": "创建一台虚拟机",
+      "expect": {
+        "top1": "ECS"
+      }
+    },
+    {
+      "query": "裸金属服务器重装操作系统",
+      "expect": {
+        "top1": "BMS"
+      }
+    },
+    {
+      "query": "采购物理服务器",
+      "expect": {
+        "top1": "BMS"
+      }
+    },
+    {
+      "query": "给云主机打标签",
+      "expect": {
+        "top1": "ECS"
+      }
+    },
+    {
+      "query": "给资源统一打标签管理",
+      "expect": {
+        "top1": "TMS"
+      }
+    },
+    {
+      "query": "专属主机分配虚拟机",
+      "expect": {
+        "top3": [
+          "DeH",
+          "ECS"
+        ]
+      },
+      "note": "歧义：专属主机语境指 DeH，虚拟机 exact alias 指向 ECS——两可"
+    },
+    {
+      "query": "k8s集群扩容",
+      "expect": {
+        "top1": "CCE"
+      }
+    },
+    {
+      "query": "容器集群升级",
+      "expect": {
+        "top1": "CCE"
+      }
+    },
+    {
+      "query": "推送镜像到镜像仓库",
+      "expect": {
+        "top1": "SWR"
+      }
+    },
+    {
+      "query": "上传文件到对象存储",
+      "expect": {
+        "top1": "OBS"
+      }
+    },
+    {
+      "query": "对象存储跨区域复制",
+      "expect": {
+        "top1": "OBS"
+      }
+    },
+    {
+      "query": "创建一块磁盘挂到云服务器",
+      "expect": {
+        "top3": [
+          "EVS",
+          "ECS"
+        ]
+      }
+    },
+    {
+      "query": "云硬盘扩容",
+      "expect": {
+        "top1": "EVS"
+      }
+    },
+    {
+      "query": "服务器磁盘扩容",
+      "expect": {
+        "top3": [
+          "EVS",
+          "ECS"
+        ]
+      }
+    },
+    {
+      "query": "文件共享存储",
+      "expect": {
+        "top3": [
+          "SFSTurbo",
+          "WorkspaceApp"
+        ]
+      },
+      "note": "数据缺口：SFSTurbo 自身关键词未覆盖 共享/文件 gram，WA 共享文件夹文档 bm25 占先（待 entity_extract 改进）"
+    },
+    {
+      "query": "mysql 数据库备份",
+      "expect": {
+        "family": [
+          "RDS",
+          "GaussDB"
+        ]
+      }
+    },
+    {
+      "query": "创建 rds 只读实例",
+      "expect": {
+        "top1": "RDS"
+      }
+    },
+    {
+      "query": "redis 缓存清理",
+      "expect": {
+        "top1": "DCS"
+      }
+    },
+    {
+      "query": "mongodb 创建实例",
+      "expect": {
+        "top1": "DDS"
+      }
+    },
+    {
+      "query": "数据仓库建表",
+      "expect": {
+        "top1": "DWS"
+      }
+    },
+    {
+      "query": "hadoop 集群扩容",
+      "expect": {
+        "top3": [
+          "MRS",
+          "CSS"
+        ]
+      },
+      "note": "数据缺口：CSS 的 LLM 关键词含 集群扩容（其 ES 集群弹性伸缩属实），hadoop 判别词仅 alias contains 可用"
+    },
+    {
+      "query": "elasticsearch 日志检索",
+      "expect": {
+        "top1": "CSS"
+      }
+    },
+    {
+      "query": "cdn 加速域名",
+      "expect": {
+        "top1": "CDN"
+      }
+    },
+    {
+      "query": "域名解析记录",
+      "expect": {
+        "top1": "DNS"
+      }
+    },
+    {
+      "query": "给服务器绑一个弹性公网ip",
+      "expect": {
+        "top1": "EIP"
+      }
+    },
+    {
+      "query": "创建安全组放行端口",
+      "expect": {
+        "top1": "VPC"
+      }
+    },
+    {
+      "query": "负载均衡后端加一台云主机",
+      "expect": {
+        "top1": "ELB"
+      }
+    },
+    {
+      "query": "防火墙封禁 ip",
+      "expect": {
+        "top1": "CFW"
+      }
+    },
+    {
+      "query": "服务器被入侵告警",
+      "expect": {
+        "top3": [
+          "HSS",
+          "AOM",
+          "CES"
+        ]
+      },
+      "note": "三概念查询（服务器/入侵/告警）：HSS 须入前三甲（入侵=主机安全）"
+    },
+    {
+      "query": "主机监控告警",
+      "expect": {
+        "family": [
+          "AOM",
+          "CES"
+        ]
+      },
+      "note": "AOM/CES 皆合理（主机监控 alias vs 云监控产品）"
+    },
+    {
+      "query": "发送消息通知",
+      "expect": {
+        "top1": "SMN"
+      }
+    },
+    {
+      "query": "查看系统日志",
+      "expect": {
+        "top1": "LTS"
+      }
+    },
+    {
+      "query": "定时触发函数执行",
+      "expect": {
+        "top1": "FunctionGraph"
+      }
+    },
+    {
+      "query": "模型训练推理部署",
+      "expect": {
+        "family": [
+          "ModelArts"
+        ]
+      }
+    },
+    {
+      "query": "专线接入本地数据中心",
+      "expect": {
+        "top1": "DC"
+      }
+    },
+    {
+      "query": "跨区域网络互通",
+      "expect": {
+        "top1": "CC"
+      }
+    },
+    {
+      "query": "云手机批量安装应用",
+      "expect": {
+        "top1": "CPH"
+      }
+    },
+    {
+      "query": "应用虚拟化发布",
+      "expect": {
+        "top1": "WorkspaceApp"
+      }
+    },
+    {
+      "query": "弹性伸缩组自动扩容",
+      "expect": {
+        "top1": "AS"
+      }
+    },
+    {
+      "query": "API 网关发布接口",
+      "expect": {
+        "top1": "APIG"
+      }
+    },
+    {
+      "query": "创建子用户并授权",
+      "expect": {
+        "top1": "IAM"
+      }
+    },
+    {
+      "query": "视频直播推流",
+      "expect": {
+        "top1": "Live"
+      }
+    }
+  ]
+}

@@ -38,7 +38,7 @@
 
 **支持范围** —— 依包元数据：
 
-- **操作系统**：Windows、macOS、Linux —— 基础包为纯 Python，任何能运行 Python 的平台均可；可选 `[datafusion]` extra（data 模式）提供 Windows x86_64、macOS x86_64/arm64、Linux x86_64/aarch64（manylinux）原生 wheel
+- **操作系统**：Windows、macOS、Linux —— 基础包为纯 Python + `tantivy`（search_apis 的 BM25 引擎，各大平台提供原生 wheel）；可选 `[datafusion]` extra（data 模式）提供 Windows x86_64、macOS x86_64/arm64、Linux x86_64/aarch64（manylinux）原生 wheel
 - **Python**：3.10+（`requires-python = ">=3.10"`）；`[datafusion]` extra 覆盖同一范围
 
 **实测** —— 完整单测 + 集成套件（`uv run pytest`，e2e 默认排除；经 dev 依赖组包含 data 模式测试），Linux x86_64：
@@ -220,7 +220,7 @@ curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-st
 
 | 工具 | 职责 |
 | --- | --- |
-| `search_apis` | 实体图谱跨产品检索（工作流第 0 步）：用户意图未指明产品时，按口语/关键词返回候选产品 + 代表 API + `matched_via` 匹配证据（别名/口语关键词/tag）；废弃接口治理同 `list_apis`（annotate 标注 / hide 隐藏）；构建期快照，`--entity-index` 挂载 |
+| `search_apis` | 实体图谱跨产品检索（工作流第 0 步）：用户意图未指明产品时，按口语/关键词返回候选产品 + 代表 API + `matched_via` 匹配证据（别名/口语关键词/tag）；排序 = tantivy BM25（启动时内存建索引）+ 手调身份信号；废弃接口治理同 `list_apis`（annotate 标注 / hide 隐藏）；构建期快照，`--entity-index` 挂载 |
 | `list_products` | 全量华为云产品目录 —— 标识符、显示名、分类、产品页链接；`keyword`/`category` 过滤 |
 | `get_product` | 单产品详情（分类、API 数、是否全局级） |
 | `list_apis` | 产品 API 目录，含 `tag_groups` 全量 tag 概览；`tag`/`search`/`limit`/`offset` 收窄 |
@@ -308,6 +308,8 @@ uv run api-refresh graph            # 确定性构建（产物 data/graph/entity
 uv run api-refresh graph --llm      # 构建期 LLM 语义抽取（约 150 次调用，指纹增量可断点续跑）
 uv run huaweicloud-open-mcp         # 运行时缺省加载 configs/entity-index.json（缺失静默禁用）
 ```
+
+运行时 `search_apis` 把快照喂给 tantivy BM25 引擎：约 1.8 万条 API 文本经 token 化（ASCII 词 + 驼峰切分；CJK 2-gram）构建内存索引（启动一次性约 0.6s），查询亚毫秒级完成，再与手调身份层（别名/产品名/判别 tag/产品广度先验）合并排序。排序质量由人工标注金评集（`tests/fixtures/entity_eval.json`，45 例）在测试套件中固化门禁。
 
 - 仅差集口径：仅当帮助中心功能介绍明显比 API Explorer 描述更完善时才补全（`--min-gain`，默认 20 字符）。
 - 每条 note 为功能介绍全文（`--cap` 截断，默认 2000 字符，超长加 …）+ 官方文档 URL。

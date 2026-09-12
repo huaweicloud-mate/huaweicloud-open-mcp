@@ -1,10 +1,12 @@
-"""S15b：实体图谱运行时检索 EntityGraph。
+"""S16b：实体图谱运行时检索 EntityGraph（BM25 引擎 + 身份信号）。
 
-parse 严格校验 / empty / search_apis 评分矩阵（手写期望分数与证据，独立真值）/
-load_entity_index 三分支（None→bundle 缺失静默空、off→显式禁用、路径→fail-fast）。
+parse 严格校验 / empty / search_apis 行为锚定（排序、证据、机制参数；
+分数为 BM25 统计量，不再手算——真值由金评集 tests/fixtures/entity_eval.json
+固化）/ load_entity_index 三分支。S15c service/server 装配断言原样保留。
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +17,10 @@ from mcp_openapi.entity_graph import (
     load_entity_index,
     parse_entity_index,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+REAL_INDEX = REPO_ROOT / "configs" / "entity-index.json"
+EVAL_SET = REPO_ROOT / "tests" / "fixtures" / "entity_eval.json"
 
 RAW = {
     "version": 1,
@@ -83,7 +89,7 @@ def test_parse_rejects_bad_shapes():
             parse_entity_index(raw)
 
 
-# ---------- 检索评分矩阵 ----------
+# ---------- 检索行为锚定（身份信号 / BM25 / 证据） ----------
 
 def test_search_alias_exact():
     out = _graph().search_apis("云主机")
@@ -91,30 +97,38 @@ def test_search_alias_exact():
     assert out["total"] == 1
     row = out["products"][0]
     assert row["product"] == "ECS"
-    assert row["score"] == 12
+    # 18（嵌句 alias exact）+ 0.12（广度先验：2 个 api 的平方 log）
+    assert row["score"] == 18.12
     assert row["matched_via"] == ["alias:云主机"]
     assert out["truncated"] is False
 
 
-def test_search_keyword_exact():
+def test_search_kw_hit_recalls_and_ranks_kw_doc_top():
+    """kw 精确命中：目标文档排首位；碎片 gram 召回使孪生成员弱命中
+    （twin 归并后并入主行，新语义——旧实现 substring 语义下零召回）。"""
     out = _graph().search_apis("重启服务器")
     assert out["total"] == 1
     row = out["products"][0]
     assert row["product"] == "ECS"
-    assert row["score"] == 6
     assert row["matched_via"] == ["kw:重启服务器→NovaRebootServers"]
-    assert [a["name"] for a in row["apis"]] == ["NovaRebootServers"]
+    assert row["apis"][0]["name"] == "NovaRebootServers"
+    assert len(row["apis"]) >= 2
 
 
 def test_search_name_contains_ranks_tms_over_ecs():
     out = _graph().search_apis("标签")
     assert [r["product"] for r in out["products"]] == ["TMS", "ECS"]
-    # TMS: name 5 + agg 2 + 判别 tag 2（标签管理 coverage 3 ≤3）= 9
-    assert out["products"][0]["score"] == 9
     assert out["products"][0]["matched_via"] == [
         "tag:标签管理(3产品)", "name:标签"]
-    # ECS: agg 2 + 判别 tag 2 = 4
-    assert out["products"][1]["score"] == 4
+    assert out["products"][1]["matched_via"] == ["tag:标签管理(3产品)"]
+    assert out["products"][0]["score"] > out["products"][1]["score"]
+
+
+def test_search_tag_bonus_requires_strict_substring():
+    """term 重启服务器 的 gram 碎片（服务/务器）不得误触发 tag bonus。"""
+    out = _graph().search_apis("重启服务器")
+    row = out["products"][0]
+    assert row["matched_via"] == ["kw:重启服务器→NovaRebootServers"]
 
 
 def test_search_twin_merge():
@@ -122,33 +136,38 @@ def test_search_twin_merge():
     assert out["total"] == 1
     row = out["products"][0]
     assert row["product"] == "ECS"           # link 非空者为主产品
-    assert row["score"] == 7                 # max(ECS=7, HCSECS=5)
     assert {"product": "HCSECS", "kind": "twin"} in row["related"]
-    # 同分按名字排序
-    assert [a["name"] for a in row["apis"]] == [
-        "BatchCreateServerTags", "NovaRebootServers"]
+    # 短字段（重启弹性云服务器）在 BM25 长度归一化下胜长字段
+    assert row["apis"][0]["name"] == "NovaRebootServers"
 
 
-def test_search_multi_term_with_tag_evidence_cap():
+def test_search_multi_term_evidence_priority():
     out = _graph().search_apis("重启 服务器")
     row = out["products"][0]
     assert row["product"] == "ECS"
-    # 重启: kw-contains 2 + summary 1 = 3；服务器: name 5 + agg 5 + 判别 tag 2 = 12
-    assert row["score"] == 15
-    # 证据按优先级排序；kw contains 与 kw exact 同文本去重合并
+    # 证据按优先级排序：tag(3) < kw contains(4)；封顶 3 条（name:服务器 让位）
     assert row["matched_via"] == [
         "tag:云服务器生命周期管理(2产品)",
-        "kw:重启服务器→NovaRebootServers",
-        "name:服务器"]
+        "kw:重启→NovaRebootServers",
+        "kw:服务器→NovaRebootServers"]
 
 
-def test_search_discriminative_tag_bonus():
+def test_search_identity_beats_bm25_only():
     out = _graph().search_apis("云")
-    # ECS 行（twin 归并，取 max）：name 5 + alias-contains 云主机 8 + non-kw 3 + 判别 tag 2 = 18
+    # 单字 CJK 无 gram 召回：纯身份信号计分（name 5 + alias contains 8 / name 5）
     assert [r["product"] for r in out["products"]] == ["ECS", "EVS"]
-    assert out["products"][0]["score"] == 18
-    # EVS: name 5 + non-kw 2 + 判别 tag（云硬盘 coverage 1）2 = 9
-    assert out["products"][1]["score"] == 9
+    assert out["products"][0]["score"] == 13.12
+    assert out["products"][0]["matched_via"] == ["name:云", "alias:云主机"]
+    assert out["products"][1]["score"] == 5.048
+    assert out["products"][1]["matched_via"] == ["name:云"]
+
+
+def test_search_cjk_phrase_alias_wins():
+    """连续口语短语：alias 嵌入原句（身份信号）+ 弱 gram 召回，胜纯 gram 行。"""
+    out = _graph().search_apis("给云主机打个标签")
+    assert [r["product"] for r in out["products"]] == ["ECS", "TMS"]
+    assert out["products"][0]["matched_via"][0] == "alias:云主机"
+    assert out["products"][0]["score"] > out["products"][1]["score"]
 
 
 def test_search_category_and_allowed_filters():
@@ -232,6 +251,82 @@ def test_search_result_envelope_shape():
     assert row["product"] == "EVS"
     assert row["matched_via"] == ["alias:磁盘"]
     assert [a["name"] for a in row["apis"]] == []
+
+
+def test_search_weak_gram_recall_single_row():
+    """弱 gram 命中（列表 ⊆ 云硬盘列表碎片）单行可达，分数为正浮点。"""
+    out = _graph().search_apis("列表")
+    assert out["total"] == 1
+    assert out["products"][0]["product"] == "EVS"
+    assert out["products"][0]["score"] > 0
+
+
+def test_search_multi_term_union_dedup():
+    out = _graph().search_apis("标签 云硬盘")
+    products = [r["product"] for r in out["products"]]
+    assert len(products) == len(set(products))
+    assert "TMS" in products and "EVS" in products
+
+
+def test_search_ascii_cjk_boundary_split():
+    """混写切分：k8s集群扩容 → k8s（引擎 ASCII 词）+ 集群扩容（CJK run）。"""
+    out = _graph().search_apis("k8s集群扩容")
+    assert out["ok"] is True
+
+
+def test_terms_mixed_language_split():
+    from mcp_openapi.entity_graph import _terms
+    assert _terms("k8s集群扩容") == ["k8s", "集群扩容", "k8s集群扩容"]
+    assert _terms("给云主机打个标签") == ["给云主机打个标签"]
+    assert _terms("重启 服务器") == ["重启", "服务器", "重启 服务器"]
+
+
+# ---------- 金评集门禁（真数据，人工标注独立真值） ----------
+
+@pytest.mark.skipif(not REAL_INDEX.is_file(), reason="缺 configs/entity-index.json")
+def test_golden_eval_real_index():
+    """金评集全绿是重构验收线：修复已知失败且不回退既有通过项。"""
+    from tests.eval_runner import run_eval
+    passed, failed = run_eval(load_entity_index(str(REAL_INDEX)), EVAL_SET)
+    assert not failed, f"金评集 {passed}/{passed + len(failed)}，失败: {failed}"
+
+
+# ---------- 废弃治理机制参数 exclude_apis ----------
+
+def test_search_exclude_apis_drops_api_and_score():
+    """hide 机制参数：被排除 api 从计分与 top-3 名单消失；产品可经
+    name/alias/其余 api 的通用文本通道仍可达（按设计，不误伤产品可达性）。"""
+    out = _graph().search_apis("重启服务器", exclude_apis={
+        "ecs": frozenset({"novarebootservers"}),
+        "hcsecs": frozenset({"rebootcloudhost"})})
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    names = [a["name"] for a in row["apis"]]
+    assert "NovaRebootServers" not in names
+    assert "RebootCloudHost" not in names
+    assert names == ["BatchCreateServerTags"]   # 通用碎片（服务/务器）兜底召回
+    assert row["score"] > 0
+
+
+def test_search_exclude_apis_keeps_product_discoverable():
+    """排除后产品经 name/非废弃 api 通道仍可达；top-3 名额让位。"""
+    out = _graph().search_apis(
+        "弹性云服务器", exclude_apis={"ecs": frozenset({"novarebootservers"})})
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    names = {a["name"] for a in row["apis"]}
+    assert "NovaRebootServers" not in names
+    assert {"BatchCreateServerTags", "RebootCloudHost"} <= names
+    assert row["score"] > 0
+
+
+def test_search_exclude_apis_twin_scoped():
+    """排除集按产品精确生效：HCSECS 成员排除不影响 ECS 计分与归并。"""
+    out = _graph().search_apis(
+        "弹性云服务器", exclude_apis={"hcsecs": frozenset({"rebootcloudhost"})})
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    names = [a["name"] for a in row["apis"]]
+    assert "RebootCloudHost" not in names
+    assert set(names) == {"BatchCreateServerTags", "NovaRebootServers"}
+    assert row["score"] > 0
 
 
 # ---------- load_entity_index 三分支 ----------
@@ -385,98 +480,6 @@ def test_server_instructions_step_zero():
     text = build_instructions(Gate.unrestricted())
     assert "0. `search_apis`" in text
     assert "matched_via" in text
-
-
-# ---------- CJK 2-gram 弱结果回退 ----------
-
-def test_search_fallback_continuous_cjk():
-    """无分隔符口语短语：alias-only 行无 API 接战 → 2-gram 回退补召回。
-
-    ECS 16（alias 通道一次计分：云主机 嵌入原句 → 12；标签 non-kw 2 + 判别 tag 2）
-    > TMS 6（gram-name 2 + non-kw 2 + 判别 tag 2）：碎片降权后别名信号胜出。
-    """
-    out = _graph().search_apis("给云主机打个标签")
-    assert out["products"][0]["product"] == "ECS"
-    assert out["products"][0]["score"] == 16
-    assert out["products"][1]["product"] == "TMS"
-    assert out["products"][1]["score"] == 6
-
-
-def test_search_keyword_query_no_fallback():
-    """关键词精确命中（≥阈值）：不走回退，行为与既有矩阵一致。"""
-    out = _graph().search_apis("重启服务器")
-    assert out["total"] == 1
-    row = out["products"][0]
-    assert row["product"] == "ECS"
-    assert row["score"] == 6
-    assert row["matched_via"] == ["kw:重启服务器→NovaRebootServers"]
-
-
-def test_search_weak_result_grams_add_nothing_keeps_original():
-    """弱命中但 2-gram 无增量：保留原结果（不夸大）。"""
-    out = _graph().search_apis("列表")
-    assert out["total"] == 1
-    assert out["products"][0]["product"] == "EVS"
-    assert out["products"][0]["score"] == 1
-
-
-def test_search_fallback_union_dedup():
-    """回退并集去重：原轮与回退轮同名产品保留高分行。"""
-    out = _graph().search_apis("标签 云硬盘")
-    products = [r["product"] for r in out["products"]]
-    assert len(products) == len(set(products))
-    assert "TMS" in products and "EVS" in products
-
-
-def test_search_ascii_cjk_boundary_split():
-    """混写切分：k8s集群扩容 → k8s（alias exact）+ 集群扩容。fixture 无 CCE
-    别名，验证不抛错且切分正确（_terms 矩阵单列）。"""
-    out = _graph().search_apis("k8s集群扩容")
-    assert out["ok"] is True
-
-
-def test_terms_mixed_language_split():
-    from mcp_openapi.entity_graph import _terms
-    assert _terms("k8s集群扩容") == ["k8s", "集群扩容", "k8s集群扩容"]
-    assert _terms("给云主机打个标签") == ["给云主机打个标签"]
-    assert _terms("重启 服务器") == ["重启", "服务器", "重启 服务器"]
-
-
-# ---------- 废弃治理机制参数 exclude_apis ----------
-
-def test_search_exclude_apis_drops_api_and_score():
-    """hide 机制参数：被排除 api 从计分与 top-3 名单消失；产品可经
-    name/alias/其余 api 的通用文本通道仍可达（按设计，不误伤产品可达性）。"""
-    out = _graph().search_apis("重启服务器", exclude_apis={
-        "ecs": frozenset({"novarebootservers"}),
-        "hcsecs": frozenset({"rebootcloudhost"})})
-    row = next(r for r in out["products"] if r["product"] == "ECS")
-    names = [a["name"] for a in row["apis"]]
-    assert "NovaRebootServers" not in names
-    assert "RebootCloudHost" not in names
-    assert names == ["BatchCreateServerTags"]   # 通用碎片（服务/务器）兜底召回
-    assert row["score"] == 6
-
-
-def test_search_exclude_apis_keeps_product_discoverable():
-    """排除后产品经 name/非废弃 api 通道仍可达；top-3 名额让位。"""
-    out = _graph().search_apis(
-        "弹性云服务器", exclude_apis={"ecs": frozenset({"novarebootservers"})})
-    row = next(r for r in out["products"] if r["product"] == "ECS")
-    names = [a["name"] for a in row["apis"]]
-    assert names == ["BatchCreateServerTags"]
-    assert row["score"] == 6          # name 5 + non-kw 1（Nova 排除后归零）
-
-
-def test_search_exclude_apis_twin_scoped():
-    """排除集按产品精确生效：HCSECS 成员排除不影响 ECS 计分与归并。"""
-    out = _graph().search_apis(
-        "弹性云服务器", exclude_apis={"hcsecs": frozenset({"rebootcloudhost"})})
-    row = next(r for r in out["products"] if r["product"] == "ECS")
-    names = [a["name"] for a in row["apis"]]
-    assert "RebootCloudHost" not in names
-    assert set(names) == {"BatchCreateServerTags", "NovaRebootServers"}
-    assert row["score"] == 7          # max(ECS 7, HCSECS 5) 不变
 
 
 # ---------- S15c：search 废弃治理三态（annotate/hide/off） ----------

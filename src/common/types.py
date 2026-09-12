@@ -120,7 +120,7 @@ class SearchProductHit(TypedDict):
     category: str
     is_global: bool | None
     link: str | None
-    score: int
+    score: float
     matched_via: list[str]
     apis: list[SearchApiHit]
     related: list[SearchRelated]
