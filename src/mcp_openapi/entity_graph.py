@@ -108,10 +108,13 @@ class EntityGraph:
 
     def search_apis(self, query: str, *, limit: int = 8,
                     category: str | None = None,
-                    allowed: frozenset[str] | None = None) -> SearchApisResult:
+                    allowed: frozenset[str] | None = None,
+                    exclude_apis: dict[str, frozenset[str]] | None = None
+                    ) -> SearchApisResult:
         """跨产品检索：术语切分 → 产品评分（别名/关键词/tag-IDF/孪生归并）
-        → 排名短名单。allowed 为机制参数（gate 过滤后的产品白名单，
-        排名前过滤保证 total/truncated 语义一致）。"""
+        → 排名短名单。allowed / exclude_apis 为机制参数（gate 过滤后的产品
+        白名单、hide 模式的 (product_lower → api_lower) 排除集，均排名前
+        过滤保证 total/truncated 语义一致）；模块对 Gate/废弃索引零认知。"""
         try:
             limit = max(1, min(int(limit), _LIMIT_MAX))
         except (TypeError, ValueError):
@@ -132,7 +135,9 @@ class EntityGraph:
                     continue
                 if category and category.lower() not in node.category.lower():
                     continue
-                cand = self._score_product(node, ranked_terms, gram_terms)
+                exclude = (exclude_apis or {}).get(ps.lower())
+                cand = self._score_product(node, ranked_terms, gram_terms,
+                                           exclude=exclude)
                 if cand[1] > 0:
                     scored.append(cand)
             rows = _merge_rows(scored)
@@ -154,16 +159,20 @@ class EntityGraph:
 
     def _score_product(
             self, node: _ProductNode, terms: list[str],
-            gram_terms: frozenset[str] = frozenset()
+            gram_terms: frozenset[str] = frozenset(),
+            exclude: frozenset[str] | None = None
     ) -> tuple[_ProductNode, int, list[tuple[int, int, str]],
                dict[str, tuple[int, _ApiNode]]]:
         """单产品评分：alias 通道每产品每查询一次（不随 gram 数堆叠）+
         Σ术语分（name/category/判别 tag/API 三通道封顶）。
 
         返回 (node, score, evidence[(prio, seq, text)], api_hits[name → (分, 节点)])。
-        gram_terms 中的术语按回退降权（name/非kw封顶，且不进 kw 通道）。
-        """
+        gram_terms 中的术语按回退降权（name/非kw封顶，且不进 kw 通道）；
+        exclude（api_lower 集合）内的 api 跳过全部 api 级通道（hide 机制，
+        不占 top-3 名额、不贡献分数；产品级 name/alias/tag 通道不受影响）。"""
         apis = self.apis_by_product.get(node.product, ())
+        if exclude:
+            apis = tuple(a for a in apis if a.name.lower() not in exclude)
         product_lower = node.product.lower()
         alias_lowers = [(a, a.lower()) for a in node.aliases]
         name_lower = node.name.lower()

@@ -378,3 +378,81 @@ def test_terms_mixed_language_split():
     assert _terms("k8s集群扩容") == ["k8s", "集群扩容", "k8s集群扩容"]
     assert _terms("给云主机打个标签") == ["给云主机打个标签"]
     assert _terms("重启 服务器") == ["重启", "服务器", "重启 服务器"]
+
+
+# ---------- 废弃治理机制参数 exclude_apis ----------
+
+def test_search_exclude_apis_drops_api_and_score():
+    """hide 机制参数：被排除 api 从计分与 top-3 名单消失；产品可经
+    name/alias/其余 api 的通用文本通道仍可达（按设计，不误伤产品可达性）。"""
+    out = _graph().search_apis("重启服务器", exclude_apis={
+        "ecs": frozenset({"novarebootservers"}),
+        "hcsecs": frozenset({"rebootcloudhost"})})
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    names = [a["name"] for a in row["apis"]]
+    assert "NovaRebootServers" not in names
+    assert "RebootCloudHost" not in names
+    assert names == ["BatchCreateServerTags"]   # 通用碎片（服务/务器）兜底召回
+    assert row["score"] == 6
+
+
+def test_search_exclude_apis_keeps_product_discoverable():
+    """排除后产品经 name/非废弃 api 通道仍可达；top-3 名额让位。"""
+    out = _graph().search_apis(
+        "弹性云服务器", exclude_apis={"ecs": frozenset({"novarebootservers"})})
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    names = [a["name"] for a in row["apis"]]
+    assert names == ["BatchCreateServerTags"]
+    assert row["score"] == 6          # name 5 + non-kw 1（Nova 排除后归零）
+
+
+def test_search_exclude_apis_twin_scoped():
+    """排除集按产品精确生效：HCSECS 成员排除不影响 ECS 计分与归并。"""
+    out = _graph().search_apis(
+        "弹性云服务器", exclude_apis={"hcsecs": frozenset({"rebootcloudhost"})})
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    names = [a["name"] for a in row["apis"]]
+    assert "RebootCloudHost" not in names
+    assert set(names) == {"BatchCreateServerTags", "NovaRebootServers"}
+    assert row["score"] == 7          # max(ECS 7, HCSECS 5) 不变
+
+
+# ---------- S15c：search 废弃治理三态（annotate/hide/off） ----------
+
+def _svc_dep(mode):
+    from mcp_openapi.deprecated import parse_deprecated_index
+    idx = parse_deprecated_index({
+        "products": {"ECS": {"NovaRebootServers": {
+            "replacement": "BatchRebootServers",
+            "doc_url": "https://u/reboot"}}}})
+    return _svc(deprecated_index=idx, deprecated_mode=mode)
+
+
+def test_service_search_deprecated_annotate():
+    svc = _svc_dep("annotate")
+    out = svc.search_apis("弹性云服务器")
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    nova = next(a for a in row["apis"] if a["name"] == "NovaRebootServers")
+    assert nova["deprecated"] is True
+    assert nova["replacement"] == "BatchRebootServers"
+    # 未废弃 api 不加字段
+    batch = next(a for a in row["apis"] if a["name"] == "BatchCreateServerTags")
+    assert "deprecated" not in batch and "replacement" not in batch
+
+
+def test_service_search_deprecated_hide():
+    svc = _svc_dep("hide")
+    out = svc.search_apis("重启服务器")
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    names = [a["name"] for a in row["apis"]]
+    assert "NovaRebootServers" not in names
+    assert "BatchCreateServerTags" in names
+
+
+def test_service_search_deprecated_off_noop():
+    svc = _svc_dep("off")
+    out = svc.search_apis("重启服务器")
+    row = next(r for r in out["products"] if r["product"] == "ECS")
+    nova = next(a for a in row["apis"] if a["name"] == "NovaRebootServers")
+    assert "deprecated" not in nova
+    assert "replacement" not in nova

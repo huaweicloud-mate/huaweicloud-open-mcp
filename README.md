@@ -219,7 +219,7 @@ Rules that matter:
 
 | Tool | Purpose |
 | --- | --- |
-| `search_apis` | Entity-graph cross-product search (workflow step 0): when the user intent doesn't name a product, returns candidate products + representative APIs + `matched_via` evidence (aliases / colloquial keywords / tags); build-time snapshot, mounted via `--entity-index` |
+| `search_apis` | Entity-graph cross-product search (workflow step 0): when the user intent doesn't name a product, returns candidate products + representative APIs + `matched_via` evidence (aliases / colloquial keywords / tags); deprecated-API governance mirrors `list_apis` (annotate / hide); build-time snapshot, mounted via `--entity-index` |
 | `list_products` | Full Huawei Cloud product catalog — identifier, display name, category, product link; `keyword`/`category` filter |
 | `get_product` | One product's details (classification, API count, global vs regional) |
 | `list_apis` | A product's API directory with `tag_groups` overview; `tag`/`search`/`limit`/`offset` to narrow |

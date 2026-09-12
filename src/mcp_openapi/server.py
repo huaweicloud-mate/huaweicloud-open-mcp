@@ -187,6 +187,7 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
         返回候选产品（中文名/分类/link）+ 每产品代表 API + matched_via 匹配证据
         （别名/口语关键词/tag 命中），据此再用 list_apis/get_api 收窄。
+        废弃接口治理同 list_apis（--deprecated-mode annotate 标注 / hide 隐藏）。
         图谱为构建期快照（非实时）；未配置实体索引时返回拒绝。
 
         授权范围见 instructions；越界产品不出现在结果中。

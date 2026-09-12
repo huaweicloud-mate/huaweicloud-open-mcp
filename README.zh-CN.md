@@ -220,7 +220,7 @@ curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-st
 
 | 工具 | 职责 |
 | --- | --- |
-| `search_apis` | 实体图谱跨产品检索（工作流第 0 步）：用户意图未指明产品时，按口语/关键词返回候选产品 + 代表 API + `matched_via` 匹配证据（别名/口语关键词/tag）；构建期快照，`--entity-index` 挂载 |
+| `search_apis` | 实体图谱跨产品检索（工作流第 0 步）：用户意图未指明产品时，按口语/关键词返回候选产品 + 代表 API + `matched_via` 匹配证据（别名/口语关键词/tag）；废弃接口治理同 `list_apis`（annotate 标注 / hide 隐藏）；构建期快照，`--entity-index` 挂载 |
 | `list_products` | 全量华为云产品目录 —— 标识符、显示名、分类、产品页链接；`keyword`/`category` 过滤 |
 | `get_product` | 单产品详情（分类、API 数、是否全局级） |
 | `list_apis` | 产品 API 目录，含 `tag_groups` 全量 tag 概览；`tag`/`search`/`limit`/`offset` 收窄 |

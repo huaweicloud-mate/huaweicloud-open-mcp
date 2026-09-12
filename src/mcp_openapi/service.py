@@ -296,8 +296,42 @@ class ToolService:
         if self.config.gate.restrict:
             allowed = frozenset(ps for ps in graph.products
                                 if self.config.gate.allows(ps))
-        return graph.search_apis(query, limit=limit, category=category,
-                                 allowed=allowed)
+        # 废弃治理（S15 扩展）：与 list_apis 同索引同模式——
+        # hide 排名前排除（机制参数，模块索引无关）；annotate service 层塑形
+        exclude = None
+        if self.config.deprecated_mode == "hide":
+            idx = self.config.deprecated_index
+            exclude = {ps.lower(): idx.names(ps) for ps in graph.products}
+        out = graph.search_apis(query, limit=limit, category=category,
+                                allowed=allowed, exclude_apis=exclude)
+        if self.config.deprecated_mode == "annotate":
+            out = self._annotate_search_deprecated(out)
+        return cast(SearchApisResult, out)
+
+    def _annotate_search_deprecated(self, out: Any) -> Any:
+        """search_apis annotate：条目级结构化标注 deprecated + replacement
+        （S14 同 idiom，copy-on-write 仅变更时重建）。已知边界：twin 归并行
+        内孪生成员 api 按主产品索引查询，可能欠标注（hide 路径无此问题）。"""
+        idx = self.config.deprecated_index
+        decorated_rows: list[Any] = []
+        changed = False
+        for row in out.get("products") or []:
+            product = row.get("product", "")
+            decorated_apis: list[Any] = []
+            row_changed = False
+            for a in row.get("apis") or []:
+                entry = idx.entry(product, a.get("name", ""))
+                if entry is not None:
+                    row_changed = True
+                    a = {**a, "deprecated": True}
+                    if entry.replacement:
+                        a["replacement"] = entry.replacement
+                decorated_apis.append(a)
+            if row_changed:
+                changed = True
+                row = {**row, "apis": decorated_apis}
+            decorated_rows.append(row)
+        return {**out, "products": decorated_rows} if changed else out
 
     @_audited
     @_guarded

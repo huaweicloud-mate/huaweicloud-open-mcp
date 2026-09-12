@@ -103,6 +103,8 @@ class SearchApiHit(TypedDict):
     method: str
     summary: str
     tags: str
+    deprecated: NotRequired[bool]     # 废弃治理 annotate 标注（service 层附加）
+    replacement: NotRequired[str]     # 废弃替代接口名（仅索引有值时附加）
 
 
 class SearchRelated(TypedDict):
