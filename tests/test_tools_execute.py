@@ -268,6 +268,53 @@ def test_execute_allow_calls_client(mini_detail):
     assert client.calls[0][0] == "GET"
 
 
+# ---------- basePath 前缀（real lane 请求路径 = doc.basePath + 填充路径） ----------
+
+# 独立真值：/v3/apis/detail 载荷 base_path 字段——17,963 接口全量统计，
+# 488 个非根（APIG/VAS/CodeArtsInspector/OrgID/CloudRTC/KooPhone/AOM/IoTEdge/CampusGo），
+# path 均不含该前缀（双前缀风险 0）；转换后 doc 携带标准 Swagger basePath。
+
+
+def test_execute_applies_basepath_prefix(mini_detail):
+    doc, path, method, op = _get_op(mini_detail)
+    doc["basePath"] = "/v2"
+    client = StubClient()
+    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
+                        {"limit": 1}, client=client,
+                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    assert client.calls[0][2] == "/v2/v1/proj123/cloudservers"
+
+
+def test_execute_basepath_root_unchanged(mini_detail):
+    doc, path, method, op = _get_op(mini_detail)
+    doc["basePath"] = "/"
+    client = StubClient()
+    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
+                        {"limit": 1}, client=client,
+                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    assert client.calls[0][2] == "/v1/proj123/cloudservers"
+
+
+def test_execute_basepath_missing_unchanged(mini_detail):
+    doc, path, method, op = _get_op(mini_detail)
+    doc.pop("basePath", None)
+    client = StubClient()
+    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
+                        {"limit": 1}, client=client,
+                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    assert client.calls[0][2] == "/v1/proj123/cloudservers"
+
+
+def test_execute_basepath_trailing_slash_normalized(mini_detail):
+    doc, path, method, op = _get_op(mini_detail)
+    doc["basePath"] = "/v2/"
+    client = StubClient()
+    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
+                        {"limit": 1}, client=client,
+                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    assert client.calls[0][2] == "/v2/v1/proj123/cloudservers"
+
+
 # ---------- 服务方言：无 body 请求默认 Content-Type（_DEFAULT_JSON_CT_PRODUCTS） ----------
 
 # 独立真值：2026-09 全量探测矩阵（219 产品/397 探针），无 Content-Type 的 GET 被

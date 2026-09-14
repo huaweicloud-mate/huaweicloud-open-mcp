@@ -331,6 +331,10 @@ def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
     if not isinstance(host, str) or not host:
         return _refuse("接口元数据缺少 host，无法执行")
 
+    base = doc.get("basePath")
+    if isinstance(base, str) and base and base != "/":
+        filled = base.rstrip("/") + filled
+
     if credentials and credentials.project_id and "{project_id}" not in path:
         headers.setdefault("X-Project-Id", credentials.project_id)
 
