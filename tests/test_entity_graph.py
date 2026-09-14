@@ -170,13 +170,11 @@ def test_search_cjk_phrase_alias_wins():
     assert out["products"][0]["score"] > out["products"][1]["score"]
 
 
-def test_search_category_and_allowed_filters():
+def test_search_category_filter():
     out = _graph().search_apis("标签", category="存储")
     assert out["total"] == 0
     out = _graph().search_apis("标签", category="计算")
     assert [r["product"] for r in out["products"]] == ["ECS"]
-    out = _graph().search_apis("标签", allowed=frozenset({"EVS", "TMS"}))
-    assert [r["product"] for r in out["products"]] == ["TMS"]
 
 
 def test_search_limit_and_truncated():
@@ -381,14 +379,8 @@ def test_service_search_ok():
     assert out["products"][0]["product"] == "ECS"
 
 
-def test_service_search_gate_filters_before_ranking():
-    from mcp_openapi.gate import Gate
-    svc = _svc(gate=Gate(allowed=frozenset({"ECS"}), restrict=True))
-    out = svc.search_apis("标签")
-    assert [r["product"] for r in out["products"]] == ["ECS"]
-
-
-def test_service_search_gate_unrestricted_no_filter():
+def test_service_search_no_product_filter():
+    """service 层对 search_apis 不做产品过滤（门栓已移除），全量透传。"""
     svc = _svc()
     out = svc.search_apis("标签")
     assert [r["product"] for r in out["products"]] == ["TMS", "ECS"]
@@ -435,7 +427,7 @@ def test_service_search_limit_minus_one_passthrough(tmp_path):
 def _args(**kw):
     import argparse
     base = dict(mock=True, policy=None, region=None, mock_base=None,
-                mock_passthrough=None, gate=None, hints=None, audit_file=None,
+                mock_passthrough=None, hints=None, audit_file=None,
                 spill_dir=None, deprecated_index=None, deprecated_mode=None,
                 entity_index=None)
     base.update(kw)
@@ -475,9 +467,8 @@ def test_build_config_entity_index_default_missing_silent(tmp_path, monkeypatch)
 
 
 def test_server_instructions_step_zero():
-    from mcp_openapi.gate import Gate
     from mcp_openapi.server import build_instructions
-    text = build_instructions(Gate.unrestricted())
+    text = build_instructions()
     assert "0. `search_apis`" in text
     assert "matched_via" in text
 

@@ -36,7 +36,6 @@ from . import execute, execute_obs
 from .deprecated import DeprecatedIndex
 from .entity_graph import EntityGraph
 from .execute_obs import ObsHttpClient
-from .gate import Gate
 from .hints import Hints
 from .signer.client import HttpClient
 from .spill import SpillConfig, guard_result
@@ -86,7 +85,6 @@ class ServiceConfig:
     http_client_factory: Callable[[], execute.ApiExecutor] | None = None
     mock_client_factory: Callable[[], apie_mock.MockApiClient] | None = None
     obs_client_factory: Callable[[], execute_obs.ObsClient] | None = None
-    gate: Gate = Gate.unrestricted()
     hints: Hints = Hints.empty()
     deprecated_index: DeprecatedIndex = DeprecatedIndex.empty()
     deprecated_mode: str = "off"
@@ -152,7 +150,7 @@ class ToolService:
 
         未配置 policy store（无可写文件）或 policy 放行 → None；
         denial_reason 非空时须与本方法复查结果一致（确保被增强的确实是
-        policy 拒绝而非门栓/其它拒绝），不一致 → None。
+        policy 拒绝而非其它拒绝源），不一致 → None。
         coarse_rule 为产品级规则（product:*=allow，session 档授予选项）。
         """
         if self.config.policy_store is None:
@@ -216,13 +214,7 @@ class ToolService:
         out["policy"] = store.text()
         return out
 
-    def _check_gate(self, product: str) -> str | None:
-        """检查产品门栓，返回错误描述或 None（放行）。"""
-        if self.config.gate.allows(product):
-            return None
-        return f"产品 {product} 不在 openapi mcp 授权范围内"
-
-    # ---------- 提示注入（Hints：配置驱动塑形与 gate 同层，copy-on-write） ----------
+    # ---------- 提示注入（Hints：配置驱动塑形，copy-on-write） ----------
 
     def _with_product_hints(self, out: Any, product: str) -> Any:
         """顶层附加产品级提示（未配置时不加字段）。"""
@@ -291,11 +283,6 @@ class ToolService:
             return {"ok": False,
                     "reason": "实体索引未配置（部署侧 --entity-index），"
                               "请改用 list_products 定位产品"}
-        # gate 收紧时排名前过滤（total/truncated 语义与过滤后集合一致）
-        allowed = None
-        if self.config.gate.restrict:
-            allowed = frozenset(ps for ps in graph.products
-                                if self.config.gate.allows(ps))
         # 废弃治理（S15 扩展）：与 list_apis 同索引同模式——
         # hide 排名前排除（机制参数，模块索引无关）；annotate service 层塑形
         exclude = None
@@ -303,7 +290,7 @@ class ToolService:
             idx = self.config.deprecated_index
             exclude = {ps.lower(): idx.names(ps) for ps in graph.products}
         out = graph.search_apis(query, limit=limit, category=category,
-                                allowed=allowed, exclude_apis=exclude)
+                                exclude_apis=exclude)
         if self.config.deprecated_mode == "annotate":
             out = self._annotate_search_deprecated(out)
         return cast(SearchApisResult, out)
@@ -342,7 +329,6 @@ class ToolService:
         if groups is None:
             logger.warning("list_products metadata=missing")
             return {"ok": False, "reason": "产品列表不可用（远端拉取失败）"}
-        groups = self.config.gate.filter_products(groups)
         out = metadata.list_products(groups, category=category, keyword=keyword)
         return cast(ProductListResult, self._annotate_product_items(out))
 
@@ -350,10 +336,6 @@ class ToolService:
     @_guarded
     def get_product(self, product: str) -> ProductResult | ToolError:
         logger.info("get_product product=%s", product)
-        gated = self._check_gate(product)
-        if gated:
-            logger.warning("get_product product=%s result=gated", product)
-            return {"ok": False, "reason": gated}
         groups = catalog.get_products(self.store)
         if groups is None:
             logger.warning("get_product product=%s metadata=missing", product)
@@ -370,10 +352,6 @@ class ToolService:
                   limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
         logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d",
                     product, tag or "-", search or "-", limit, offset)
-        gated = self._check_gate(product)
-        if gated:
-            logger.warning("list_apis product=%s result=gated", product)
-            return {"ok": False, "reason": gated}
         apis = catalog.get_apis(self.store, product)
         if apis is None:
             logger.warning("list_apis product=%s metadata=missing", product)
@@ -392,10 +370,6 @@ class ToolService:
     def get_api(self, product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
         region = region or self.config.region
         logger.info("get_api %s:%s region=%s", product, api, region)
-        gated = self._check_gate(product)
-        if gated:
-            logger.warning("get_api %s:%s region=%s result=gated", product, api, region)
-            return {"ok": False, "reason": gated}
         hit = self.load_api_doc(product, api, region)
         if hit is None:
             logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
@@ -410,10 +384,6 @@ class ToolService:
                          region: str | None = None) -> ExamplesResult | ToolError:
         region = region or self.config.region
         logger.info("get_api_examples %s:%s region=%s", product, api, region)
-        gated = self._check_gate(product)
-        if gated:
-            logger.warning("get_api_examples %s:%s region=%s result=gated", product, api, region)
-            return {"ok": False, "reason": gated}
         hit = self.load_api_doc(product, api, region)
         if hit is None:
             logger.warning("get_api_examples %s:%s region=%s result=not_found",
@@ -429,7 +399,7 @@ class ToolService:
     @_guarded
     def execute_api(self, product: str, api: str, region: str | None = None,
                     params: dict[str, Any] | None = None) -> ExecuteResult:
-        """执行 API。产品门栓先粗滤，safety policy 再细检，mock/real 分支共享。
+        """执行 API。safety policy 细检，mock/real 分支共享。
 
         spill：超限响应自动落盘（S12）；params["_spill"]=false 按次退出
         （控制键在 dispatch 前剥离，不进入 query/body）。
@@ -443,12 +413,6 @@ class ToolService:
         spill_cfg = self.config.spill
         if params.pop("_spill", None) is False:
             spill_cfg = None
-        gated = self._check_gate(product)
-        if gated:
-            logger.warning("execute %s:%s region=%s mode=%s policy=gated",
-                           product, api, region,
-                           "mock" if self.config.mock else "real")
-            return {"ok": False, "reason": gated}
         policy_err = self._check_policy(product, api)
         if policy_err:
             logger.warning("execute %s:%s region=%s mode=%s policy=%s",

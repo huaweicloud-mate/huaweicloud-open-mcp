@@ -1,7 +1,6 @@
 """S10b：service 层提示注入（ServiceConfig.hints 接缝：6 个注入点 + 回归红线）。"""
 
 from apie.memory_store import MemoryStore
-from mcp_openapi.gate import parse_gate
 from mcp_openapi.hints import Hints, parse_hints
 from mcp_openapi.service import ServiceConfig, ToolService
 
@@ -87,14 +86,9 @@ def _prep_store(detail=True):
     return store
 
 
-def _svc(store, hints=HINTS, gate=None):
+def _svc(store, hints=HINTS):
     return ToolService(store=store,
-                       config=ServiceConfig(hints=hints, gate=gate or _no_gate()))
-
-
-def _no_gate():
-    from mcp_openapi.gate import Gate
-    return Gate.unrestricted()
+                       config=ServiceConfig(hints=hints))
 
 
 # ---------- list_products：条目级，仅配置了 notes 的产品 ----------
@@ -225,12 +219,4 @@ def test_get_api_not_found_no_hints():
 def test_get_api_examples_never_annotated():
     out = _svc(_prep_store()).get_api_examples("ECS", "ListServersDetails")
     assert out["ok"] is True
-    assert "hints" not in out
-
-
-# ---------- 拒绝路径不注入（防越权泄漏） ----------
-
-def test_gated_denial_has_no_hints():
-    out = _svc(_prep_store(detail=False), gate=parse_gate(["VPC"])).get_product("ECS")
-    assert out["ok"] is False
     assert "hints" not in out

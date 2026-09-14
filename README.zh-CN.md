@@ -280,7 +280,7 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 ```
 
 - 官方元数据永不被替换 —— 提示以独立 `hints` 字段伴随返回（产品级 + API 级合并，产品在前）。
-- 仅注入成功发现结果，拒绝路径（门栓/policy）永不注入；`get_api_examples` 与 `execute_api` 恒不注入。
+- 仅注入成功发现结果，拒绝路径（policy 拒绝）永不注入；`get_api_examples` 与 `execute_api` 恒不注入。
 - 产品键与 `apis` 键均大小写不敏感；产品值可以是纯字符串（仅产品提示）或含 `notes` / `apis` 的对象。
 - 可选顶层布尔键 `api_notes_in_list_apis`（缺省 `true`）：为 `false` 时 `list_apis` 条目不携带 API 级提示（顶层产品级与 `get_api` 合并提示不受影响）——帮助中心补全生成文件显式置 `false`，使 `get_api` 成为唯一增强面。
 - 启动时加载（无热更新）；配置非法启动即快速失败。
@@ -339,7 +339,6 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--mock-passthrough` | off | mock 模式转发 execute 业务参数到端点（env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`） |
 | `--policy <file>` | — | safety policy 文件；缺失 → 全部执行被拒 |
 | `--region <id>` | `cn-north-4` | 默认 region |
-| `--gate <file>` | — | 可选产品门栓（allowlist；未列出产品对 Agent 隐藏） |
 | `--hints <file\|off>` | `configs/help-docs-hints.json`（缺失静默跳过） | 可选自定义提示注入配置（部署侧指引注入 instructions 与发现结果）；`off` 显式禁用；支持裸文件名按 `configs/` 解析 |
 | `--deprecated-index <file>` | — | 可选废弃接口索引；启用 list_apis 的 annotate/hide 治理；支持裸文件名按 `configs/` 解析 |
 | `--deprecated-mode <annotate\|hide\|off>` | `annotate`（配置索引时） | `annotate`=`list_apis` 条目附加 `deprecated: true` + `replacement`（总数/tag_groups 不变）；`hide`=分页前过滤废弃条目（计数同口径）；`off`=不治理；仅影响 `list_apis`——`get_api`/`execute_api` 恒可用；显式传 mode 需同时配置 `--deprecated-index`（环境变量 `HUAWEICLOUD_MCP_DEPRECATED_MODE`） |
@@ -362,7 +361,6 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `HUAWEICLOUD_MCP_MOCK_BASE` | mock 端点基础地址覆盖 |
 | `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH` | 等价 `--mock-passthrough` |
 | `HUAWEICLOUD_MCP_POLICY_FILE` | 等价 `--policy` |
-| `HUAWEICLOUD_MCP_OPENAPI_GATE` | 等价 `--gate` |
 | `HUAWEICLOUD_MCP_OPENAPI_HINTS` | 等价 `--hints` |
 | `HUAWEICLOUD_MCP_DEPRECATED_INDEX` | 等价 `--deprecated-index` |
 | `HUAWEICLOUD_MCP_DEPRECATED_MODE` | 等价 `--deprecated-mode` |

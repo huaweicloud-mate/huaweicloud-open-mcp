@@ -6,7 +6,7 @@ BM25 引擎（entity_search.py，S16a）——IDF/长度归一化/碎片噪音�
 category/判别 tag）保留 Python 精确子串语义（alias「嵌入用户原句」是反向
 包含，BM25 表达不了，且 alias 身份双档 12/8 为实测有效语义）。
 
-与 Gate/Hints/DeprecatedIndex 同 idiom：--entity-index 配置产物 →
+与 Hints/DeprecatedIndex 同 idiom：--entity-index 配置产物 →
 EntityGraph 值对象 → service 把 search_apis 作为渐进式工作流第 0 步暴露。
 数据由 api-refresh graph 管线生成（configs/entity-index.json，wheel bundle
 缺省档）；tantivy 索引在 parse 时于 RAM 构建（构建期快照，零网络）。
@@ -114,16 +114,14 @@ class EntityGraph:
 
     def search_apis(self, query: str, *, limit: int = 8,
                     category: str | None = None,
-                    allowed: frozenset[str] | None = None,
                     exclude_apis: dict[str, frozenset[str]] | None = None
                     ) -> SearchApisResult:
         """跨产品检索：术语切分 → BM25 命中池 + 身份信号 → 每产品聚合
-        （identity + 归一化 BM25×量纲）→ 排名短名单。allowed / exclude_apis
-        为机制参数（gate 过滤后的产品白名单、hide 模式的 (product_lower →
-        api_lower) 排除集，均排名前过滤保证 total/truncated 语义一致）；模块
-        对 Gate/废弃索引零认知。limit 缺省 8、上限 _LIMIT_MAX；limit=-1 为
-        不限制哨兵（返回全部命中，信封回显 -1 且 truncated 恒 False），
-        其余值 clamp 到 [1, _LIMIT_MAX]。"""
+        （identity + 归一化 BM25×量纲）→ 排名短名单。exclude_apis 为机制参数
+        （hide 模式的 (product_lower → api_lower) 排除集，排名前过滤保证
+        total/truncated 语义一致）；模块对废弃索引零认知。limit 缺省 8、
+        上限 _LIMIT_MAX；limit=-1 为不限制哨兵（返回全部命中，信封回显 -1
+        且 truncated 恒 False），其余值 clamp 到 [1, _LIMIT_MAX]。"""
         try:
             limit = int(limit)
         except (TypeError, ValueError):
@@ -143,8 +141,6 @@ class EntityGraph:
                            list[tuple[int, int, str]],
                            list[tuple[float, DocHit]]]] = []
         for ps, node in self.products.items():
-            if allowed is not None and ps not in allowed:
-                continue
             if category and category.lower() not in node.category.lower():
                 continue
             cand = self._score_product(node, terms, by_product.get(ps, []))

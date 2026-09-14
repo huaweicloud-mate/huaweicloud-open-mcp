@@ -26,7 +26,6 @@ from safety.policy_store import PolicyStore
 
 from .deprecated import load_deprecated_index
 from .entity_graph import load_entity_index
-from .gate import Gate, load_gate_file
 from .hints import Hints, load_hints_file
 from .service import ServiceConfig, ToolService
 from .spill import parse_spill_config
@@ -94,12 +93,9 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 """
 
 
-def build_instructions(gate: Gate, hints: Hints | None = None) -> str:
-    """按门栓生成 instructions：基础指引 + 产品授权范围 + 部署自定义指引段。"""
-    text = INSTRUCTIONS_OPENAPI + "\n## 产品授权范围\n\n- " + gate.describe() + "。\n"
-    if gate.restrict:
-        text += ("\n当用户请求的产品不在上述授权范围内时，不要调用任何工具，"
-                 "直接回复该产品不在授权范围内。\n")
+def build_instructions(hints: Hints | None = None) -> str:
+    """生成 instructions：基础指引 + 部署自定义指引段。"""
+    text = INSTRUCTIONS_OPENAPI
     global_text = (hints.instructions if hints is not None else None)
     if global_text:
         text += ("\n## 部署自定义指引\n\n" + global_text.strip() + "\n")
@@ -116,7 +112,6 @@ def build_openapi_config(args: argparse.Namespace, *,
     mock_passthrough = (args.mock_passthrough if getattr(args, "mock_passthrough", None) is not None
                         else os.environ.get("HUAWEICLOUD_MCP_MOCK_PASSTHROUGH", "")
                         in ("1", "true", "yes"))
-    gate_file = getattr(args, "gate", None) or os.environ.get("HUAWEICLOUD_MCP_OPENAPI_GATE")
     hints_file = getattr(args, "hints", None) or os.environ.get("HUAWEICLOUD_MCP_OPENAPI_HINTS")
     audit_file = (getattr(args, "audit_file", None)
                   or os.environ.get("HUAWEICLOUD_MCP_AUDIT_FILE"))
@@ -144,7 +139,6 @@ def build_openapi_config(args: argparse.Namespace, *,
         credentials=None if mock else cred_mod.get_credentials(),
         mock_base=mock_base or apie_mock.MOCK_BASE,
         mock_passthrough=mock_passthrough,
-        gate=load_gate_file(gate_file) if gate_file else Gate.unrestricted(),
         hints=load_hints_file(hints_file),
         deprecated_index=deprecated_index,
         deprecated_mode=deprecated_mode or ("annotate" if deprecated_file else "off"),
@@ -159,7 +153,7 @@ def build_openapi_app(service: ToolService | None = None, *,
                       elicit_mode: str = "off") -> MCPServer:
     svc = service or ToolService()
     server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
-                       instructions=build_instructions(svc.config.gate, svc.config.hints),
+                       instructions=build_instructions(svc.config.hints),
                        log_level=log_level)  # type: ignore[arg-type]
     register_openapi_tools(server, svc, consent_mode=elicit_mode)
     return server
@@ -191,8 +185,6 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         limit 默认 8、上限 20；limit=-1 为不限制哨兵（返回全部命中，truncated 恒 false）。
         废弃接口治理同 list_apis（--deprecated-mode annotate 标注 / hide 隐藏）。
         图谱为构建期快照（非实时）；未配置实体索引时返回拒绝。
-
-        授权范围见 instructions；越界产品不出现在结果中。
         """
         return svc.search_apis(query, limit=limit, category=category)
 
@@ -203,17 +195,12 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
         基于用户任务语义选择目标产品；不确定时用 keyword 按产品名/中文名搜索。
         选定产品后用 list_apis 浏览其 API 目录。
-
-        授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
-        当用户请求的产品不在授权范围时，不要调用任何工具，直接回复拒绝。
         """
         return svc.list_products(category=category, keyword=keyword)
 
     @server.tool()
     def get_product(product: str) -> ProductResult | ToolError:
         """确认单个产品详情（分类/是否全局级服务）。全局级服务（is_global=true）认证模型不同。
-
-        授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """
         return svc.get_product(product)
 
@@ -224,8 +211,6 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
         结果含 tag_groups（产品全量 tag 概览，不受过滤影响）：先用 tag 收窄目录，
         接口较多时用 search/limit/offset 分页浏览。选定候选接口后用 get_api 读文档。
-
-        授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """
         return svc.list_apis(product, tag=tag, search=search, limit=limit, offset=offset)
 
@@ -234,8 +219,6 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         """第三步：获取接口完整文档（方法/路径/参数必填性/类型/枚举/x-constraint 约束/响应结构）。
 
         执行前必读；x-constraint 描述调用前置条件与限制。
-
-        授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """
         return svc.get_api(product, api, region=region)
 
@@ -243,8 +226,6 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
     def get_api_examples(product: str, api: str,
                          region: str | None = None) -> ExamplesResult | ToolError:
         """获取接口的官方请求示例（x-request-examples），用于指导参数填写。
-
-        授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """
         return svc.get_api_examples(product, api, region=region)
 
@@ -277,8 +258,6 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         spill 信封（path/format/bytes/note 消费指引，部署混装 data 模式时指引
         query_data 直读该文件）；params["_spill"]=false 按次退出（控制键不进入
         请求）。未配置落盘目录时保持纯截断行为。
-
-        授权范围见 instructions；仅授权产品可见/可调用，越界返回拒绝。
         """
         result = svc.execute_api(product, api, region=region, params=params)
         if isinstance(result, dict) and result.get("ok") is False:

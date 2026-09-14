@@ -82,7 +82,7 @@ sequenceDiagram
     H->>A: agent 阶段
     A->>O: install：写 opencode.json（provider=MaaS、MCP=start_mcp.sh）
     O->>M: 渐进式工作流 list_products→list_apis→get_api→execute_api
-    M->>M: gate → safety policy → mock lane（passthrough）
+    M->>M: safety policy → mock lane（passthrough）
     M->>S: HTTP（参数上 wire）
     S-->>M: fixture 罐头响应（记台账）
     M-->>O: 结构化结果（审计追加 /tmp/hwc_audit.jsonl）

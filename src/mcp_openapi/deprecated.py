@@ -1,6 +1,6 @@
 """openapi 废弃接口索引（DeprecatedIndex）：部署侧配置驱动的发现面治理。
 
-与 Gate/Hints 同 idiom：--deprecated-index 配置文件 → DeprecatedIndex 值对象 →
+与 Hints 同 idiom：--deprecated-index 配置文件 → DeprecatedIndex 值对象 →
 service 在 list_apis 上做 annotate（结构化标注）/ hide（过滤）塑形。
 未配置（empty()）时行为与现状完全一致。数据由帮助中心补全管线生成
 （data/help_completions/deprecated.json）。

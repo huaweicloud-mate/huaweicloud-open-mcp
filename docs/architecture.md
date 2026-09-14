@@ -166,7 +166,6 @@ flowchart LR
 | S5 | APIE 管道各阶段 | 单测 + 迷你样本集成 + e2e 全量 | Swagger 2.0 schema |
 | S6 | benchmark 纯函数（case 加载校验 / 分层评分 / 统计基线 / trace 提取 / token 读取 / 本地 stub） | 单测（迷你 fixture / 回环 HTTP） | 手写字面量 + 独立构造样例调用序列 |
 | S7 | discover 模式（catalog / server 规则 / session 管理 / SDK 适配 / 7 工具） | 见 [mcp-discovery.md](mcp-discovery.md) | 字面量 + 互斥工具集合断言 |
-| S8 | openapi 产品门栓 `gate.py`（准入 / 过滤 / 文案）+ service 过滤/拒绝 + server 指令注入 | 见 [mcp-openapi.md](mcp-openapi.md) | 门栓示例配置 + 手写字面量 |
 
 S1–S5 细节见 [mcp-openapi.md](mcp-openapi.md)。纪律：red→green 垂直切片；只 mock 系统边界（外部 HTTP）；期望值来自独立真值，禁止同义反复。
 
@@ -178,7 +177,6 @@ S1–S5 细节见 [mcp-openapi.md](mcp-openapi.md)。纪律：red→green 垂直
 - [x] server instructions + 渐进式工作流指引
 - [x] SDK-HMAC-SHA256 签名（官方向量 + 真实云验证）
 - [x] safety policy（product + server 规则，无 policy 全拒；PolicyStore 热重载，manage_policy 增删无需重启）
-- [x] openapi 产品门栓（`Gate`，产品级白名单，提示词 + 元数据层准入）
 
 以上各项均含对应测试。`manage_policy` 的安全约定：Agent 需先向用户确认再授予最小规则；规则三档 scope——会话内（缺省，重启即失无需回收）/ 临时（TTL 自动过期）/ 永久（显式 scope="permanent" 落盘）。
 - [x] mock 模式全链路（`--mock` / `--mock-base`）

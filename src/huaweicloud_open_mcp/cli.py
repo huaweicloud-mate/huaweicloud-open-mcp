@@ -51,8 +51,6 @@ def main() -> None:
                              "交互客户端可 auto/required 显式开启确认门）")
     parser.add_argument("--audit-file", default=None,
                         help="审计事件 NDJSON 文件路径（环境变量 HUAWEICLOUD_MCP_AUDIT_FILE）")
-    parser.add_argument("--gate", default=None,
-                        help="openapi 产品门栓配置文件路径（环境变量 HUAWEICLOUD_MCP_OPENAPI_GATE）")
     parser.add_argument("--hints", default=None,
                         help="openapi 自定义提示注入配置文件路径"
                              "（缺省加载 configs/help-docs-hints.json，缺失静默跳过；"

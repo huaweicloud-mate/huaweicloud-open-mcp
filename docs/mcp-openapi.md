@@ -86,7 +86,7 @@ flowchart TD
 
 ### 3.1 OBS 预签发 URL（对象数据面 presign 单口径）
 
-OBS 对象字节搬运接口（PutObject / GetObject / AppendObject / UploadPart）**恒**经预签发 URL——真实模式下无需任何标志，gate/policy 判定通过后仅签发访问 URL（内部走 OBS「URL 中携带签名」口径，Expires 替换 Date 位），客户端拿 URL 直连 OBS 收发：
+OBS 对象字节搬运接口（PutObject / GetObject / AppendObject / UploadPart）**恒**经预签发 URL——真实模式下无需任何标志，policy 判定通过后仅签发访问 URL（内部走 OBS「URL 中携带签名」口径，Expires 替换 Date 位），客户端拿 URL 直连 OBS 收发：
 
 ```jsonc
 // 下载：返回 {ok:true, presign:{url, method:"GET", expires_in}}
@@ -100,7 +100,7 @@ execute_api("OBS", "PutObject", params={"bucket_name":"b", "object_key":"a.zip",
 语义要点：
 - **单口径**：名单接口不再提供 gateway 直传（无 body 过手），`presign.method` 即客户端应发起的动词；桶管理类接口（CreateBucket/SetBucketTagging 等）仍由 gateway 直连执行；
 - **部署拓扑无关**：server 可本地或远程，字节流都在「发起调用的那台机器 ↔ OBS」之间完成；不限大小、进度归客户端宿主能力；
-- **安全等价于原 API**：签发同样过 gate/safety policy（如 `OBS:GetObject=allow`），未授权即拒绝；URL 自带过期时间；
+- **安全等价于原 API**：签发同样过 safety policy（如 `OBS:GetObject=allow`），未授权即拒绝；URL 自带过期时间；
 - **mock 豁免**：--mock 模式下名单接口继续走 mock 端点。
 
 ## 4. 签名算法（SDK-HMAC-SHA256）
@@ -186,27 +186,7 @@ flowchart LR
 - region 规则：默认 `cn-north-4` 平铺，非默认 region 带 `{region}` 目录/后缀
 - 全部产物可重建，不入库（gitignore）
 
-## 8. 产品准入门栓（Gate）
-
-`src/mcp_openapi/gate.py`：产品级白名单，控制哪些产品可经 openapi 模式可见/调用。
-
-```mermaid
-flowchart LR
-    A["工具调用"] --> B{"Gate 配置？"}
-    B -->|未配置| C["不限制（全量可见）"]
-    B -->|已配置| D{"product ∈ allowed ?"}
-    D -->|是| E["放行"]
-    D -->|否| F["list_products 静默隐藏 /<br/>其余工具返回「不在授权范围内」"]
-```
-
-- 配置：`configs/openapi-gate.example.json`（`{"products": ["ECS", "VPC"]}`），CLI `--gate` / 环境变量 `HUAWEICLOUD_MCP_OPENAPI_GATE`
-- 默认语义：未配置 → 不限制（opt-in）；配置后严格白名单，未列出产品默认拒
-- 门控范围：`list_products` 静默隐藏越界产品；`get_product`/`list_apis`/`get_api`/`get_api_examples`/`execute_api` 返回「产品 X 不在 openapi mcp 授权范围内」
-- 提示词层级：`build_instructions(gate)` 把授权范围注入 instructions，各工具 docstring 附「仅授权产品可见/可调用」提示
-- 双层：`execute_api` 先过门栓（产品粗滤）再过 safety policy（API 细规则）
-- 按 productshort 匹配（大小写不敏感）；`api-docs` CLI 不受门栓影响
-
-## 9. 安全设计（product 规则）
+## 8. 安全设计（product 规则）
 
 ```mermaid
 flowchart LR
@@ -225,7 +205,7 @@ flowchart LR
 - 凭证约定：`HUAWEICLOUD_SDK_AK/SK/SECURITY_TOKEN/PROJECT_ID`（env 或 `~/.huaweicloud/credentials` [basic]）；E2E 测试从项目根 `.env` 加载（gitignore，已存在环境变量优先）
 - server 规则（`server:serverId[:toolPattern]=...`）见 [mcp-discovery.md](mcp-discovery.md)
 
-## 10. 测试接缝（S1–S5，另见 S8 门栓）
+## 9. 测试接缝（S1–S5）
 
 | 接缝 | 内容 | 测试方式 | 独立真值 |
 | --- | --- | --- | --- |
@@ -235,6 +215,5 @@ flowchart LR
 | S3 | 各工具纯函数（含 manage_policy 编排） | 单测，迷你样本 fixture | 自建迷你 OpenAPI 片段 |
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + urllib 打桩错误注入 | mock 端点返回 |
 | S5 | APIE 管道各阶段 | 单测 + 迷你样本集成 + e2e 全量 | Swagger 2.0 schema |
-| S8 | `gate.py` 产品门栓（parse/allows/filter_products/describe/load）+ service 门栓过滤/拒绝 + server 指令注入 | 纯函数单测 + service 注入 gate + server 装配断言 | 门栓示例配置 + 手写字面量 |
 
 S6 benchmark 接缝见 [architecture.md](architecture.md)。纪律：red→green 垂直切片；只 mock 系统边界（外部 HTTP）；期望值来自独立真值，禁止同义反复。

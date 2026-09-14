@@ -22,7 +22,6 @@ from mcp_discover.server import (
     register_discover_tools,
 )
 from mcp_discover.service import DiscoverService
-from mcp_openapi.gate import Gate
 from mcp_openapi.hints import Hints
 from mcp_openapi.server import (
     build_instructions,
@@ -35,18 +34,16 @@ from safety.policy_store import PolicyStore
 logger = logging.getLogger("huaweicloud_open_mcp.composite")
 
 
-def merge_instructions(modes: list[str], gate: "Gate | None",
-                       hints: "Hints | None") -> str:
-    """合并各模式指引：统一 H1 头，各模式正文降级为 H2 段（openapi 段 gate-aware）。
+def merge_instructions(modes: list[str], hints: "Hints | None") -> str:
+    """合并各模式指引：统一 H1 头，各模式正文降级为 H2 段。
 
-    gate/hints 为 None 时按不限制/空 hints 处理（仅 openapi 段消费）。
+    hints 为 None 时按空 hints 处理（仅 openapi 段消费）。
     """
-    openapi_gate: Gate = gate if gate is not None else Gate.unrestricted()
     openapi_hints: Hints = hints if hints is not None else Hints.empty()
     header = "# 华为云 Open MCP 使用指引（组合模式：" + " + ".join(modes) + "）"
     sections: list[tuple[str, str]] = []
     if "openapi" in modes:
-        sections.append(("openapi（OpenAPI 直连）", build_instructions(openapi_gate, openapi_hints)))
+        sections.append(("openapi（OpenAPI 直连）", build_instructions(openapi_hints)))
     if "discover" in modes:
         sections.append(("discover（MCP server 发现连接）", INSTRUCTIONS_DISCOVER))
     if "data" in modes:
@@ -110,10 +107,9 @@ def build_composite_app(modes: list[str], args: argparse.Namespace, *,
                 data_cfg.audit_sink = shared_sink
             data_svc = DataService(data_cfg)
 
-    gate = svc.config.gate if svc is not None else None
     hints = svc.config.hints if svc is not None else None
     server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
-                       instructions=merge_instructions(modes, gate, hints),
+                       instructions=merge_instructions(modes, hints),
                        log_level=log_level)  # type: ignore[arg-type]
 
     if svc is not None:

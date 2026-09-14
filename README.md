@@ -279,7 +279,7 @@ A hints file lets a deployment inject its own guidance into the discovery chain:
 ```
 
 - Official metadata is never replaced — hints ride along in an extra `hints` field (product + API notes are merged, product first).
-- Injected only on successful discovery results, never on denials (gate/policy rejections stay untouched); `get_api_examples` and `execute_api` are never annotated.
+- Injected only on successful discovery results, never on denials (policy rejections stay untouched); `get_api_examples` and `execute_api` are never annotated.
 - Product keys and `apis` keys are case-insensitive; a product value may be a plain string (product note only) or an object with `notes` / `apis`.
 - Optional top-level boolean `api_notes_in_list_apis` (default `true`): when `false`, `list_apis` items carry no API-level notes (top-level product notes and `get_api` merged notes are unaffected) — the generated help-center completion file sets this to `false` so `get_api` stays the only enriched surface.
 - Loaded at startup (no hot reload); invalid configs fail fast at startup.
@@ -338,7 +338,6 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--mock-passthrough` | off | Mock mode: forward execute business params to the mock endpoint (env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`) |
 | `--policy <file>` | — | Safety policy file; missing → all executions denied |
 | `--region <id>` | `cn-north-4` | Default region |
-| `--gate <file>` | — | Optional product gate (allowlist; unlisted products are hidden from the agent) |
 | `--hints <file\|off>` | `configs/help-docs-hints.json` (silent skip if absent) | Optional custom-hints file (deploy-side guidance injected into instructions and discovery results); `off` disables; bare filename resolves against `configs/` |
 | `--deprecated-index <file>` | — | Optional deprecated-API index; enables `list_apis` annotate/hide governance; bare filename resolves against `configs/` |
 | `--deprecated-mode <annotate\|hide\|off>` | `annotate` (when index configured) | `annotate` = `list_apis` items carry `deprecated: true` + `replacement` (counts unchanged); `hide` = deprecated APIs filtered from `list_apis` before pagination (counts stay coherent); `off` = no governance; affects `list_apis` only — `get_api`/`execute_api` always work; explicit mode requires `--deprecated-index` (env `HUAWEICLOUD_MCP_DEPRECATED_MODE`) |
@@ -361,7 +360,6 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `HUAWEICLOUD_MCP_MOCK_BASE` | Mock endpoint base URL override |
 | `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH` | Same as `--mock-passthrough` |
 | `HUAWEICLOUD_MCP_POLICY_FILE` | Same as `--policy` |
-| `HUAWEICLOUD_MCP_OPENAPI_GATE` | Same as `--gate` |
 | `HUAWEICLOUD_MCP_OPENAPI_HINTS` | Same as `--hints` |
 | `HUAWEICLOUD_MCP_DEPRECATED_INDEX` | Same as `--deprecated-index` |
 | `HUAWEICLOUD_MCP_DEPRECATED_MODE` | Same as `--deprecated-mode` |

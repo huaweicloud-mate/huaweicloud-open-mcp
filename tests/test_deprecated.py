@@ -238,7 +238,7 @@ def test_mode_hide_filters_and_get_api_still_works():
 
 def _args(**kw):
     base = dict(mock=True, policy=None, region=None, mock_base=None,
-                mock_passthrough=None, gate=None, hints=None, audit_file=None,
+                mock_passthrough=None, hints=None, audit_file=None,
                 spill_dir=None, deprecated_index=None, deprecated_mode=None)
     base.update(kw)
     return argparse.Namespace(**base)

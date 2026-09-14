@@ -96,7 +96,7 @@ def test_generated_hints_file_end_to_end(tmp_path):
 
     cfg = build_openapi_config(argparse.Namespace(
         mock=True, policy=None, region=None, mock_base=None,
-        mock_passthrough=None, gate=None, audit_file=None, spill_dir=None,
+        mock_passthrough=None, audit_file=None, spill_dir=None,
         hints=str(p)))
     assert cfg.hints.api_notes_in_list_apis is False
 

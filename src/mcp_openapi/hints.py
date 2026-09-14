@@ -1,12 +1,13 @@
 """openapi 自定义提示注入（Hints）：部署侧配置驱动的发现链提示。
 
-与产品门栓 Gate 同风格：--hints 配置文件 → Hints 值对象 → service 在发现
+与 DeprecatedIndex 同风格：--hints 配置文件 → Hints 值对象 → service 在发现
 工具结果信封附加提示字段、server instructions 追加全局段。未配置
 （empty()）时行为与现状完全一致。
 
 粒度：全局 instructions + 产品级 notes + API 级 apis。产品键归一化 upper
-（对齐 Gate）；API 键归一化 lower（大小写不敏感，对齐 apie.live_fallback
-匹配语义）。合并策略内聚于 combined_notes：产品在前、空段跳过、换行连接。
+（productshort 惯例）；API 键归一化 lower（大小写不敏感，对齐
+apie.live_fallback 匹配语义）。合并策略内聚于 combined_notes：产品在前、
+空段跳过、换行连接。
 """
 
 import json

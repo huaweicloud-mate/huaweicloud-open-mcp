@@ -6,7 +6,6 @@ import pytest
 
 from apie import mock as apie_mock
 from common import paths
-from mcp_openapi.gate import Gate, parse_gate
 from mcp_openapi.hints import Hints, parse_hints
 from mcp_openapi.server import build_app, build_config, build_instructions
 from mcp_openapi.service import ServiceConfig, ToolService
@@ -116,69 +115,6 @@ def test_discover_mode_tools_exclude_openapi():
         assert tool not in _tool_names(app)
 
 
-# ---------- 产品门栓（gate） ----------
-
-def test_build_instructions_lists_scope():
-    s = build_instructions(parse_gate(["ECS", "VPC"]))
-    assert "产品授权范围" in s
-    assert "ECS" in s
-    assert "VPC" in s
-
-
-def test_build_instructions_unrestricted():
-    assert "不限制" in build_instructions(Gate.unrestricted())
-
-
-def test_build_instructions_restricted_deny_hint():
-    s = build_instructions(parse_gate(["ECS"]))
-    assert "不要调用任何工具" in s
-    assert "直接回复" in s
-
-
-def test_build_instructions_unrestricted_no_deny_hint():
-    assert "不要调用任何工具" not in build_instructions(Gate.unrestricted())
-
-
-def test_list_products_description_deny_hint():
-    app = build_app()
-    desc = app._tool_manager._tools["list_products"].description
-    assert "直接回复拒绝" in desc
-
-
-def test_build_config_gate_arg(tmp_path):
-    p = tmp_path / "g.json"
-    p.write_text('{"products": ["ECS"]}', encoding="utf-8")
-    cfg = build_config(argparse.Namespace(
-        mock=True, policy=None, region=None, mock_base=None, gate=str(p)))
-    assert cfg.gate.allows("ECS")
-    assert not cfg.gate.allows("VPC")
-
-
-def test_build_config_gate_env(monkeypatch, tmp_path):
-    p = tmp_path / "g.json"
-    p.write_text('{"products": ["VPC"]}', encoding="utf-8")
-    monkeypatch.setenv("HUAWEICLOUD_MCP_OPENAPI_GATE", str(p))
-    cfg = build_config(_args())
-    assert cfg.gate.allows("VPC")
-    assert not cfg.gate.allows("ECS")
-
-
-def test_build_config_gate_default_unrestricted(monkeypatch):
-    monkeypatch.delenv("HUAWEICLOUD_MCP_OPENAPI_GATE", raising=False)
-    cfg = build_config(_args())
-    assert cfg.gate.restrict is False
-    assert cfg.gate.allows("ECS")
-
-
-def test_tool_descriptions_note_gate():
-    app = build_app()
-    for name in EXPECTED_TOOLS:
-        if name == "manage_policy":     # policy 自身不属产品门栓范围
-            continue
-        desc = app._tool_manager._tools[name].description
-        assert "授权范围见 instructions" in desc
-
-
 def test_manage_policy_description_notes_hot_reload_and_confirm():
     app = build_app()
     desc = app._tool_manager._tools["manage_policy"].description
@@ -200,15 +136,14 @@ def test_discover_manage_policy_description_notes_confirm():
 
 def test_build_instructions_appends_global_hints():
     h = parse_hints({"instructions": "全局指引"})
-    s = build_instructions(Gate.unrestricted(), h)
+    s = build_instructions(h)
     assert "部署自定义指引" in s
     assert "全局指引" in s
-    assert "产品授权范围" in s
 
 
 def test_build_instructions_without_hints_no_section():
-    assert "部署自定义指引" not in build_instructions(Gate.unrestricted())
-    assert "部署自定义指引" not in build_instructions(Gate.unrestricted(), Hints.empty())
+    assert "部署自定义指引" not in build_instructions()
+    assert "部署自定义指引" not in build_instructions(Hints.empty())
 
 
 def test_build_config_hints_arg(tmp_path):

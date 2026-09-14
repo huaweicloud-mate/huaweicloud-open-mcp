@@ -36,7 +36,7 @@ def _seal_from_repo_configs(tmp_path, monkeypatch):
 
 def make_args(**overrides):
     ns = argparse.Namespace(mock=True, policy=None, region=None, mock_base=None,
-                            mock_passthrough=None, gate=None, hints=None,
+                            mock_passthrough=None, hints=None,
                             audit_file=None)
     for k, v in overrides.items():
         setattr(ns, k, v)
@@ -100,7 +100,7 @@ def test_all_three_modes_toolset():
 # ---------- instructions 合并 ----------
 
 def test_merge_instructions_sections():
-    text = merge_instructions(["openapi", "data"], None, None)
+    text = merge_instructions(["openapi", "data"], None)
     assert "组合模式：openapi + data" in text
     assert "## 模式：openapi（OpenAPI 直连）" in text
     assert "## 模式：data（数据分析）" in text
