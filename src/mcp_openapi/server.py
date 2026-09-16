@@ -10,6 +10,7 @@ from mcp.server.mcpserver.context import Context
 
 from apie import mock as apie_mock
 from apie.convert_openapi2 import parse_auth_demote_policy
+from apie.metadata_corrections import load_metadata_corrections
 from common.audit import sink_from_path
 from common.auth import credentials as cred_mod
 from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
@@ -139,6 +140,8 @@ def build_openapi_config(args: argparse.Namespace, *,
                   or os.environ.get("HUAWEICLOUD_MCP_AUTH_DEMOTE"))
     demote_pass_raw = (getattr(args, "auth_demote_pass", None)
                        or os.environ.get("HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS"))
+    corrections_raw = (getattr(args, "metadata_corrections", None)
+                       or os.environ.get("HUAWEICLOUD_MCP_METADATA_CORRECTIONS"))
     return ServiceConfig(
         region=region or "cn-north-4",
         mock=mock,
@@ -152,6 +155,7 @@ def build_openapi_config(args: argparse.Namespace, *,
         deprecated_mode=deprecated_mode or ("annotate" if deprecated_file else "off"),
         entity_graph=load_entity_index(entity_index_file),
         auth_demote=parse_auth_demote_policy(demote_raw, demote_pass_raw),
+        corrections=load_metadata_corrections(corrections_raw),
         audit_sink=sink_from_path(audit_file),
         spill=parse_spill_config(spill_raw, data_enabled=data_enabled),
     )

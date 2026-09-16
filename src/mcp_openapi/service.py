@@ -16,6 +16,7 @@ from apie import catalog, metadata
 from apie import mock as apie_mock
 from apie.convert_openapi2 import AuthDemotePolicy
 from apie.memory_store import ApiHit, MemoryStore
+from apie.metadata_corrections import MetadataCorrections, correct_api_result
 from common.audit import AuditSink
 from common.audit import audited as _audited
 from common.auth.credentials import Credentials
@@ -91,6 +92,7 @@ class ServiceConfig:
     deprecated_mode: str = "off"
     entity_graph: EntityGraph = EntityGraph.empty()
     auth_demote: AuthDemotePolicy = AuthDemotePolicy()
+    corrections: MetadataCorrections = MetadataCorrections.empty()
     audit_sink: AuditSink | None = None
     spill: SpillConfig | None = field(default_factory=SpillConfig.default)
 
@@ -378,7 +380,9 @@ class ToolService:
             logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
-        out = metadata.format_api_detail(doc, product, path, method, op)
+        out: Any = metadata.format_api_detail(doc, product, path, method, op)
+        out = correct_api_result(cast(dict[str, Any], out),
+                                 self.config.corrections)
         return cast(ApiDetailResult, self._with_combined_hints(out, product, api))
 
     @_audited

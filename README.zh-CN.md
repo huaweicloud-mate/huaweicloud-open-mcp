@@ -346,6 +346,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--spill-dir <dir>` | 系统临时目录（`hwc-mcp-spill`） | 超大响应/信封落盘目录（空串或 `off` 禁用落盘，回落纯截断） |
 | `--auth-demote on\|off` | `on` | 认证头 required 元数据归一：转换时把 x-auth-token/x-security-token/authorization（大小写不敏感）的 required 降为 false——本网关认证恒由 AK/SK 签名层供给，agent 无需构造 token；`off` 保留元数据原样（env `HUAWEICLOUD_MCP_AUTH_DEMOTE`） |
 | `--auth-demote-pass <list>` | — | 认证头归一豁免名单：逗号分隔 `PRODUCT:API`（精确）或 `PRODUCT`/`PRODUCT:*`（产品级），名单内 API 元数据保持原样；仅影响元数据归一，不影响校验层（env `HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS`） |
+| `--metadata-corrections <path>` | 随包 `configs/metadata-corrections.json` | 元数据纠偏：上游元数据与官方帮助文档不一致的 doc-verified 事实修正（首例：`RDS:StartupInstance` x-constraint），逐 API 精确键 `drop`（删行）/`replace`（整字段替换）patch；copy-on-write 作用于 get_api 信封与离线产物，缓存 doc 恒不改写；裸文件名解析同 `--hints`（env `HUAWEICLOUD_MCP_METADATA_CORRECTIONS`） |
 | `--audit-file <file>` | disabled | 审计落盘（NDJSON）：每次工具调用一行 `{ts, tool, input, ok}` |
 | `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | 日志（轮转文件；stderr 同步 WARNING+） |
 
@@ -370,6 +371,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `HUAWEICLOUD_MCP_SPILL_DIR` | 等价 `--spill-dir` |
 | `HUAWEICLOUD_MCP_AUTH_DEMOTE` | 等价 `--auth-demote`（`on`/`off`） |
 | `HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS` | 等价 `--auth-demote-pass` |
+| `HUAWEICLOUD_MCP_METADATA_CORRECTIONS` | 等价 `--metadata-corrections` |
 | `HUAWEICLOUD_MCP_ELICIT` | 等价 `--elicitation` |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | 等价 `--log-level` / `--log-file` |
 
