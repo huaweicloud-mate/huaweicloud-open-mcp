@@ -6,6 +6,7 @@
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, cast
 
 logger = logging.getLogger("apie.convert_openapi2")
@@ -386,7 +387,109 @@ def finalize(doc: dict[str, Any]) -> dict[str, Any]:
     return doc
 
 
-def convert_api(api: dict[str, Any]) -> dict[str, Any]:
+# 认证相关 header（2026-09 起，大小写不敏感）：本网关认证恒由 AK/SK 签名层供给
+# （SDK-HMAC-SHA256 生成 Authorization + X-Security-Token），元数据「认证头必填」
+# 在内部契约里恒为假——实测语料 casing 混乱（x-auth-token 小写 869 处/混合 19 处，
+# required=true 的认证头参数 doc-global 2,864 + op 级 698+103+6,428 处），
+# 转换时统一把 required 降级为 false（get_api 展示与 execute 校验同源一致）。
+# 豁免名单（AuthDemotePolicy.exempt）覆盖个别确需 token 的 API：名单内元数据保持原样。
+AUTH_HEADER_NAMES = frozenset({"x-auth-token", "x-security-token", "authorization"})
+
+
+@dataclass(frozen=True)
+class AuthDemotePolicy:
+    """认证头 required 降级策略（启动期常量，随配置线程进 convert_api）。
+
+    enabled=False 完全禁用降级；exempt 为 (product, api) casefold 归一元组，
+    api 位 "*" 表示产品级豁免。豁免仅影响元数据归一，不影响校验层
+    （校验层恒跳过认证头必填，服务端 401 为真值兜底）。
+    """
+
+    enabled: bool = True
+    exempt: frozenset[tuple[str, str]] = frozenset()
+
+
+def _auth_exempt(product: str, api: str, exempt: frozenset[tuple[str, str]]) -> bool:
+    p = (product or "").casefold()
+    a = (api or "").casefold()
+    if not p:
+        return False
+    return (p, "*") in exempt or (p, a) in exempt
+
+
+def demote_auth_headers(doc: dict[str, Any], product: str, api: str,
+                        policy: AuthDemotePolicy | None = None) -> dict[str, Any]:
+    """认证头参数 required 降级（幂等 in-place，finalize 同 idiom）。
+
+    覆盖 doc-global parameters（dict/list 两形）、path 级、op 级三处；
+    in=header 且名字 casefold 命中 AUTH_HEADER_NAMES 且 required 真值才改写。
+    豁免命中（产品级或精确 API）时整 doc 保持原样。
+    """
+    policy = policy or AuthDemotePolicy()
+    if not policy.enabled or _auth_exempt(product, api, policy.exempt):
+        return doc
+    groups: list[dict[str, Any]] = []
+    params = doc.get("parameters")
+    if isinstance(params, dict):
+        groups.extend(p for p in params.values() if isinstance(p, dict))
+    elif isinstance(params, list):
+        groups.extend(p for p in params if isinstance(p, dict))
+    for path_item in (doc.get("paths") or {}).values():
+        if not isinstance(path_item, dict):
+            continue
+        groups.extend(p for p in (path_item.get("parameters") or [])
+                      if isinstance(p, dict))
+        for op in path_item.values():
+            if isinstance(op, dict):
+                groups.extend(p for p in (op.get("parameters") or [])
+                              if isinstance(p, dict))
+    for p in groups:
+        if p.get("in") != "header":
+            continue
+        name = p.get("name")
+        if (isinstance(name, str) and name.casefold() in AUTH_HEADER_NAMES
+                and p.get("required")):
+            p["required"] = False
+    return doc
+
+
+def parse_auth_demote_policy(demote: str | None = None,
+                             pass_list: str | None = None) -> AuthDemotePolicy:
+    """装配解析：--auth-demote / --auth-demote-pass（或对应 env）→ 策略。
+
+    demote：None/空串→默认开启；"on"→开启；"off"→禁用；其余 fail-fast。
+    pass_list：逗号分隔条目，"PRODUCT:API"（精确）/ "PRODUCT" 或 "PRODUCT:*"
+    （产品级）；条目缺产品名 fail-fast；大小写 casefold 归一。配置错误要响，
+    仿 hints 严格校验先例。
+    """
+    enabled = True
+    if demote is not None:
+        value = demote.strip().lower()
+        if value == "off":
+            enabled = False
+        elif value not in ("", "on"):
+            raise ValueError(
+                f"无效的 --auth-demote 值: {demote!r}（可选 on/off）")
+    exempt: set[tuple[str, str]] = set()
+    if pass_list:
+        for raw in pass_list.split(","):
+            entry = raw.strip()
+            if not entry:
+                continue
+            product, sep, api = entry.partition(":")
+            p = product.strip().casefold()
+            if not p:
+                raise ValueError(
+                    f"--auth-demote-pass 条目缺少产品名: {entry!r}")
+            a = api.strip().casefold()
+            if not sep or a in ("", "*"):
+                a = "*"
+            exempt.add((p, a))
+    return AuthDemotePolicy(enabled=enabled, exempt=frozenset(exempt))
+
+
+def convert_api(api: dict[str, Any], *,
+                auth_demote: AuthDemotePolicy | None = None) -> dict[str, Any]:
     has3 = bool(api.get("components")) or any(
         (m.get("requestBody") is not None) or any(
             isinstance(c, dict) and c.get("content")
@@ -400,6 +503,9 @@ def convert_api(api: dict[str, Any]) -> dict[str, Any]:
         doc = fix_2_doc(api)
 
     doc = finalize(doc)
+    product = api.get("product_short") or ""
+    name = api.get("name") or ""
+    doc = demote_auth_headers(doc, product, name, auth_demote)
     doc = convert_ref(doc, doc)
     doc = fix_schema_type(doc)
     return cast(dict[str, Any], doc)

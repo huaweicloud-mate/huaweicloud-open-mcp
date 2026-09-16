@@ -79,6 +79,17 @@ def main() -> None:
                         help="openapi 超限响应/信封落盘目录（环境变量 "
                              "HUAWEICLOUD_MCP_SPILL_DIR；缺省为系统临时目录 "
                              "hwc-mcp-spill，空串或 off 禁用落盘）")
+    parser.add_argument("--auth-demote", default=None, choices=["on", "off"],
+                        help="认证头 required 元数据归一：转换时把 x-auth-token/"
+                             "x-security-token/authorization（大小写不敏感）的 "
+                             "required 降级为 false——本网关认证恒由 AK/SK 签名层"
+                             "供给；默认 on，off 保留元数据原样"
+                             "（环境变量 HUAWEICLOUD_MCP_AUTH_DEMOTE）")
+    parser.add_argument("--auth-demote-pass", default=None,
+                        help="认证头归一豁免名单：逗号分隔 PRODUCT:API（精确）或 "
+                             "PRODUCT/PRODUCT:*（产品级），名单内 API 元数据保持"
+                             "原样（仅影响元数据归一，不影响校验层；"
+                             "环境变量 HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS）")
     parser.add_argument("--region", default=None, help="默认 region（openapi 模式，默认 cn-north-4）")
     parser.add_argument("--log-level", default=None, help="日志级别（默认 INFO）")
     parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")

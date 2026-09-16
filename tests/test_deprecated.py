@@ -239,7 +239,8 @@ def test_mode_hide_filters_and_get_api_still_works():
 def _args(**kw):
     base = dict(mock=True, policy=None, region=None, mock_base=None,
                 mock_passthrough=None, hints=None, audit_file=None,
-                spill_dir=None, deprecated_index=None, deprecated_mode=None)
+                spill_dir=None, deprecated_index=None, deprecated_mode=None,
+                auth_demote=None, auth_demote_pass=None)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -285,3 +286,50 @@ def test_build_config_deprecated_env(monkeypatch, tmp_path):
     cfg = build_openapi_config(_args())
     assert cfg.deprecated_mode == "annotate"
     assert cfg.deprecated_index.names("ECS") == {"a"}
+
+
+# ---------- auth demote 装配（2026-09） ----------
+
+def test_build_config_auth_demote_default_on(monkeypatch):
+    monkeypatch.delenv("HUAWEICLOUD_MCP_AUTH_DEMOTE", raising=False)
+    monkeypatch.delenv("HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS", raising=False)
+    cfg = build_openapi_config(_args())
+    assert cfg.auth_demote.enabled is True
+    assert cfg.auth_demote.exempt == frozenset()
+
+
+def test_build_config_auth_demote_off(monkeypatch):
+    monkeypatch.delenv("HUAWEICLOUD_MCP_AUTH_DEMOTE", raising=False)
+    cfg = build_openapi_config(_args(auth_demote="off"))
+    assert cfg.auth_demote.enabled is False
+
+
+def test_build_config_auth_demote_env_off(monkeypatch):
+    monkeypatch.setenv("HUAWEICLOUD_MCP_AUTH_DEMOTE", "off")
+    cfg = build_openapi_config(_args())
+    assert cfg.auth_demote.enabled is False
+
+
+def test_build_config_auth_demote_pass_list(monkeypatch):
+    monkeypatch.delenv("HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS", raising=False)
+    cfg = build_openapi_config(_args(auth_demote_pass="RDS:ListVolumeInfo,DDS"))
+    assert cfg.auth_demote.exempt == frozenset(
+        {("rds", "listvolumeinfo"), ("dds", "*")})
+
+
+def test_build_config_auth_demote_pass_env(monkeypatch):
+    monkeypatch.setenv("HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS", "RDS:ListVolumeInfo")
+    cfg = build_openapi_config(_args())
+    assert cfg.auth_demote.exempt == frozenset({("rds", "listvolumeinfo")})
+
+
+def test_build_config_auth_demote_invalid_flag_raises(monkeypatch):
+    monkeypatch.delenv("HUAWEICLOUD_MCP_AUTH_DEMOTE", raising=False)
+    with pytest.raises(ValueError):
+        build_openapi_config(_args(auth_demote="banana"))
+
+
+def test_build_config_auth_demote_invalid_pass_entry_raises(monkeypatch):
+    monkeypatch.delenv("HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS", raising=False)
+    with pytest.raises(ValueError):
+        build_openapi_config(_args(auth_demote_pass=":X"))

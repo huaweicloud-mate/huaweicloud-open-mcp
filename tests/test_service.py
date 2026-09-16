@@ -121,6 +121,66 @@ def test_load_api_doc_missing():
     assert ToolService(store=store).load_api_doc("ECS", "X") is None
 
 
+RAW_DETAIL_AUTH_SERVICE = {
+    "name": "ListVolumeInfo",
+    "product_short": "RDS",
+    "host": "rds.cn-north-4.myhuaweicloud.com",
+    "paths": {
+        "/v3/{project_id}/instances/{instance_id}/volumes": {
+            "get": {
+                "operationId": "ListVolumeInfo",
+                "parameters": [
+                    {"name": "x-auth-token", "in": "header",
+                     "type": "string", "required": True},
+                    {"name": "instance_id", "in": "path",
+                     "type": "string", "required": True},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            }
+        }
+    },
+}
+
+
+def _svc_auth_hit(monkeypatch, config):
+    """ServiceConfig.auth_demote → load_api_doc → catalog → LiveFallback →
+    convert_api 线程：explorer 注入 mini raw，返回 (hit, auth_required)。"""
+    import copy
+
+    from apie import explorer
+
+    # 深拷贝：demote 是 in-place 改写，浅拷贝会经共享嵌套结构污染模块级字典
+    monkeypatch.setattr(explorer.http, "fetch_json_retry",
+                        lambda url, **kw: (copy.deepcopy(RAW_DETAIL_AUTH_SERVICE), None))
+    svc = ToolService(config=config)
+    hit = svc.load_api_doc("RDS", "ListVolumeInfo", "cn-north-4")
+    assert hit is not None
+    doc, path, method, op = hit
+    required = [p.get("required") for p in op["parameters"]
+                if p.get("in") == "header"
+                and p["name"].casefold() == "x-auth-token"][0]
+    return hit, required
+
+
+def test_load_api_doc_auth_demote_default(monkeypatch):
+    _, required = _svc_auth_hit(monkeypatch, ServiceConfig())
+    assert required is False
+
+
+def test_load_api_doc_auth_demote_exempt(monkeypatch):
+    from apie.convert_openapi2 import AuthDemotePolicy
+    policy = AuthDemotePolicy(exempt=frozenset({("rds", "listvolumeinfo")}))
+    _, required = _svc_auth_hit(monkeypatch, ServiceConfig(auth_demote=policy))
+    assert required is True
+
+
+def test_load_api_doc_auth_demote_disabled(monkeypatch):
+    from apie.convert_openapi2 import AuthDemotePolicy
+    _, required = _svc_auth_hit(
+        monkeypatch, ServiceConfig(auth_demote=AuthDemotePolicy(enabled=False)))
+    assert required is True
+
+
 def test_metadata_tools_are_logged(caplog):
     import logging
     store = _prep_store()

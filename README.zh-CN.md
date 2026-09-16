@@ -344,6 +344,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--deprecated-mode <annotate\|hide\|off>` | `annotate`（配置索引时） | `annotate`=`list_apis` 条目附加 `deprecated: true` + `replacement`（总数/tag_groups 不变）；`hide`=分页前过滤废弃条目（计数同口径）；`off`=不治理；仅影响 `list_apis`——`get_api`/`execute_api` 恒可用；显式传 mode 需同时配置 `--deprecated-index`（环境变量 `HUAWEICLOUD_MCP_DEPRECATED_MODE`） |
 | `--elicitation auto\|required\|off` | `off` | policy 变更的 MCP elicitation 确认 |
 | `--spill-dir <dir>` | 系统临时目录（`hwc-mcp-spill`） | 超大响应/信封落盘目录（空串或 `off` 禁用落盘，回落纯截断） |
+| `--auth-demote on\|off` | `on` | 认证头 required 元数据归一：转换时把 x-auth-token/x-security-token/authorization（大小写不敏感）的 required 降为 false——本网关认证恒由 AK/SK 签名层供给，agent 无需构造 token；`off` 保留元数据原样（env `HUAWEICLOUD_MCP_AUTH_DEMOTE`） |
+| `--auth-demote-pass <list>` | — | 认证头归一豁免名单：逗号分隔 `PRODUCT:API`（精确）或 `PRODUCT`/`PRODUCT:*`（产品级），名单内 API 元数据保持原样；仅影响元数据归一，不影响校验层（env `HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS`） |
 | `--audit-file <file>` | disabled | 审计落盘（NDJSON）：每次工具调用一行 `{ts, tool, input, ok}` |
 | `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | 日志（轮转文件；stderr 同步 WARNING+） |
 
@@ -366,6 +368,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `HUAWEICLOUD_MCP_DEPRECATED_MODE` | 等价 `--deprecated-mode` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | 等价 `--audit-file` |
 | `HUAWEICLOUD_MCP_SPILL_DIR` | 等价 `--spill-dir` |
+| `HUAWEICLOUD_MCP_AUTH_DEMOTE` | 等价 `--auth-demote`（`on`/`off`） |
+| `HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS` | 等价 `--auth-demote-pass` |
 | `HUAWEICLOUD_MCP_ELICIT` | 等价 `--elicitation` |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | 等价 `--log-level` / `--log-file` |
 

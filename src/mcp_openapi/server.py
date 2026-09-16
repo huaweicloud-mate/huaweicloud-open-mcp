@@ -9,6 +9,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
 
 from apie import mock as apie_mock
+from apie.convert_openapi2 import parse_auth_demote_policy
 from common.audit import sink_from_path
 from common.auth import credentials as cred_mod
 from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
@@ -68,6 +69,9 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
   `temporary` 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ `permanent` 永久
   （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内/临时；
   `remove` 跨层回收（先会话/临时后文件，首个语义命中移除）。
+- 认证由网关 AK/SK 签名层自动供给：不要在 params 里构造 x-auth-token 等
+  认证头（元数据 required 标注已按此口径归一；部署豁免名单内的 API 以
+  get_api 返回的 required 为准）。
 
 ## 超大响应落盘（spill）
 
@@ -131,6 +135,10 @@ def build_openapi_config(args: argparse.Namespace, *,
     spill_raw = getattr(args, "spill_dir", None)
     if spill_raw is None:
         spill_raw = os.environ.get("HUAWEICLOUD_MCP_SPILL_DIR")
+    demote_raw = (getattr(args, "auth_demote", None)
+                  or os.environ.get("HUAWEICLOUD_MCP_AUTH_DEMOTE"))
+    demote_pass_raw = (getattr(args, "auth_demote_pass", None)
+                       or os.environ.get("HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS"))
     return ServiceConfig(
         region=region or "cn-north-4",
         mock=mock,
@@ -143,6 +151,7 @@ def build_openapi_config(args: argparse.Namespace, *,
         deprecated_index=deprecated_index,
         deprecated_mode=deprecated_mode or ("annotate" if deprecated_file else "off"),
         entity_graph=load_entity_index(entity_index_file),
+        auth_demote=parse_auth_demote_policy(demote_raw, demote_pass_raw),
         audit_sink=sink_from_path(audit_file),
         spill=parse_spill_config(spill_raw, data_enabled=data_enabled),
     )

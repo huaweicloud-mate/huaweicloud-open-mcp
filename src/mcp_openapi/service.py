@@ -14,6 +14,7 @@ from typing import Any, Callable, Sequence, TypeVar, cast
 
 from apie import catalog, metadata
 from apie import mock as apie_mock
+from apie.convert_openapi2 import AuthDemotePolicy
 from apie.memory_store import ApiHit, MemoryStore
 from common.audit import AuditSink
 from common.audit import audited as _audited
@@ -89,6 +90,7 @@ class ServiceConfig:
     deprecated_index: DeprecatedIndex = DeprecatedIndex.empty()
     deprecated_mode: str = "off"
     entity_graph: EntityGraph = EntityGraph.empty()
+    auth_demote: AuthDemotePolicy = AuthDemotePolicy()
     audit_sink: AuditSink | None = None
     spill: SpillConfig | None = field(default_factory=SpillConfig.default)
 
@@ -121,7 +123,8 @@ class ToolService:
                      ) -> ApiHit | None:
         """查找接口 OpenAPI 文档（内存缓存或远端拉取），返回 (doc, path, method, op) 或 None。"""
         return catalog.find_api_doc(self.store, product, api_name,
-                                    region or self.config.region)
+                                    region or self.config.region,
+                                    auth_demote=self.config.auth_demote)
 
     def _effective_policy_rules(self) -> Sequence[safety_policy.PolicyRule] | None:
         """当前生效规则：注入 PolicyStore 时实时热加载，否则用启动快照。"""

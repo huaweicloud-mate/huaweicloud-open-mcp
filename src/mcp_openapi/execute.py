@@ -27,11 +27,13 @@ _TYPE_CHECKS: dict[str, Callable[[Any], bool]] = {
 }
 
 # 认证相关 header——由签名层自动注入（AK/SK 签名生成 Authorization +
-# X-Security-Token；token 认证生成 X-Auth-Token），不要求用户传入
+# X-Security-Token；token 认证生成 X-Auth-Token），不要求用户传入。
+# 匹配大小写不敏感（HTTP 头语义本就如此）：元数据 casing 混乱——x-auth-token
+# 小写 869 处、X-Auth-token/x-Auth-Token 混合 19 处，精确匹配曾误拒 698 个 API op。
 _AUTH_HEADERS = frozenset({
-    "X-Auth-Token",
-    "X-Security-Token",
-    "Authorization",
+    "x-auth-token",
+    "x-security-token",
+    "authorization",
 })
 
 # 全局默认 Content-Type（2026-09 起）：real lane 全部请求（含无 body 的 GET/DELETE）
@@ -95,7 +97,8 @@ def validate_params(doc: dict[str, Any], path: str, op: dict[str, Any],
     口径：只校验文档声明了的参数（未声明宽容透传）；`_` 前缀控制键天然跳过；
     标量类型严格（integer/number/boolean 不接受字符串形式，bool 混入数值显式
     排除）；header 协议即字符串故只查必填不查类型，但认证 header
-    （X-Auth-Token/X-Security-Token/Authorization）由签名层自动注入故跳过；
+    （x-auth-token/x-security-token/authorization，大小写不敏感）由签名层自动
+    注入故跳过——豁免名单（AuthDemotePolicy）只影响元数据归一，不影响本校验层；
     body 用 jsonschema（Draft4 + doc.definitions resolver）校验。
     路径参数不在此校验：mock URL 不含 path，路径语义仅 real lane 有意义
     （build_request 内守卫）；`path` 形参仅为签名对称保留。
@@ -113,7 +116,7 @@ def validate_params(doc: dict[str, Any], path: str, op: dict[str, Any],
         value = params.get(name)
         if pin == "path":
             continue
-        if pin == "header" and name in _AUTH_HEADERS:
+        if pin == "header" and name.casefold() in _AUTH_HEADERS:
             continue
         if pin == "body":
             if isinstance(p.get("schema"), dict) and body_schema is None:

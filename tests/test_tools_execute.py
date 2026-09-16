@@ -451,6 +451,18 @@ def test_validate_params_auth_header_skipped():
     assert execute.validate_params({}, "/x", op, {}, None) is None
 
 
+def test_validate_params_auth_header_skipped_case_insensitive():
+    """认证头匹配大小写不敏感：元数据 casing 混乱（x-auth-token 小写 869 处/
+    X-Auth-token 等混合 19 处），漏匹配曾误拒 698 个 API op。"""
+    op = _op(
+        {"name": "x-auth-token", "in": "header", "type": "string", "required": True},
+        {"name": "X-Auth-token", "in": "header", "type": "string", "required": True},
+        {"name": "x-Auth-Token", "in": "header", "type": "string", "required": True},
+        {"name": "authorization", "in": "header", "type": "string", "required": True},
+    )
+    assert execute.validate_params({}, "/x", op, {}, None) is None
+
+
 def test_validate_params_body_required_field_missing():
     doc = {"definitions": {"keypair": {
         "type": "object", "required": ["name"],

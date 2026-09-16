@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from . import explorer
+from .convert_openapi2 import AuthDemotePolicy
 from .live_fallback import LiveFallback
 from .memory_store import ApiHit, MemoryStore
 
@@ -44,16 +45,19 @@ def get_apis(store: MemoryStore, product: str) -> list[dict[str, Any]] | None:
 
 
 def find_api_doc(store: MemoryStore, product: str, api: str,
-                 region: str) -> ApiHit | None:
+                 region: str,
+                 auth_demote: AuthDemotePolicy | None = None) -> ApiHit | None:
     """查找接口 OpenAPI 文档。内存缓存命中直接返回；
     未命中时远端拉取并缓存；失败返回 None。
     返回 (doc, path, method, op) 或 None。
+    auth_demote 为认证头 required 降级策略（启动期常量；doc 随首次转换
+    固化进缓存，同进程内策略变更不回溯生效——见 live_fallback）。
     """
     hit = store.find_api(product, api, region)
     if hit is not None:
         return hit
     try:
-        fallback = LiveFallback(store)
+        fallback = LiveFallback(store, auth_demote=auth_demote)
         result = fallback.fetch(product, api, region)
         if result is not None:
             return result

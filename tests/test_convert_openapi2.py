@@ -3,6 +3,8 @@
 import json
 import os
 
+import pytest
+
 from apie import convert_openapi2 as conv
 
 # ---------- fix_schema_type ----------
@@ -239,3 +241,214 @@ def test_converted_obs_doc_validates(swagger_schema):
     doc = conv.convert_api(raw)
     errs = list(Draft4Validator(swagger_schema).iter_errors(doc))
     assert errs == [], f"OBS 转换文档校验失败: {errs[:3]}"
+
+
+# ---------- 认证头 required 降级（auth demote，2026-09） ----------
+
+def _demote_doc():
+    """转换后 doc 形：doc-global（dict 形）/path 级/op 级 认证头大小写变体 + 对照参数。"""
+    return {
+        "swagger": "2.0",
+        "host": "rds.cn-north-4.myhuaweicloud.com",
+        "parameters": {
+            "GlobalAuth": {"name": "x-auth-token", "in": "header",
+                           "type": "string", "required": True},
+            "GlobalKeep": {"name": "X-Project-Id", "in": "header",
+                           "type": "string", "required": True},
+        },
+        "paths": {
+            "/v3/{project_id}/instances/{instance_id}/volumes": {
+                "parameters": [
+                    {"name": "X-Auth-token", "in": "header",
+                     "type": "string", "required": True},
+                ],
+                "get": {
+                    "operationId": "ListVolumeInfo",
+                    "parameters": [
+                        {"name": "x-auth-token", "in": "header",
+                         "type": "string", "required": True},
+                        {"name": "x-security-token", "in": "header",
+                         "type": "string", "required": True},
+                        {"name": "Authorization", "in": "header",
+                         "type": "string", "required": True},
+                        {"name": "X-Auth-Token", "in": "header",
+                         "type": "string", "required": True},
+                        {"name": "x-Auth-Token", "in": "header",
+                         "type": "string", "required": True},
+                        {"name": "X-Language", "in": "header", "type": "string"},
+                        {"name": "instance_id", "in": "path",
+                         "type": "string", "required": True},
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                },
+            }
+        },
+    }
+
+
+def _auth_requireds(doc):
+    """收集 doc 里全部 (header 名, required)（doc-global/path 级/op 级）。"""
+    out = []
+    for v in doc["parameters"].values():
+        if v.get("in") == "header":
+            out.append((v["name"], v.get("required")))
+    for item in doc["paths"].values():
+        for p in item.get("parameters") or []:
+            if p.get("in") == "header":
+                out.append((p["name"], p.get("required")))
+        for op in item.values():
+            if isinstance(op, dict):
+                for p in op.get("parameters") or []:
+                    if p.get("in") == "header":
+                        out.append((p["name"], p.get("required")))
+    return out
+
+
+def _auth_only_requireds(doc):
+    """只看认证头（豁免/禁用断言用，排除 X-Language 等非认证对照头）。"""
+    return [(n, r) for n, r in _auth_requireds(doc)
+            if n.casefold() in conv.AUTH_HEADER_NAMES]
+
+
+def test_demote_auth_headers_default_all_levels_and_casings():
+    doc = _demote_doc()
+    conv.demote_auth_headers(doc, "RDS", "ListVolumeInfo")
+    assert _auth_requireds(doc) == [
+        ("x-auth-token", False),    # doc-global 认证头
+        ("X-Project-Id", True),     # doc-global 非认证对照头，required 不动
+        ("X-Auth-token", False),    # path 级混合大小写
+        ("x-auth-token", False),    # op 级小写
+        ("x-security-token", False),
+        ("Authorization", False),
+        ("X-Auth-Token", False),
+        ("x-Auth-Token", False),
+        ("X-Language", None),       # 无 required 键，保持缺省
+    ]
+    # 对照红线：非认证头 required 不动
+    assert doc["parameters"]["GlobalKeep"]["required"] is True
+    op = list(doc["paths"].values())[0]["get"]
+    path_param = [p for p in op["parameters"] if p["name"] == "instance_id"][0]
+    assert path_param["required"] is True
+    lang = [p for p in op["parameters"] if p["name"] == "X-Language"][0]
+    assert "required" not in lang
+
+
+def test_demote_auth_headers_exempt_exact_casefold():
+    policy = conv.AuthDemotePolicy(exempt=frozenset({("rds", "listvolumeinfo")}))
+    doc = _demote_doc()
+    conv.demote_auth_headers(doc, "RDS", "ListVolumeInfo", policy)
+    assert all(req is True for _, req in _auth_only_requireds(doc))
+    # 同产品其他 API 照降
+    doc2 = _demote_doc()
+    conv.demote_auth_headers(doc2, "RDS", "CreateInstance", policy)
+    assert all(req is False for _, req in _auth_only_requireds(doc2))
+
+
+def test_demote_auth_headers_exempt_product_wide():
+    policy = conv.AuthDemotePolicy(exempt=frozenset({("rds", "*")}))
+    doc = _demote_doc()
+    conv.demote_auth_headers(doc, "RDS", "Anything", policy)
+    assert all(req is True for _, req in _auth_only_requireds(doc))
+    doc2 = _demote_doc()
+    conv.demote_auth_headers(doc2, "DDS", "Anything", policy)
+    assert all(req is False for _, req in _auth_only_requireds(doc2))
+
+
+def test_demote_auth_headers_disabled():
+    policy = conv.AuthDemotePolicy(enabled=False)
+    doc = _demote_doc()
+    conv.demote_auth_headers(doc, "RDS", "ListVolumeInfo", policy)
+    assert all(req is True for _, req in _auth_only_requireds(doc))
+
+
+def test_demote_auth_headers_idempotent():
+    doc = _demote_doc()
+    conv.demote_auth_headers(doc, "RDS", "ListVolumeInfo")
+    snapshot = json.dumps(doc, sort_keys=True)
+    conv.demote_auth_headers(doc, "RDS", "ListVolumeInfo")
+    assert json.dumps(doc, sort_keys=True) == snapshot
+
+
+def test_demote_auth_headers_missing_payload_names_no_exempt():
+    policy = conv.AuthDemotePolicy(exempt=frozenset({("rds", "listvolumeinfo")}))
+    doc = _demote_doc()
+    conv.demote_auth_headers(doc, "", "", policy)
+    assert all(req is False for _, req in _auth_only_requireds(doc))
+
+
+def _demote_raw():
+    """raw 条目形（name/product_short 顶层字段，运行时详情载荷与离线管道同形）。"""
+    return {
+        "name": "ListVolumeInfo",
+        "product_short": "RDS",
+        "host": "rds.cn-north-4.myhuaweicloud.com",
+        "base_path": "/",
+        "consumes": ["application/json"],
+        "schemes": ["HTTPS"],
+        "definitions": {},
+        "parameters": {
+            "GlobalAuth": {"name": "x-auth-token", "in": "header",
+                           "type": "string", "required": True},
+            "GlobalKeep": {"name": "X-Project-Id", "in": "header",
+                           "type": "string", "required": True},
+        },
+        "paths": {
+            "/v3/{project_id}/instances/{instance_id}/volumes": {
+                "get": {
+                    "operationId": "ListVolumeInfo",
+                    "parameters": [
+                        {"name": "x-auth-token", "in": "header",
+                         "type": "string", "required": True},
+                        {"name": "X-Auth-Token", "in": "header",
+                         "type": "string", "required": True},
+                        {"name": "instance_id", "in": "path",
+                         "type": "string", "required": True},
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                },
+            }
+        },
+    }
+
+
+def test_convert_api_demotes_auth_headers_by_default():
+    doc = conv.convert_api(_demote_raw())
+    op = list(doc["paths"].values())[0]["get"]
+    hdrs = {p["name"]: p.get("required")
+            for p in op["parameters"] if p["in"] == "header"}
+    assert hdrs["x-auth-token"] is False
+    assert hdrs["X-Auth-Token"] is False
+    assert doc["parameters"]["GlobalAuth"]["required"] is False
+    assert doc["parameters"]["GlobalKeep"]["required"] is True
+
+
+def test_convert_api_demote_disabled_keeps_metadata():
+    doc = conv.convert_api(_demote_raw(),
+                           auth_demote=conv.AuthDemotePolicy(enabled=False))
+    op = list(doc["paths"].values())[0]["get"]
+    hdrs = {p["name"]: p.get("required")
+            for p in op["parameters"] if p["in"] == "header"}
+    assert hdrs["x-auth-token"] is True
+    assert hdrs["X-Auth-Token"] is True
+
+
+def test_convert_api_demote_exempt_exact():
+    policy = conv.AuthDemotePolicy(exempt=frozenset({("rds", "listvolumeinfo")}))
+    doc = conv.convert_api(_demote_raw(), auth_demote=policy)
+    op = list(doc["paths"].values())[0]["get"]
+    hdrs = {p["name"]: p.get("required")
+            for p in op["parameters"] if p["in"] == "header"}
+    assert hdrs["x-auth-token"] is True
+
+
+def test_parse_auth_demote_policy():
+    p = conv.parse_auth_demote_policy(None, None)
+    assert p.enabled is True and p.exempt == frozenset()
+    assert conv.parse_auth_demote_policy("off", None).enabled is False
+    assert conv.parse_auth_demote_policy("ON", None).enabled is True
+    p = conv.parse_auth_demote_policy(None, "RDS:ListVolumeInfo, DDS:* ,Dds")
+    assert p.exempt == frozenset({("rds", "listvolumeinfo"), ("dds", "*")})
+    with pytest.raises(ValueError):
+        conv.parse_auth_demote_policy("banana", None)
+    with pytest.raises(ValueError):
+        conv.parse_auth_demote_policy(None, ":ListVolumeInfo")

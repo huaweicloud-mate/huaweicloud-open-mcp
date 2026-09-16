@@ -5,6 +5,7 @@ from typing import Any
 
 from . import convert_openapi2 as conv
 from . import explorer
+from .convert_openapi2 import AuthDemotePolicy
 from .memory_store import ApiHit, MemoryStore
 
 logger = logging.getLogger("apie.live_fallback")
@@ -29,10 +30,16 @@ def _find_api_in_doc(doc: dict[str, Any], api_name: str) -> tuple[str, str, dict
 
 
 class LiveFallback:
-    """实时回退适配器：抓取 → 转换 → 缓存。"""
+    """实时回退适配器：抓取 → 转换 → 缓存。
 
-    def __init__(self, store: MemoryStore):
+    auth_demote 为认证头 required 降级策略（None=默认开启）；策略是启动期
+    常量，doc 转换后随缓存固化——同进程内变更策略不回溯已缓存 doc。
+    """
+
+    def __init__(self, store: MemoryStore,
+                 auth_demote: AuthDemotePolicy | None = None):
         self._store = store
+        self._auth_demote = auth_demote
 
     def fetch(self, product: str, api: str, region: str) -> ApiHit | None:
         try:
@@ -41,7 +48,7 @@ class LiveFallback:
             return None
         if not isinstance(raw, dict) or not raw.get("paths"):
             return None
-        doc = conv.convert_api(raw)
+        doc = conv.convert_api(raw, auth_demote=self._auth_demote)
         match = _find_api_in_doc(doc, api)
         if match is None:
             return None

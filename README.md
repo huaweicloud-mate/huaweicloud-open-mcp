@@ -343,6 +343,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--deprecated-mode <annotate\|hide\|off>` | `annotate` (when index configured) | `annotate` = `list_apis` items carry `deprecated: true` + `replacement` (counts unchanged); `hide` = deprecated APIs filtered from `list_apis` before pagination (counts stay coherent); `off` = no governance; affects `list_apis` only — `get_api`/`execute_api` always work; explicit mode requires `--deprecated-index` (env `HUAWEICLOUD_MCP_DEPRECATED_MODE`) |
 | `--elicitation auto\|required\|off` | `off` | MCP-elicitation confirmation for policy changes |
 | `--spill-dir <dir>` | system temp dir (`hwc-mcp-spill`) | Where oversized responses/envelopes are spilled (empty or `off` disables spilling; pure truncation returns) |
+| `--auth-demote on\|off` | `on` | Auth-header `required` metadata normalization: at conversion time, `required` is demoted to `false` for x-auth-token/x-security-token/authorization (case-insensitive) — auth is always supplied by this gateway's AK/SK signing layer, agents never fabricate tokens; `off` keeps metadata as-is (env `HUAWEICLOUD_MCP_AUTH_DEMOTE`) |
+| `--auth-demote-pass <list>` | — | Auth-demote exemption list: comma-separated `PRODUCT:API` (exact) or `PRODUCT`/`PRODUCT:*` (product-wide); exempted APIs keep their original metadata; affects metadata normalization only, not the validation layer (env `HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS`) |
 | `--audit-file <file>` | disabled | Audit trail (NDJSON): one `{ts, tool, input, ok}` line per tool call |
 | `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | Logging (rotating file; stderr mirrors WARNING+) |
 
@@ -365,6 +367,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `HUAWEICLOUD_MCP_DEPRECATED_MODE` | Same as `--deprecated-mode` |
 | `HUAWEICLOUD_MCP_AUDIT_FILE` | Same as `--audit-file` |
 | `HUAWEICLOUD_MCP_SPILL_DIR` | Same as `--spill-dir` |
+| `HUAWEICLOUD_MCP_AUTH_DEMOTE` | Same as `--auth-demote` (`on`/`off`) |
+| `HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS` | Same as `--auth-demote-pass` |
 | `HUAWEICLOUD_MCP_ELICIT` | Same as `--elicitation` |
 | `HUAWEICLOUD_MCP_LOG_LEVEL` / `HUAWEICLOUD_MCP_LOG_FILE` | Same as `--log-level` / `--log-file` |
 

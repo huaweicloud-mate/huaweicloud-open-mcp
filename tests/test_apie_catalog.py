@@ -141,3 +141,63 @@ def test_find_api_doc_remote_error(monkeypatch):
     monkeypatch.setattr(explorer.http, "fetch_json_retry",
                         lambda url, **kw: (_ for _ in ()).throw(OSError("fail")))
     assert catalog.find_api_doc(store, "ECS", "NopeApi", "cn-north-4") is None
+
+
+# ---------- find_api_doc 认证头降级线程（auth demote，2026-09） ----------
+
+RAW_DETAIL_AUTH = {
+    "name": "ListVolumeInfo",
+    "product_short": "RDS",
+    "host": "rds.cn-north-4.myhuaweicloud.com",
+    "paths": {
+        "/v3/{project_id}/instances/{instance_id}/volumes": {
+            "get": {
+                "operationId": "ListVolumeInfo",
+                "parameters": [
+                    {"name": "x-auth-token", "in": "header",
+                     "type": "string", "required": True},
+                    {"name": "instance_id", "in": "path",
+                     "type": "string", "required": True},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            }
+        }
+    },
+}
+
+
+def _find_auth(monkeypatch, auth_demote=None):
+    import copy
+    store = _store()
+    # 深拷贝：demote 是 in-place 改写（生产路径 raw 每次新鲜解析），
+    # 测试里浅拷贝会经共享嵌套结构污染模块级 RAW_DETAIL_AUTH
+    monkeypatch.setattr(explorer.http, "fetch_json_retry",
+                        lambda url, **kw: (copy.deepcopy(RAW_DETAIL_AUTH), None))
+    kwargs = {} if auth_demote is None else {"auth_demote": auth_demote}
+    return catalog.find_api_doc(store, "RDS", "ListVolumeInfo",
+                                "cn-north-4", **kwargs)
+
+
+def _op_auth_required(hit):
+    doc, path, method, op = hit
+    return [p.get("required") for p in op["parameters"]
+            if p.get("in") == "header"
+            and p["name"].casefold() == "x-auth-token"][0]
+
+
+def test_find_api_doc_demotes_auth_headers_by_default(monkeypatch):
+    hit = _find_auth(monkeypatch)
+    assert _op_auth_required(hit) is False
+
+
+def test_find_api_doc_auth_demote_exempt_keeps_metadata(monkeypatch):
+    from apie.convert_openapi2 import AuthDemotePolicy
+    policy = AuthDemotePolicy(exempt=frozenset({("rds", "listvolumeinfo")}))
+    hit = _find_auth(monkeypatch, policy)
+    assert _op_auth_required(hit) is True
+
+
+def test_find_api_doc_auth_demote_disabled(monkeypatch):
+    from apie.convert_openapi2 import AuthDemotePolicy
+    hit = _find_auth(monkeypatch, AuthDemotePolicy(enabled=False))
+    assert _op_auth_required(hit) is True
