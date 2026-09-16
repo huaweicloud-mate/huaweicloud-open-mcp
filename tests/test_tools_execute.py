@@ -315,49 +315,53 @@ def test_execute_basepath_trailing_slash_normalized(mini_detail):
     assert client.calls[0][2] == "/v2/v1/proj123/cloudservers"
 
 
-# ---------- 服务方言：无 body 请求默认 Content-Type（_DEFAULT_JSON_CT_PRODUCTS） ----------
+# ---------- 全局默认 Content-Type（real lane 无条件 setdefault，显式传入不覆盖） ----------
 
-# 独立真值：2026-09 全量探测矩阵（219 产品/397 探针），无 Content-Type 的 GET 被
-# 这些服务的头校验拒绝（MRS/LTS/UGO 415、GES/AAD/MSGSMS/WAF 400），加 CT 后越过。
-DIALECT_PRODUCTS = ["MRS", "LTS", "GES", "AAD", "MSGSMS", "WAF", "UGO"]
+# 独立真值：官方 SDK 全局携带 CT 且从不注入 body 为既成先例；SDK-HMAC-SHA256 签名
+# 排除 content-type，加头对签名输出逐字节不变。原「方言产品名单 + 写方法集」两层
+# 口径因新方言产品持续出现（打地鼠）于 2026-09 收敛为全局默认，GET 红线随之撤销。
 
-
-def test_dialect_roster_matches_probe_matrix():
-    """roster 与探测矩阵一致，防意外漂移（新增/删除产品须同步本清单）。"""
-    assert execute._DEFAULT_JSON_CT_PRODUCTS == frozenset(DIALECT_PRODUCTS)
-
-
-@pytest.mark.parametrize("product", DIALECT_PRODUCTS)
-def test_execute_api_dialect_product_defaults_content_type(mini_detail, product):
-    """方言产品无 body GET 自动携带默认 Content-Type（网关转调缺头致 415/400 的修复）。"""
-    doc, path, method, op = _get_op(mini_detail)
-    client = StubClient()
-    execute.execute_api(doc, path, method, op, product, "ListServers", "cn-north-4",
-                        {}, client=client,
-                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
-    headers = client.calls[0][5]
-    assert headers["Content-Type"] == "application/json"
+# 手写 mini op（不经 fixture）：元数据仅 header/path 参数、无 body 的写请求，
+# 即 RDS StartupInstance（POST /v3/{project_id}/instances/{instance_id}/action/startup）形态。
+_BODYLESS_WRITE_OP = {
+    "parameters": [
+        {"name": "project_id", "in": "path", "type": "string", "required": True},
+    ],
+}
+_BODYLESS_WRITE_DOC = {"host": "ecs.cn-north-4.myhuaweicloud.com", "basePath": "/"}
 
 
-def test_execute_api_non_dialect_product_no_default_content_type(mini_detail):
-    """非方言产品：无 body GET 不携带 Content-Type（191 个无 CT 即 200 的产品回归红线）。"""
+def test_execute_api_bodyless_get_defaults_content_type(mini_detail):
+    """任意产品无 body GET 默认携带 Content-Type（原「非方言不带」红线翻转，全局默认）。"""
     doc, path, method, op = _get_op(mini_detail)
     client = StubClient()
     execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
                         {}, client=client,
                         credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
     headers = client.calls[0][5]
-    assert "Content-Type" not in headers
+    assert headers["Content-Type"] == "application/json"
 
 
-def test_execute_api_dialect_product_explicit_content_type_wins(mini_detail):
+@pytest.mark.parametrize("method", ["get", "post", "put", "patch", "delete"])
+def test_execute_api_bodyless_defaults_content_type(method):
+    """无 body 请求全方法默认携带 Content-Type（setdefault，不注入 body）。"""
+    client = StubClient()
+    execute.execute_api(_BODYLESS_WRITE_DOC, "/v1/{project_id}/cloudservers/action",
+                        method, _BODYLESS_WRITE_OP, "ECS", "StartupInstance",
+                        "cn-north-4", {}, client=client, credentials=CRED)
+    method_, host_, path_, query, body, headers = client.calls[0]
+    assert headers["Content-Type"] == "application/json"
+    assert body is None  # 只补头，不注入空 JSON 体
+
+
+def test_execute_api_explicit_content_type_wins(mini_detail):
     """显式传入的 Content-Type 不被默认值覆盖（setdefault 语义）。"""
     doc, path, method, op = _get_op(mini_detail)
     op = dict(op)
     op["parameters"] = list(op.get("parameters") or []) + [
         {"name": "Content-Type", "in": "header", "type": "string"}]
     client = StubClient()
-    execute.execute_api(doc, path, method, op, "MRS", "ListServers", "cn-north-4",
+    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
                         {"Content-Type": "text/plain"}, client=client,
                         credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
     headers = client.calls[0][5]
