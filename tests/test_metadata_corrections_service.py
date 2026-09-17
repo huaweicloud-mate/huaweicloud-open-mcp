@@ -1,4 +1,8 @@
-"""S5：元数据纠偏 service 注入与装配断言（get_api 信封 + build_openapi_config）。"""
+"""S5：元数据纠偏 service 注入与装配断言（get_api 信封 + build_openapi_config）。
+
+doc 级指针纠偏段（FunctionGraph:CreateEvent 畸形 pattern）独立真值：官方帮助
+文档 functiongraph_06_0133（2025-10-31 更新）regexp 与取值范围。
+"""
 
 import argparse
 import json
@@ -7,6 +11,7 @@ from apie.memory_store import MemoryStore
 from apie.metadata_corrections import MetadataCorrections, parse_metadata_corrections
 from mcp_openapi.server import build_openapi_config
 from mcp_openapi.service import ServiceConfig, ToolService
+from safety import policy
 
 STALE = "- 该接口仅支持PostgreSQL引擎。\n- 仅支持开启实例状态是「已停止」的实例。"
 REMAINDER = "- 仅支持开启实例状态是「已停止」的实例。"
@@ -148,3 +153,125 @@ def test_build_config_corrections_missing_path_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         build_openapi_config(
             _args(metadata_corrections=str(tmp_path / "missing.json")))
+
+
+# ---------- doc 级指针纠偏：get_api 信封 + execute_api 校验（correct_doc_cow） ----------
+
+BROKEN_PATTERN = "$[a-zA-Z][a-zA-Z0-9-_]*"
+DOC_PATTERN_TRUTH = "^[a-zA-Z]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$"
+
+FG_DOC = {
+    "swagger": "2.0",
+    "host": "fgs.cn-north-4.myhuaweicloud.com",
+    "basePath": "/",
+    "definitions": {
+        "CreateEventRequestBody": {
+            "required": ["content", "name"],
+            "properties": {
+                "name": {"type": "string", "pattern": BROKEN_PATTERN},
+                "content": {"type": "string"},
+            },
+        },
+    },
+    "paths": {
+        "/v2/{project_id}/fgs/functions/{function_urn}/events": {
+            "post": {
+                "operationId": "CreateEvent",
+                "summary": "创建测试事件",
+                "parameters": [
+                    {"name": "function_urn", "in": "path", "required": True,
+                     "type": "string"},
+                    {"name": "CreateEventRequestBody", "in": "body", "required": True,
+                     "schema": {"$ref": "#/definitions/CreateEventRequestBody"}},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            }
+        }
+    },
+}
+
+APIS_FG = [{"name": "CreateEvent", "method": "post", "summary": "创建测试事件",
+            "tags": "函数测试事件", "product_short": "FunctionGraph",
+            "info_version": "v2"}]
+
+FG_CORRECTIONS = parse_metadata_corrections({
+    "FunctionGraph:CreateEvent": {
+        "patches": {"/definitions/CreateEventRequestBody/properties/name/pattern":
+                    {"replace": DOC_PATTERN_TRUTH}},
+    },
+})
+
+
+class _StubMockClient:
+    def __init__(self):
+        self.calls = []
+
+    def mock_request(self, product, api, region, status_code=None, number=None):
+        self.calls.append((product, api, region, status_code, number))
+        return {"status": 200, "headers": {}, "body": {"mock": True}}
+
+
+def _fg_svc(corrections=MetadataCorrections.empty(), **kw):
+    store = MemoryStore()
+    store.set_apis("FunctionGraph", APIS_FG)
+    op = FG_DOC["paths"]["/v2/{project_id}/fgs/functions/{function_urn}/events"]["post"]
+    store.set_api_cache(
+        ("functiongraph", "CreateEvent", "cn-north-4"),
+        (FG_DOC, "/v2/{project_id}/fgs/functions/{function_urn}/events", "post", op))
+    return ToolService(store=store,
+                       config=ServiceConfig(corrections=corrections, **kw))
+
+
+def _fg_exec_svc(corrections):
+    return _fg_svc(corrections=corrections, mock=True,
+                   policy_rules=policy.parse_policy(["FunctionGraph:*=allow"]),
+                   mock_client_factory=_StubMockClient)
+
+
+def test_get_api_pointer_correction_fixes_envelope_both_spots():
+    out = _fg_svc(corrections=FG_CORRECTIONS).get_api("FunctionGraph", "CreateEvent")
+    assert out["ok"] is True
+    body = next(p for p in out["parameters"] if p.get("in") == "body")
+    assert body["schema"]["properties"]["name"]["pattern"] == DOC_PATTERN_TRUTH
+    assert (out["definitions"]["CreateEventRequestBody"]["properties"]["name"]["pattern"]
+            == DOC_PATTERN_TRUTH)
+
+
+def test_get_api_pointer_correction_cache_untouched():
+    svc = _fg_svc(corrections=FG_CORRECTIONS)
+    first = svc.get_api("FunctionGraph", "CreateEvent")
+    assert (first["definitions"]["CreateEventRequestBody"]["properties"]["name"]
+            ["pattern"] == DOC_PATTERN_TRUTH)
+    second = svc.get_api("FunctionGraph", "CreateEvent")
+    assert second == first  # 幂等：缓存 doc 未被改写，每次从原文 COW
+    plain = _fg_svc().get_api("FunctionGraph", "CreateEvent")
+    assert (plain["definitions"]["CreateEventRequestBody"]["properties"]["name"]
+            ["pattern"] == BROKEN_PATTERN)  # 无纠偏服务读同一 store 仍得原文
+
+
+def test_execute_api_pointer_correction_unblocks_valid_name():
+    # 修复前：畸形 pattern 在 re.search 语义下永不匹配 → 一切合法 name 被本地校验拒绝
+    broken = _fg_exec_svc(MetadataCorrections.empty())
+    out = broken.execute_api("FunctionGraph", "CreateEvent", params={
+        "body": {"name": "event-xx", "content": "eyJrIjoidiJ9"}})
+    assert out["ok"] is False and "body 参数校验失败" in out["reason"]
+
+    # 修复后：同一合法 name 通过校验到达 dispatch
+    fixed = _fg_exec_svc(FG_CORRECTIONS)
+    out = fixed.execute_api("FunctionGraph", "CreateEvent", params={
+        "body": {"name": "event-xx", "content": "eyJrIjoidiJ9"}})
+    assert out["ok"] is True and out["body"] == {"mock": True}
+
+
+def test_execute_api_pointer_correction_keeps_official_constraint():
+    fixed = _fg_exec_svc(FG_CORRECTIONS)
+    out = fixed.execute_api("FunctionGraph", "CreateEvent", params={
+        "body": {"name": "event-", "content": "eyJrIjoidiJ9"}})  # 中划线结尾：官方口径拒绝
+    assert out["ok"] is False and "body 参数校验失败" in out["reason"]
+    out = fixed.execute_api("FunctionGraph", "CreateEvent", params={
+        "body": {"name": "-event", "content": "eyJrIjoidiJ9"}})  # 非字母开头：官方口径拒绝
+    assert out["ok"] is False and "body 参数校验失败" in out["reason"]
+    # 范围边界（用户确认仅修 pattern）：元数据无 maxLength，>25 字符本地不拦
+    out = fixed.execute_api("FunctionGraph", "CreateEvent", params={
+        "body": {"name": "x" * 26, "content": "eyJrIjoidiJ9"}})
+    assert out["ok"] is True

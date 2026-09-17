@@ -16,7 +16,7 @@ from apie import catalog, metadata
 from apie import mock as apie_mock
 from apie.convert_openapi2 import AuthDemotePolicy
 from apie.memory_store import ApiHit, MemoryStore
-from apie.metadata_corrections import MetadataCorrections, correct_api_result
+from apie.metadata_corrections import MetadataCorrections, correct_api_result, correct_doc_cow
 from common.audit import AuditSink
 from common.audit import audited as _audited
 from common.auth.credentials import Credentials
@@ -380,6 +380,7 @@ class ToolService:
             logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
+        doc = correct_doc_cow(doc, product, api, self.config.corrections)
         out: Any = metadata.format_api_detail(doc, product, path, method, op)
         out = correct_api_result(cast(dict[str, Any], out),
                                  self.config.corrections)
@@ -432,6 +433,7 @@ class ToolService:
         if hit is None:
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
+        doc = correct_doc_cow(doc, product, api, self.config.corrections)
 
         # 预签发分支：OBS 专用，gateway 只签名不搬运字节；先于 mock/real 分流
         if params.get("_presign"):

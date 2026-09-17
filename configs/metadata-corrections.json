@@ -21,5 +21,15 @@
         "replace": "仅支持停止存储类型为超高IO、SSD云盘、极速型SSD的按需实例,专属云RDS不支持停止实例。\n已停止的实例被删除后不会进入回收站。\n停止主实例时,如果存在只读实例,会同时停止只读实例。不支持单独停止只读实例。\n实例默认停止十五天,如果您在十五天内未手动开启实例,数据库实例将于十五天后的下一个可维护时间段内自动启动。\n实例停止后,虚拟机(VM)停止收费,其余资源包括弹性公网IP(EIP)、存储资源、备份正常计费。\n按需付费的数据库实例停止实例后,可能会出现由于资源不足引起开启失败,如遇到无法开启的情况请联系客服人员处理。\n实例在以下状态不能执行停止实例:创建、重启、扩容、变更规格、恢复、修改端口等不能进行此操作。"
       }
     }
+  },
+  "FunctionGraph:CreateEvent": {
+    "evidence": "官方帮助文档 functiongraph_06_0133（2025-10-31 更新）约束限制 regexp=^[a-zA-Z]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$、取值范围「以大/小写字母开头，以字母或数字结尾，长度不超过25个字符」；Explorer 元数据 pattern='$[a-zA-Z][a-zA-Z0-9-_]*' 以 $ 开头无 ^ 锚定且允许中划线/下划线结尾——jsonschema re.search 语义下永不匹配，execute_api body 校验拒绝一切合法名称（event-xx 亦被拒），全语料 17,963 接口扫描仅此一例「永不匹配」畸形 pattern（2026-09-17）",
+    "doc_url": "https://support.huaweicloud.com/api-functiongraph/functiongraph_06_0133.html",
+    "verified": "2026-09-17",
+    "patches": {
+      "/definitions/CreateEventRequestBody/properties/name/pattern": {
+        "replace": "^[a-zA-Z]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$"
+      }
+    }
   }
 }

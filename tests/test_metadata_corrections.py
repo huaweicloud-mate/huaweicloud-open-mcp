@@ -13,6 +13,7 @@ from apie.metadata_corrections import (
     MetadataCorrections,
     correct_api_result,
     correct_doc,
+    correct_doc_cow,
     load_metadata_corrections,
     parse_metadata_corrections,
 )
@@ -261,6 +262,212 @@ def test_correct_doc_replace_creates_absent_field():
     assert out["paths"]["/p"]["post"]["x-constraint"] == "- 官方约束。"
 
 
+# ---------- 指针 patch：doc 级 JSON Pointer（v1 前缀白名单 /definitions/） ----------
+
+BROKEN_PATTERN = "$[a-zA-Z][a-zA-Z0-9-_]*"
+DOC_PATTERN_TRUTH = "^[a-zA-Z]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$"
+
+FG_RAW = {
+    "FunctionGraph:CreateEvent": {
+        "patches": {
+            "/definitions/CreateEventRequestBody/properties/name/pattern": {
+                "replace": DOC_PATTERN_TRUTH},
+        },
+    },
+}
+
+
+def _fg_doc() -> dict:
+    return {
+        "definitions": {
+            "CreateEventRequestBody": {
+                "required": ["content", "name"],
+                "properties": {
+                    "name": {"type": "string", "pattern": BROKEN_PATTERN},
+                    "content": {"type": "string"},
+                },
+            },
+            "OtherDef": {"type": "object"},
+        },
+        "paths": {"/v2/{p}/fgs/functions/{urn}/events": {"post": {
+            "operationId": "CreateEvent", "summary": "创建测试事件",
+            "parameters": [],
+        }}},
+    }
+
+
+def test_parse_pointer_key_parses_segments():
+    c = parse_metadata_corrections(FG_RAW)
+    e = c.for_api("functiongraph", "createevent")
+    assert e is not None
+    (ptr, patch), = e.doc_patches.items()
+    assert ptr == ("definitions", "CreateEventRequestBody",
+                   "properties", "name", "pattern")
+    assert patch.replace == DOC_PATTERN_TRUTH and patch.drop is None
+    assert e.patches == {}
+
+
+def test_parse_pointer_and_op_level_coexist():
+    c = parse_metadata_corrections({"RDS:StartupInstance": {"patches": {
+        "x-constraint": {"drop": ["过期行"]},
+        "/definitions/Body/properties/name/pattern": {"replace": "^a$"},
+    }}})
+    e = c.for_api("RDS", "StartupInstance")
+    assert e is not None
+    assert set(e.patches) == {"x-constraint"}
+    (ptr, patch), = e.doc_patches.items()
+    assert ptr == ("definitions", "Body", "properties", "name", "pattern")
+    assert patch.replace == "^a$"
+
+
+def test_parse_pointer_drop_boolean_deletes_leaf():
+    e = parse_metadata_corrections({"RDS:A": {"patches": {
+        "/definitions/X/properties/pattern": {"drop": True}}}}).for_api("RDS", "A")
+    assert e is not None
+    (ptr, patch), = e.doc_patches.items()
+    assert ptr == ("definitions", "X", "properties", "pattern")
+    assert patch.drop == () and patch.replace is None
+
+
+def test_parse_pointer_rejects_bad_shapes():
+    bad = [
+        "/paths/~1v2/post/x-constraint",   # 前缀白名单外
+        "/components/schemas/X",           # 前缀白名单外
+        "definitions/X",                   # 不以 / 开头 → op 级字段白名单外
+        "/definitions/",                   # 尾空段
+        "/definitions//properties/x",      # 中空段
+        {"RDS:A": {"patches": {"/definitions/X/p": {"drop": ["x"]}}}},   # 指针 drop 非布尔
+        {"RDS:A": {"patches": {"/definitions/X/p": {"drop": False}}}},   # 指针 drop 非布尔
+        {"RDS:A": {"patches": {"/definitions/X/p": {"replace": ""}}}},   # replace 空串
+        {"RDS:A": {"patches": {"/definitions/X/p": {"replace": 1}}}},    # replace 非字符串
+        {"RDS:A": {"patches": {"/definitions/X/p": {}}}},                # patch 空
+    ]
+    for item in bad:
+        raw = item if isinstance(item, dict) else {"RDS:A": {"patches": {item: {"replace": "x"}}}}
+        with pytest.raises(ValueError):
+            parse_metadata_corrections(raw)
+
+
+def test_parse_pointer_unescape_rfc6901():
+    e = parse_metadata_corrections({"RDS:A": {"patches": {
+        "/definitions/A~1B~0C/properties/x": {"replace": "v"}}}}).for_api("RDS", "A")
+    assert e is not None
+    (ptr, _), = e.doc_patches.items()
+    assert ptr == ("definitions", "A/B~C", "properties", "x")
+
+
+# ---------- correct_doc：指针 patch（离线 in-place，每 doc 应用一次） ----------
+
+def test_correct_doc_pointer_replace_inplace():
+    c = parse_metadata_corrections(FG_RAW)
+    doc = _fg_doc()
+    out = correct_doc(doc, "FunctionGraph", "CreateEvent", c)
+    assert out is doc  # 离线 in-place
+    assert (out["definitions"]["CreateEventRequestBody"]["properties"]["name"]["pattern"]
+            == DOC_PATTERN_TRUTH)
+    assert out["definitions"]["OtherDef"] == {"type": "object"}  # 兄弟原样
+
+
+def test_correct_doc_pointer_idempotent():
+    c = parse_metadata_corrections(FG_RAW)
+    doc = _fg_doc()
+    correct_doc(doc, "FunctionGraph", "CreateEvent", c)
+    snap = json.dumps(doc, sort_keys=True)
+    correct_doc(doc, "FunctionGraph", "CreateEvent", c)
+    assert json.dumps(doc, sort_keys=True) == snap
+
+
+def test_correct_doc_pointer_drop_deletes_leaf():
+    c = parse_metadata_corrections({"FunctionGraph:CreateEvent": {"patches": {
+        "/definitions/CreateEventRequestBody/properties/name/pattern": {"drop": True}}}})
+    doc = _fg_doc()
+    correct_doc(doc, "FunctionGraph", "CreateEvent", c)
+    name = doc["definitions"]["CreateEventRequestBody"]["properties"]["name"]
+    assert "pattern" not in name
+    assert name["type"] == "string"
+
+
+def test_correct_doc_pointer_missing_parent_noop():
+    c = parse_metadata_corrections({"RDS:A": {"patches": {
+        "/definitions/NoSuch/properties/x": {"replace": "v"}}}})
+    doc = {"definitions": {}, "paths": {}}
+    out = correct_doc(doc, "RDS", "A", c)
+    assert out == {"definitions": {}, "paths": {}}
+
+
+def test_correct_doc_pointer_and_op_level_combined():
+    doc = _fg_doc()
+    doc["paths"]["/v2/{p}/fgs/functions/{urn}/events"]["post"]["x-constraint"] = "- 过期行"
+    c = parse_metadata_corrections({"FunctionGraph:CreateEvent": {"patches": {
+        "x-constraint": {"drop": ["过期行"]},
+        "/definitions/CreateEventRequestBody/properties/name/pattern": {
+            "replace": DOC_PATTERN_TRUTH},
+    }}})
+    out = correct_doc(doc, "FunctionGraph", "CreateEvent", c)
+    op = out["paths"]["/v2/{p}/fgs/functions/{urn}/events"]["post"]
+    assert "x-constraint" not in op  # 行级删光从 op 移除键（既有 op 级离线语义）
+    assert (out["definitions"]["CreateEventRequestBody"]["properties"]["name"]["pattern"]
+            == DOC_PATTERN_TRUTH)
+
+
+# ---------- correct_doc_cow：运行时 doc 级 copy-on-write ----------
+
+def test_cow_miss_and_op_only_entry_return_same_object():
+    doc = _fg_doc()
+    assert correct_doc_cow(doc, "ECS", "ListServersDetails",
+                           parse_metadata_corrections(FG_RAW)) is doc
+    assert correct_doc_cow(doc, "FunctionGraph", "CreateEvent",
+                           MetadataCorrections.empty()) is doc
+    assert correct_doc_cow(doc, "FunctionGraph", "CreateEvent", None) is doc
+    rds_doc = _doc()   # 既有 op 级条目（RDS 先例）：无 doc_patches → 恒同一对象零开销
+    assert correct_doc_cow(rds_doc, "RDS", "StartupInstance",
+                           parse_metadata_corrections(RAW)) is rds_doc
+
+
+def test_cow_patches_path_original_untouched_siblings_shared():
+    c = parse_metadata_corrections(FG_RAW)
+    doc = _fg_doc()
+    out = correct_doc_cow(doc, "FunctionGraph", "CreateEvent", c)
+    assert out is not doc
+    assert (doc["definitions"]["CreateEventRequestBody"]["properties"]["name"]["pattern"]
+            == BROKEN_PATTERN)  # 原 doc 恒不改写
+    assert (out["definitions"]["CreateEventRequestBody"]["properties"]["name"]["pattern"]
+            == DOC_PATTERN_TRUTH)
+    assert out["definitions"]["OtherDef"] is doc["definitions"]["OtherDef"]  # 兄弟共享
+    assert out["paths"] is doc["paths"]
+
+
+def test_cow_idempotent_returns_same_object():
+    c = parse_metadata_corrections(FG_RAW)
+    doc = _fg_doc()
+    once = correct_doc_cow(doc, "FunctionGraph", "CreateEvent", c)
+    assert correct_doc_cow(once, "FunctionGraph", "CreateEvent", c) is once
+
+
+def test_cow_missing_parent_noop_same_object():
+    c = parse_metadata_corrections({"RDS:A": {"patches": {
+        "/definitions/NoSuch/properties/x": {"replace": "v"}}}})
+    doc = {"definitions": {}, "paths": {}}
+    assert correct_doc_cow(doc, "RDS", "A", c) is doc
+
+
+def test_cow_two_pointers_shared_prefix():
+    c = parse_metadata_corrections({"FunctionGraph:CreateEvent": {"patches": {
+        "/definitions/CreateEventRequestBody/properties/name/pattern": {
+            "replace": DOC_PATTERN_TRUTH},
+        "/definitions/CreateEventRequestBody/properties/content/type": {
+            "replace": "string"},
+    }}})
+    doc = _fg_doc()
+    out = correct_doc_cow(doc, "FunctionGraph", "CreateEvent", c)
+    props = out["definitions"]["CreateEventRequestBody"]["properties"]
+    assert props["name"]["pattern"] == DOC_PATTERN_TRUTH
+    assert props["content"]["type"] == "string"
+    assert doc["definitions"]["CreateEventRequestBody"]["properties"]["name"][
+        "pattern"] == BROKEN_PATTERN  # 原 doc 恒不改写
+    assert out["definitions"]["OtherDef"] is doc["definitions"]["OtherDef"]
+
+
 # ---------- load：三分支（仿 load_hints_file idiom） ----------
 
 def test_load_file(tmp_path):
@@ -340,6 +547,12 @@ def test_load_real_repo_shipped_file(monkeypatch):
     assert e is not None
     assert "该接口仅支持PostgreSQL引擎" in (e.patches["x-constraint"].drop or ())
     assert e.doc_url is not None
+    fg = c.for_api("FunctionGraph", "CreateEvent")
+    assert fg is not None
+    (ptr, patch), = fg.doc_patches.items()
+    assert ptr == ("definitions", "CreateEventRequestBody",
+                   "properties", "name", "pattern")
+    assert patch.replace == "^[a-zA-Z]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$"
 
 
 # ---------- 离线管道组合根：convert main() 组合 correct_doc ----------
