@@ -452,3 +452,272 @@ def test_parse_auth_demote_policy():
         conv.parse_auth_demote_policy("banana", None)
     with pytest.raises(ValueError):
         conv.parse_auth_demote_policy(None, ":ListVolumeInfo")
+
+
+# ---------- 参数 $ref 解析（finalize 内缝：去重前的 ref 展开） ----------
+
+def _ref_raw():
+    """FunctionGraph::InvokeFunction raw 形状：op 全部用 $ref 引 doc-global 声明。
+
+    历史缺陷语境：finalize 去重键 name|in 对 $ref 形参数恒为 None|None，
+    每个 op 仅第一个 ref 幸存（function_urn/X-Auth-Token/Content-Type 被吞）。
+    """
+    return {
+        "name": "InvokeFunction",
+        "product_short": "FunctionGraph",
+        "host": "functiongraph.cn-north-4.myhuaweicloud.com",
+        "base_path": "/",
+        "schemes": ["HTTPS"],
+        "consumes": ["application/json"],
+        "definitions": {},
+        "parameters": {
+            "project_id": {"name": "project_id", "in": "path", "required": True,
+                           "type": "string", "description": "租户项目 ID",
+                           "x-example": "3cdde48c846641ebacded48c846641eb"},
+            "function_urn": {"name": "function_urn", "in": "path", "required": True,
+                             "type": "string", "description": "函数的URN"},
+            "X-Auth-Token": {"name": "X-Auth-Token", "in": "header", "required": True,
+                             "type": "string"},
+            "Content-Type": {"name": "Content-Type", "in": "header", "required": True,
+                             "type": "string"},
+            "marker": {"name": "marker", "in": "query", "required": False,
+                       "type": "string"},
+        },
+        "paths": {
+            "/v2/{project_id}/fgs/functions/{function_urn}/invocations": {
+                "parameters": [{"$ref": "#/parameters/marker"}],
+                "post": {
+                    "operationId": "InvokeFunction",
+                    "parameters": [
+                        {"$ref": "#/parameters/project_id"},
+                        {"$ref": "#/parameters/function_urn"},
+                        {"$ref": "#/parameters/X-Auth-Token"},
+                        {"$ref": "#/parameters/Content-Type"},
+                        {"name": "InvokeFunctionRequestBody", "in": "body",
+                         "required": True, "schema": {"type": "object"}},
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                },
+            },
+        },
+    }
+
+
+def _op_params(doc):
+    return list(doc["paths"].values())[0]["post"]["parameters"]
+
+
+def test_finalize_resolves_all_param_refs():
+    """多 ref（path/header/query）逐个解析为 doc-global 声明，字段完整携带。"""
+    doc = conv.finalize(conv.fix_2_doc(_ref_raw()))
+    params = _op_params(doc)
+    names = [p.get("name") for p in params]
+    assert names == ["project_id", "function_urn", "X-Auth-Token",
+                     "InvokeFunctionRequestBody"]
+    urn = params[1]
+    assert urn["in"] == "path" and urn["required"] is True
+    assert urn["description"] == "函数的URN"
+    pid = params[0]
+    assert pid["x-example"] == "3cdde48c846641ebacded48c846641eb"
+
+
+def test_finalize_resolves_path_level_refs():
+    """path 级参数列表的 $ref 同样解析（语料实测 49 处）。"""
+    doc = conv.finalize(conv.fix_2_doc(_ref_raw()))
+    path_item = list(doc["paths"].values())[0]
+    assert path_item["parameters"] == [
+        {"name": "marker", "in": "query", "required": False, "type": "string"}]
+
+
+def test_finalize_tolerates_missing_ref_target():
+    """ref 指向缺失键：原样保留（validate_params 跳过无 name 参数，不炸）。"""
+    raw = _ref_raw()
+    raw["paths"]["/v2/{project_id}/fgs/functions/{function_urn}/invocations"][
+        "post"]["parameters"].append({"$ref": "#/parameters/nope"})
+    doc = conv.finalize(conv.fix_2_doc(raw))
+    params = _op_params(doc)
+    assert {"$ref": "#/parameters/nope"} in params
+
+
+def test_finalize_dedup_after_ref_resolution():
+    """解析后去重键恢复 name|in 语义：inline 与 ref 同名只留先者。"""
+    raw = _ref_raw()
+    op = raw["paths"]["/v2/{project_id}/fgs/functions/{function_urn}/invocations"][
+        "post"]
+    op["parameters"].append({"name": "marker", "in": "query", "type": "string"})
+    doc = conv.finalize(conv.fix_2_doc(raw))
+    markers = [p for p in _op_params(doc) if p.get("name") == "marker"]
+    assert len(markers) == 1
+
+
+def test_resolve_param_ref_copy_isolation():
+    """解析返回深拷贝：原地改写不互染 doc-global 与其他解析结果。"""
+    doc_params = {"X": {"name": "X-Auth-Token", "in": "header", "required": True,
+                        "type": "string"}}
+    first = conv._resolve_param_ref({"$ref": "#/parameters/X"}, doc_params)
+    first["required"] = False
+    second = conv._resolve_param_ref({"$ref": "#/parameters/X"}, doc_params)
+    assert second["required"] is True
+    assert doc_params["X"]["required"] is True
+
+
+def test_resolve_param_ref_passthrough_and_gateway_drop():
+    """非 ref 原样透传；网关供给头（Content-Type）ref 解析为 None 丢弃；
+    大小写变体同样命中；认证头 ref 正常解析（由 demote 降级）。"""
+    doc_params = {
+        "CT": {"name": "Content-Type", "in": "header", "required": True,
+               "type": "string"},
+        "ct": {"name": "content-type", "in": "header", "required": True,
+               "type": "string"},
+        "Auth": {"name": "X-Auth-Token", "in": "header", "required": True,
+                 "type": "string"},
+    }
+    inline = {"name": "q", "in": "query", "type": "string"}
+    assert conv._resolve_param_ref(inline, doc_params) is inline
+    assert conv._resolve_param_ref("junk", doc_params) == "junk"
+    assert conv._resolve_param_ref({"$ref": "#/parameters/CT"}, doc_params) is None
+    assert conv._resolve_param_ref({"$ref": "#/parameters/ct"}, doc_params) is None
+    assert conv._resolve_param_ref({"$ref": "#/parameters/Auth"}, doc_params)[
+        "name"] == "X-Auth-Token"
+
+
+def test_convert_api_gold_functiongraph_invoke_function():
+    """金标（真实 raw fixture）：InvokeFunction 转换后 function_urn 声明恢复，
+    认证头 ref 解析后被 demote 降级，网关供给头 CT ref 维持不可见。"""
+    with open(_fixture("functiongraph_invoke_function_raw.json"),
+              encoding="utf-8") as f:
+        raw = json.load(f)
+    doc = conv.convert_api(raw)
+    params = list(doc["paths"].values())[0]["post"]["parameters"]
+    by_name = {p["name"]: p for p in params if p.get("name")}
+    urn = by_name["function_urn"]
+    assert urn["in"] == "path" and urn["required"] is True
+    assert "Content-Type" not in by_name
+    auth = by_name["X-Auth-Token"]
+    assert auth["in"] == "header" and auth["required"] is False
+    # 呈现层（get_api 同源）：function_urn 可见
+    from apie.metadata import format_api_detail
+    path = next(iter(doc["paths"]))
+    op = doc["paths"][path]["post"]
+    out = format_api_detail(doc, "FunctionGraph", path, "post", op)
+    out_names = [p["name"] for p in out["parameters"]]
+    assert "function_urn" in out_names and "Content-Type" not in out_names
+
+
+# ---------- 路径占位符声明补全（_complete_path_params 内缝） ----------
+
+def _gap_doc():
+    """Config/RMS/IAM 类缺口形状：占位符在任何层级都无声明（raw 真缺）。"""
+    return {
+        "swagger": "2.0",
+        "info": {"title": "X API", "version": "1.0"},
+        "host": "x.cn-north-4.myhuaweicloud.com",
+        "basePath": "/",
+        "parameters": {
+            "GlobalDomain": {"name": "domain_id", "in": "path", "required": True,
+                             "type": "string"},
+        },
+        "paths": {
+            "/v1/{project_id}/aggregators/{aggregator_id}": {
+                "get": {
+                    "parameters": [{"name": "X-Language", "in": "header",
+                                    "type": "string"}],
+                    "responses": {"200": {"description": "OK"}},
+                },
+            },
+            "/v1/domains/{domain_id}": {
+                "get": {"responses": {"200": {"description": "OK"}}},
+            },
+            "/v1/plain": {
+                "get": {"responses": {"200": {"description": "OK"}}},
+            },
+        },
+    }
+
+
+def test_complete_path_params_injects_missing():
+    """未声明占位符注入合成声明（形状：in=path/required/type=string+来源标注）。"""
+    doc = conv._complete_path_params(_gap_doc())
+    op = doc["paths"]["/v1/{project_id}/aggregators/{aggregator_id}"]["get"]
+    by_name = {p["name"]: p for p in op["parameters"]}
+    assert set(by_name) == {"X-Language", "project_id", "aggregator_id"}
+    for name in ("project_id", "aggregator_id"):
+        p = by_name[name]
+        assert p["in"] == "path" and p["required"] is True
+        assert p["type"] == "string"
+        assert "元数据未声明" in p["description"]
+    # doc-global 已声明的 domain_id 不注入，且无占位符的 path 不动
+    assert doc["paths"]["/v1/domains/{domain_id}"]["get"].get("parameters") is None
+    assert doc["paths"]["/v1/plain"]["get"].get("parameters") is None
+
+
+def test_complete_path_params_project_id_credential_hint():
+    """仅 project_id 的描述附「可由凭证自动填充」；其余不带。"""
+    doc = conv._complete_path_params(_gap_doc())
+    op = doc["paths"]["/v1/{project_id}/aggregators/{aggregator_id}"]["get"]
+    by_name = {p["name"]: p for p in op["parameters"]}
+    assert "凭证自动填充" in by_name["project_id"]["description"]
+    assert "凭证自动填充" not in by_name["aggregator_id"]["description"]
+
+
+def test_complete_path_params_respects_all_declaration_levels():
+    """op 级 / path 级 / doc-global 任一层级已声明即不注入（幂等）。"""
+    raw = _ref_raw()  # project_id/function_urn 均有声明（op 级 ref→解析后 inline）
+    doc = conv._complete_path_params(conv.convert_api(raw))
+    op = list(doc["paths"].values())[0]["post"]
+    names = [p["name"] for p in op["parameters"]]
+    assert names.count("project_id") == 1
+    assert names.count("function_urn") == 1
+    # path 级声明挡住注入（参数留在 path 级，不复制进 op）；未声明的仍注入
+    doc2 = _gap_doc()
+    doc2["paths"]["/v1/{project_id}/aggregators/{aggregator_id}"]["parameters"] = [
+        {"name": "project_id", "in": "path", "required": True, "type": "string"}]
+    conv._complete_path_params(doc2)
+    op2 = doc2["paths"]["/v1/{project_id}/aggregators/{aggregator_id}"]["get"]
+    names2 = [p["name"] for p in op2["parameters"]]
+    assert "project_id" not in names2
+    assert "aggregator_id" in names2
+
+
+def test_complete_path_params_idempotent():
+    doc = _gap_doc()
+    conv._complete_path_params(doc)
+    snapshot = json.dumps(doc, sort_keys=True)
+    conv._complete_path_params(doc)
+    assert json.dumps(doc, sort_keys=True) == snapshot
+
+
+def test_convert_api_completes_undeclared_placeholders():
+    """接线金标：convert_api 输出对 raw 真缺声明（非 ref 形）的占位符补全。"""
+    raw = _gap_raw()
+    doc = conv.convert_api(raw)
+    op = list(doc["paths"].values())[0]["get"]
+    by_name = {p["name"]: p for p in op["parameters"]}
+    assert by_name["resource_id"]["in"] == "path"
+    assert by_name["resource_id"]["required"] is True
+    assert "project_id" not in by_name  # 无占位符则无注入
+
+
+def _gap_raw():
+    return {
+        "name": "ShowResource",
+        "product_short": "Config",
+        "host": "rms.cn-north-4.myhuaweicloud.com",
+        "base_path": "/",
+        "schemes": ["HTTPS"],
+        "consumes": ["application/json"],
+        "definitions": {},
+        "parameters": {},
+        "paths": {
+            "/v1/resource-manager/domains/{domain_id}/resources/{resource_id}": {
+                "get": {
+                    "operationId": "ShowResource",
+                    "parameters": [
+                        {"name": "domain_id", "in": "path", "required": True,
+                         "type": "string"},
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                },
+            },
+        },
+    }

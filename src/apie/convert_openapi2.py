@@ -3,6 +3,7 @@
 独立实现，转换规则与参考项目保持一致（见 AGENTS.md 校验规则章节）。
 """
 
+import copy
 import json
 import logging
 import re
@@ -125,6 +126,107 @@ def oas2_parameter(param: Any) -> Any:
     if p.get("in") in ("query", "header") and p.get("type") == "object":
         p["type"] = "string"
     return {k: v for k, v in p.items() if k in PARAM_ALLOWED or k.startswith("x-")}
+
+
+# 网关供给头（2026-09 起）：real lane 对全部请求 setdefault Content-Type，
+# required=true 的 CT 参数经 $ref 解析 inline 化后会造成系统性 validate 误拒
+# （validate_params 只豁免认证头）。ref 形态的 CT 维持历史语义（去重时代
+# 被吞掉、不可见不校验）——解析期直接丢弃；inline 形态的 CT 一律不动。
+# 认证头不在名单：ref 解析后由 demote_auth_headers 统一降级。
+_GATEWAY_SUPPLIED_HEADERS = frozenset({"content-type"})
+
+
+def _resolve_param_ref(param: Any, doc_params: dict[str, Any]) -> Any:
+    """参数 $ref 解析（finalize 内缝，三值契约）。
+
+    ref 指向存在的 doc-global 参数 → 返回目标深拷贝（防 demote in-place 互染）；
+    指向缺失/非 dict → 返回原 ref dict（容错，validate_params 天然跳过无 name
+    参数）；目标为网关供给头（Content-Type，casefold）→ 返回 None（丢弃）。
+    非 ref 参数原样返回。
+    """
+    if not isinstance(param, dict):
+        return param
+    ref = param.get("$ref")
+    if not (isinstance(ref, str) and ref.startswith("#/parameters/")):
+        return param
+    target = doc_params.get(ref.split("/")[-1])
+    if not isinstance(target, dict):
+        return param
+    resolved = copy.deepcopy(target)
+    if (resolved.get("in") == "header"
+            and str(resolved.get("name", "")).casefold() in _GATEWAY_SUPPLIED_HEADERS):
+        return None
+    return resolved
+
+
+def _clean_params(params: list[Any], doc_params: dict[str, Any]) -> list[Any]:
+    """参数列表清洗（finalize 内缝）：$ref 解析 → oas2_parameter 归一 → 去重。
+
+    去重键：已解析参数按 name|in（恢复被 ref 折叠破坏的去重语义——
+    oas2_parameter 对 $ref 形参数原样透传，旧键恒为 None|None，每个 op
+    仅第一个 ref 幸存）；容错保留的 ref 参数按 $ref 指针本身。
+    """
+    cleaned: list[Any] = []
+    seen: set[str] = set()
+    for p in params:
+        pr = _resolve_param_ref(p, doc_params)
+        if pr is None:
+            continue
+        pc = oas2_parameter(pr)
+        ref = pc.get("$ref") if isinstance(pc, dict) else None
+        key = ref if isinstance(ref, str) else f"{pc.get('name')}|{pc.get('in')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(pc)
+    return cleaned
+
+
+_PATH_PLACEHOLDER = re.compile(r"\{([^}]+)\}")
+
+
+def _complete_path_params(doc: dict[str, Any]) -> dict[str, Any]:
+    """路径占位符声明补全（内缝，幂等 in-place，convert_api 于 demote 后调用）。
+
+    API Explorer 元数据有系统性缺口：path 模板占位符在 doc-global/path 级/
+    op 级任何层级都无声明（2026-09 全语料实测 1,132 op，其中非 project_id
+    1,023 op / 25 产品）。对这类占位符注入合成声明（in=path/required/
+    type=string，description 标注网关自动补全；project_id 附凭证自动填充
+    提示），使 get_api 呈现与 execute 校验对路径契约同源完整。运行时语义
+    不变：build_request 的路径替换从 path 模板提取占位符，不依赖声明。
+    """
+    doc_params = doc.get("parameters") or {}
+    declared_global = {p.get("name") for p in doc_params.values()
+                       if isinstance(p, dict) and p.get("in") == "path"}
+    for path, path_item in (doc.get("paths") or {}).items():
+        if not isinstance(path_item, dict):
+            continue
+        placeholders = set(_PATH_PLACEHOLDER.findall(path))
+        if not placeholders:
+            continue
+        declared_path = declared_global | {
+            p.get("name") for p in (path_item.get("parameters") or [])
+            if isinstance(p, dict)}
+        for op in path_item.values():
+            if not isinstance(op, dict):
+                continue
+            raw_params = op.get("parameters")
+            declared = set(declared_path)
+            if isinstance(raw_params, list):
+                declared |= {p.get("name") for p in raw_params
+                             if isinstance(p, dict)}
+            missing = placeholders - declared
+            if not missing:
+                continue
+            params = raw_params if isinstance(raw_params, list) else []
+            op["parameters"] = params
+            for name in sorted(missing):
+                hint = ("路径参数（元数据未声明，网关自动补全；可由凭证自动填充）"
+                        if name == "project_id" else
+                        "路径参数（元数据未声明，网关自动补全）")
+                params.append({"name": name, "in": "path", "required": True,
+                               "type": "string", "description": hint})
+    return doc
 
 
 def convert_3_to_2(api: dict[str, Any]) -> dict[str, Any]:
@@ -363,24 +465,19 @@ def finalize(doc: dict[str, Any]) -> dict[str, Any]:
         doc["responses"][name] = clean_response(r, header_defs)
     for schema in doc.get("definitions", {}).values():
         clean_schema(schema)
+    doc_params = doc.get("parameters") or {}
     for path, path_item in (doc.get("paths") or {}).items():
         if not isinstance(path_item, dict):
             continue
+        path_params = path_item.get("parameters")
+        if isinstance(path_params, list):
+            path_item["parameters"] = _clean_params(path_params, doc_params)
         for method, op in path_item.items():
             if not isinstance(op, dict):
                 continue
             params = op.get("parameters")
             if isinstance(params, list):
-                cleaned_params = []
-                seen = set()
-                for p in params:
-                    pc = oas2_parameter(p)
-                    key = f"{pc.get('name')}|{pc.get('in')}"
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    cleaned_params.append(pc)
-                op["parameters"] = cleaned_params
+                op["parameters"] = _clean_params(params, doc_params)
             for code, resp in (op.get("responses") or {}).items():
                 op["responses"][code] = clean_response(resp, header_defs)
     doc.pop("headers", None)
@@ -506,6 +603,7 @@ def convert_api(api: dict[str, Any], *,
     product = api.get("product_short") or ""
     name = api.get("name") or ""
     doc = demote_auth_headers(doc, product, name, auth_demote)
+    doc = _complete_path_params(doc)
     doc = convert_ref(doc, doc)
     doc = fix_schema_type(doc)
     return cast(dict[str, Any], doc)

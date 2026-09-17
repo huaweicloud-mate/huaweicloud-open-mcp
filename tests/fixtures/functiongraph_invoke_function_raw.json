@@ -1,0 +1,226 @@
+{
+  "id": "88987e5c2d774cc9a7d9b497bc7472ba",
+  "name": "InvokeFunction",
+  "summary": "同步执行函数",
+  "tags": "函数调用",
+  "product_short": "FunctionGraph",
+  "region_id": "cn-north-4",
+  "group_id": "cb46b925a4eb40a192520da4fc33b990",
+  "paths": {
+    "/v2/{project_id}/fgs/functions/{function_urn}/invocations": {
+      "post": {
+        "tags": [
+          "函数调用"
+        ],
+        "summary": "同步执行函数",
+        "description": "同步调用指的是客户端请求需要明确等到响应结果,也就是说这样的请求必须得调用到用户的函数,并且等到调用完成才返回。",
+        "operationId": "InvokeFunction",
+        "parameters": [
+          {
+            "$ref": "#/parameters/project_id"
+          },
+          {
+            "$ref": "#/parameters/function_urn"
+          },
+          {
+            "$ref": "#/parameters/X-Auth-Token"
+          },
+          {
+            "$ref": "#/parameters/Content-Type"
+          },
+          {
+            "name": "X-Cff-Log-Type",
+            "in": "header",
+            "description": "取值为:tail(返回函数执行后的4K日志),或者为空(不返回日志)。",
+            "required": false,
+            "type": "string",
+            "x-order": 4
+          },
+          {
+            "name": "X-CFF-Request-Version",
+            "in": "header",
+            "description": "返回体格式,取值v0,v1。\nv0:默认返回文本格式\nv1:默认返回json格式,sdk需要使用此值。",
+            "required": false,
+            "type": "string",
+            "x-order": 5
+          },
+          {
+            "name": "X-Cff-Instance-Memory",
+            "in": "header",
+            "description": "设置本次执行函数使用的内存规格,取值:\n128、256、512、768、1024、1280、1536、1792、2048、2560、3072、3584、4096、8192、10240",
+            "required": false,
+            "type": "string",
+            "x-order": 7
+          },
+          {
+            "in": "body",
+            "name": "InvokeFunctionRequestBody",
+            "description": "执行函数请求体",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/InvokeFunctionRequestBody"
+            },
+            "x-order": 6
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "examples": {
+              "text/plain": "Hello message: {\"k\": \"v\"}"
+            },
+            "schema": {
+              "$ref": "#/definitions/InvokeFunctionResponseBody"
+            },
+            "headers": {
+              "X-Cff-Invoke-Summary": {
+                "type": "string",
+                "x-internal": true
+              },
+              "X-Cff-Request-Id": {
+                "type": "string"
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request 请求错误。",
+            "schema": {
+              "$ref": "#/definitions/ErrorResp"
+            }
+          },
+          "401": {
+            "description": "Unauthorized 鉴权失败。",
+            "schema": {
+              "$ref": "#/definitions/ErrorResp"
+            }
+          },
+          "403": {
+            "description": "Forbidden 没有操作权限。",
+            "schema": {
+              "$ref": "#/definitions/ErrorResp"
+            }
+          },
+          "404": {
+            "description": "Not Found 找不到资源。",
+            "schema": {
+              "$ref": "#/definitions/ErrorResp"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error 服务内部错误。",
+            "schema": {
+              "$ref": "#/definitions/ErrorResp"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable 服务不可用。",
+            "schema": {
+              "$ref": "#/definitions/ErrorResp"
+            }
+          }
+        },
+        "x-request-examples-description-1": "同步执行函数,请求参数为键值对“k”:“v”。",
+        "x-request-examples-url-1": "POST /v2/{project_id}/fgs/functions/{function_urn}/invocations",
+        "x-request-examples-1": {
+          "data": {
+            "name": "test_name",
+            "path": "/test"
+          }
+        },
+        "x-support-sdk": "Y",
+        "x-produc-type": "functiongraph"
+      }
+    }
+  },
+  "definitions": {
+    "ErrorResp": {
+      "properties": {
+        "error_code": {
+          "type": "string",
+          "description": "错误码"
+        },
+        "error_msg": {
+          "type": "string",
+          "description": "错误信息"
+        }
+      }
+    },
+    "InvokeFunctionRequestBody": {
+      "type": "object",
+      "description": "执行函数请求体,为json格式。",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "InvokeFunctionResponseBody": {
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "请求ID。"
+        },
+        "result": {
+          "type": "string",
+          "description": "函数执行结果"
+        },
+        "log": {
+          "type": "string",
+          "description": "函数执行返回日志"
+        },
+        "status": {
+          "type": "integer",
+          "format": "int32",
+          "description": "函数执行返回状态"
+        }
+      },
+      "description": "同步执行函数返回体。"
+    }
+  },
+  "security_definitions": null,
+  "version": "2.0",
+  "components": null,
+  "consumes": "[\"application/json\"]",
+  "parameters": {
+    "Content-Type": {
+      "in": "header",
+      "name": "Content-Type",
+      "type": "string",
+      "required": true,
+      "x-example": "application/json",
+      "default": "application/json",
+      "description": "消息体的类型(格式)"
+    },
+    "project_id": {
+      "in": "path",
+      "name": "project_id",
+      "required": true,
+      "type": "string",
+      "x-example": "46b6f338fc3445b8846c71dfb1fbd9e8",
+      "description": "租户项目 ID,获取方式请参见[获取项目ID](functiongraph_06_0260.xml)。"
+    },
+    "function_urn": {
+      "in": "path",
+      "name": "function_urn",
+      "required": true,
+      "type": "string",
+      "x-example": "urn:fss:{region}:46b6f338fc3445b8846c71dfb1fbxxxx:function:csharp:test2-0:latest",
+      "description": "函数的URN,详细解释见FunctionGraph函数模型的描述。"
+    },
+    "X-Auth-Token": {
+      "in": "header",
+      "name": "X-Auth-Token",
+      "required": true,
+      "type": "string",
+      "x-example": "MIIDkgYJKoZIhvcNAQcCoIIDgzCCXXXXX...",
+      "description": "用户Token。\n\n通过调用IAM服务获取用户Token接口获取(响应消息头中X-Subject-Token的值)。"
+    }
+  },
+  "schemes": [
+    "HTTPS"
+  ],
+  "host": "functiongraph.cn-north-4.myhuaweicloud.com",
+  "base_path": null,
+  "info_version": "v2",
+  "description": null,
+  "method": "post",
+  "uri": null
+}
