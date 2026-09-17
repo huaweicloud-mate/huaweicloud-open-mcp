@@ -39,7 +39,8 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 0. `search_apis`：用户意图未指明产品/API 时先用本工具跨产品检索（实体图谱，
    返回候选产品 + 代表 API + matched_via 匹配证据），再进入 1-5 步收窄；
    结果截断（truncated=true）时可用 `limit=-1` 取全部命中；
-1. `list_products`：获取产品列表（含中文名/分类/是否全局级服务），基于用户任务语义确定产品范围；
+1. `list_products`：获取产品列表（含中文名/分类/是否全局级服务），基于用户任务语义确定产品范围
+   （选定产品时同步与用户确认目标 region）；
 2. `list_apis`：获取选定产品的 API 目录；返回结果含 `tag_groups` 全量 tag 概览，
    先用 `tag` 参数收窄目录，接口较多时配合 `search`/`limit`/`offset` 分页浏览；
 3. `get_api`：确定候选接口后，调用前**必读**接口文档（必填参数、类型、枚举、x-constraint 约束）；
@@ -83,9 +84,26 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
   部署混装 data 模式时可用 query_data/transform_data 直接分析该文件
   （json 数组可直接作表）；纯 openapi 部署用文件读取工具或 shell 查看。
 
+## Region 与多区域
+
+- 接受 region 参数的工具：`get_api` / `get_api_examples` / `execute_api`
+  （产品级目录工具不分区，无需传）；
+- 默认与覆盖：未传时用部署默认（`--region` / `HUAWEICLOUD_MCP_REGION`，
+  缺省 cn-north-4），按次传 region 即按次覆盖；
+- 流程：尽早确认，此后 get_api → execute_api 全程同一 region——
+  接口文档与端点均 region-aware，混用会读到不同 host 与参数上下文；
+- region 决定端点：详情文档 host 即该 region 服务端点（如 ecs.<region>.myhuaweicloud.com）；
+- 全局服务不传：`is_global=true` 的产品（如 IAM）无 region 语义；
+- 无效 region 静默回退：传入该接口不支持的 region 时元数据回退为默认
+  region 文档（无错误提示）；查不到资源先确认资源所在 region，再显式换 region 重试；
+- project_id 匹配：project_id 按 region 隔离，凭证里是单一静态值——跨 region
+  执行路径含 `{project_id}` 或依赖 `X-Project-Id` 头的 API 时，在 params 显式提供
+  目标 region 的 project_id（路径参数同名传入 / 头参数 `X-Project-Id` 传入，
+  均可覆盖静态凭证值）；
+- mock 模式下 region 仅进 mock URL 的 region_id 参数，无实际语义。
+
 ## 其它
 
-- region 默认 cn-north-4；非默认 region 需显式传 region 参数；
 - 产品 `is_global` 为 true 的全局级服务（如 IAM）与地域级服务认证模型不同。
 - OBS 对象上传/下载（PutObject/GetObject/AppendObject/UploadPart）恒走预签发 URL
   单口径：execute_api 直接返回 presign 信封（url/method/expires_in +
@@ -232,6 +250,8 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         """第三步：获取接口完整文档（方法/路径/参数必填性/类型/枚举/x-constraint 约束/响应结构）。
 
         执行前必读；x-constraint 描述调用前置条件与限制。
+        region 可选，缺省部署默认（cn-north-4）；返回文档含该 region 端点与
+        参数上下文，须与 execute_api 使用同一 region。
         """
         return svc.get_api(product, api, region=region)
 
@@ -239,6 +259,8 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
     def get_api_examples(product: str, api: str,
                          region: str | None = None) -> ExamplesResult | ToolError:
         """获取接口的官方请求示例（x-request-examples），用于指导参数填写。
+
+        region 语义同 get_api，与 execute_api 保持一致。
         """
         return svc.get_api_examples(product, api, region=region)
 
@@ -250,6 +272,9 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
         params 约定：路径参数/query 参数直接平铺，请求体放 params["body"]。
         mock 模式下 params["_status_code"]/params["_number"] 控制 mock 数据。
+        region 决定目标端点，与 get_api 使用同一 region；路径含 `{project_id}`
+        或依赖 `X-Project-Id` 头的 API 跨 region 执行时，在 params 显式提供目标
+        region 的 project_id；无效 region 时元数据静默回退默认 region 文档。
         OBS 对象上传/下载（PutObject/GetObject/AppendObject/UploadPart）恒走预签发：
         直接返回 presign 信封（url/method/expires_in + signed_content_type +
         headers 照抄清单），客户端凭 URL 直连 OBS 完成字节流，不经 gateway、

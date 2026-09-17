@@ -295,7 +295,7 @@
         "showbackuppolicy": "查询自动备份策略。\n调用接口前，您需要了解API认证鉴权。\n调用接口前，您需要了解请求Header参数说明。\n官方帮助文档: https://support.huaweicloud.com/api-rds/rds_09_0003.html",
         "startinstanceenlargevolumeaction": "扩容数据库实例的磁盘空间。\n调用接口前，您需要了解API认证鉴权。\n调用接口前，您需要了解请求Header参数说明。\n官方帮助文档: https://support.huaweicloud.com/api-rds/rds_01_0102.html",
         "deleteinstance": "删除数据库实例，不支持删除包周期实例。\n对于包周期的主实例和只读实例，您需要进行订单退订才可删除实例，详细操作请参见退订包周期实例或者退订包年/包月资源。\n调用接口前，您需要了解API认证鉴权。\n调用接口前，您需要了解请求Header参数说明。\n官方帮助文档: https://support.huaweicloud.com/api-rds/rds_01_0003.html",
-        "startresizeflavoraction": "变更数据库实例规格。\n调用接口前，您需要了解API认证鉴权。\n调用接口前，您需要了解请求Header参数说明。\n官方帮助文档: https://support.huaweicloud.com/api-rds/rds_01_0101.html",
+        "startresizeflavoraction": "变更数据库实例规格。\n调用接口前，您需要了解API认证鉴权。\n调用接口前，您需要了解请求Header参数说明。异步调用，返回job_id，可以通过ListJobInfo查询进度状态。\n官方帮助文档: https://support.huaweicloud.com/api-rds/rds_01_0101.html",
         "showbackupdownloadlink": "获取备份下载链接。\n调用接口前，您需要了解API认证鉴权。\n调用接口前，您需要了解请求Header参数说明。\n官方帮助文档: https://support.huaweicloud.com/api-rds/rds_09_0006.html",
         "createdatabase": "在指定实例中创建数据库。\n调用接口前，您需要了解API认证鉴权。\n调用接口前，您需要了解请求Header参数说明。\n官方帮助文档: https://support.huaweicloud.com/api-rds/rds_06_0007.html",
         "allowdbuserprivilege": "在指定实例的数据库中, 设置账号的权限。\n调用接口前，您需要了解API认证鉴权。\n调用接口前，您需要了解请求Header参数说明。\n官方帮助文档: https://support.huaweicloud.com/api-rds/rds_06_0013.html",

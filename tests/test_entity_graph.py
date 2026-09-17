@@ -473,6 +473,13 @@ def test_server_instructions_step_zero():
     assert "matched_via" in text
 
 
+def test_server_instructions_region_section():
+    from mcp_openapi.server import build_instructions
+    text = build_instructions()
+    assert "Region 与多区域" in text
+    assert "project_id" in text
+
+
 # ---------- S15c：search 废弃治理三态（annotate/hide/off） ----------
 
 def _svc_dep(mode):
