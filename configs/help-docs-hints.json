@@ -223,7 +223,8 @@
     },
     "FUNCTIONGRAPH": {
       "apis": {
-        "retryworkflow": "重试函数流(执行标准函数流失败时可使用执行id调用此接口重试，快速工作流不支持重试)\n官方帮助文档: https://support.huaweicloud.com/api-functiongraph/functiongraph_06_1011.html"
+        "retryworkflow": "重试函数流(执行标准函数流失败时可使用执行id调用此接口重试，快速工作流不支持重试)\n官方帮助文档: https://support.huaweicloud.com/api-functiongraph/functiongraph_06_1011.html",
+        "showfunctioncode": "实际响应仅含 func_code.link（OBS 下载链接），不含 base64 代码内容；私有桶直链会 403，需经 execute_api 调用 OBS:GetObject 获取预签发 URL 后直连下载。code_type=obs 时源桶可能已删除（code_url 死链），应以 functionstorage 部署副本（func_code.link）为准，下载后核对 presign 信封 expected_size。"
       }
     },
     "GES": {

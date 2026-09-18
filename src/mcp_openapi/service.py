@@ -156,7 +156,9 @@ class ToolService:
         未配置 policy store（无可写文件）或 policy 放行 → None；
         denial_reason 非空时须与本方法复查结果一致（确保被增强的确实是
         policy 拒绝而非其它拒绝源），不一致 → None。
-        coarse_rule 为产品级规则（product:*=allow，session 档授予选项）。
+        coarse_rule 为产品级规则（product:*=allow，session 档授予选项）；
+        readonly_rules 为产品级只读规则集（List/Show/Get/Query 四条，
+        session 档授予选项，safety.policy.readonly_grant_rules 构造）。
         """
         if self.config.policy_store is None:
             return None
@@ -167,7 +169,8 @@ class ToolService:
             return None
         return DenialOffer(subject=f"{product}:{api}",
                            rule=safety_policy.grant_rule(product, api), reason=err,
-                           coarse_rule=safety_policy.grant_rule(product, "*"))
+                           coarse_rule=safety_policy.grant_rule(product, "*"),
+                           readonly_rules=safety_policy.readonly_grant_rules(product))
 
     @_audited
     @_guarded
@@ -448,7 +451,8 @@ class ToolService:
                 return {"ok": False, "reason": gate_err}
             return execute_obs.execute_presign_api(
                 doc, path, method, op, product, api, region, params,
-                credentials=self.config.credentials)
+                credentials=self.config.credentials,
+                client=None if self.config.mock else self._make_obs_client())
 
         # OpenAPI 元数据 schema 校验（policy 接缝）：mock/real 共享；
         # OBS lane（XML body/自身参数切分）不适用，跳过
@@ -480,6 +484,7 @@ class ToolService:
                 return execute_obs.execute_presign_api(
                     doc, path, method, op, product, api, region, params,
                     credentials=self.config.credentials,
+                    client=self._make_obs_client(),
                 )
             logger.info("execute %s:%s region=%s mode=obs policy=allow",
                         product, api, region)

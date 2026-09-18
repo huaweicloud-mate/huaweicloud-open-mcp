@@ -27,6 +27,7 @@ DECLINE = ElicitResult(action="decline")
 ACCEPT_API = ElicitResult(action="accept", content={"choice": "api"})
 ACCEPT_API_SESSION = ElicitResult(action="accept", content={"choice": "api_session"})
 ACCEPT_PRODUCT = ElicitResult(action="accept", content={"choice": "product"})
+ACCEPT_READONLY = ElicitResult(action="accept", content={"choice": "readonly"})
 
 _OPENAPI_DOC = {
     "swagger": "2.0",
@@ -53,17 +54,31 @@ _OPENAPI_DOC = {
                 "responses": {"200": {"description": "OK"}},
             }
         },
+        "/v1/{project_id}/cloudservers/{server_id}": {
+            "delete": {
+                "operationId": "DeleteServers",
+                "parameters": [
+                    {"name": "project_id", "in": "path", "type": "string",
+                     "required": True},
+                    {"name": "server_id", "in": "path", "type": "string",
+                     "required": True},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            }
+        },
     },
     "definitions": {},
 }
 
 
 def _cache_entries(store):
-    """两个 ECS 接口入缓存（产品级规则跨 API 放行验证用）。"""
+    """三个 ECS 接口入缓存（产品级/只读规则集跨 API 放行与拒绝验证用）。"""
     doc = _OPENAPI_DOC
     for path, method, api in (
             ("/v1/{project_id}/cloudservers/detail", "get", "ListServersDetails"),
-            ("/v1/{project_id}/cloudservers", "get", "ListServers")):
+            ("/v1/{project_id}/cloudservers", "get", "ListServers"),
+            ("/v1/{project_id}/cloudservers/{server_id}", "delete",
+             "DeleteServers")):
         op = doc["paths"][path][method]
         store.set_api_cache(
             ("ecs", api, "cn-north-4"), (doc, path, method, op))
@@ -628,3 +643,43 @@ def test_discover_off_denial_carries_fallback_hint(tmp_path):
     assert "manage_policy" in out["reason"] and "question" in out["reason"]
     assert "server:@huaweicloud/ecs=allow" in out["reason"]
     assert "product" not in out["reason"]                 # connect 无产品级选项
+
+
+def test_openapi_execute_denied_readonly_choice_grants_four_session_rules(
+        tmp_path, monkeypatch):
+    """choice=readonly：授予产品级只读规则集（List/Show/Get/Query 四条 session 规则）。
+
+    同产品 List/Show 系直接放行不再问询；Delete 系不匹配只读集仍拒（第二次
+    拒绝经 decline 收场）；授予不落盘（session 档）。"""
+    app, p = make_openapi(tmp_path, "auto")
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
+    seen, script = [], [ACCEPT_READONLY, DECLINE]
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client(script, seen)) as s:
+                await s.initialize()
+                first = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+                second = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServersDetails"}))
+                listed = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "ListServers"}))
+                deleted = result_dict(await s.call_tool(
+                    "execute_api", {"product": "ECS", "api": "DeleteServers"}))
+                return first, second, listed, deleted
+
+    first, second, listed, deleted = run(_run())
+    assert first["ok"] is False
+    assert first["granted_rule"] == ("ECS:*List*=allow;ECS:*Show*=allow;"
+                                     "ECS:*Get*=allow;ECS:*Query*=allow")
+    assert "产品级只读" in first["reason"]
+    assert "请重新调用" in first["reason"]
+    assert "readonly" in seen[0] and "*List*" in seen[0]   # 弹窗并列只读选项
+    lines = policy_lines(p)
+    assert not any("*List*" in ln for ln in lines)          # session 档不落盘
+    assert second["ok"] is True                             # 会话内持续放行（不焚毁）
+    assert listed["ok"] is True                             # *List* 放行同产品其它只读
+    assert deleted["ok"] is False                           # Delete 不匹配只读集
+    assert "safety policy 拒绝执行" in deleted["reason"]
+    assert len(seen) == 2                                   # 授予一次 + Delete 拒绝提议一次（decline）

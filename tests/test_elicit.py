@@ -169,17 +169,19 @@ def test_server_wildcard_rule_covers_all_tools_not_connect():
 # ---------- GrantChoiceConfirm 表单 schema（拒绝提议四选一） ----------
 
 def test_grant_choice_confirm_schema_is_primitive_enum():
-    """四选一表单：单 primitive 枚举字段（MCP spec 兼容），无嵌套结构。"""
+    """五选一表单：单 primitive 枚举字段（MCP spec 兼容），无嵌套结构。"""
     schema = GrantChoiceConfirm.model_json_schema()
     props = schema["properties"]
     assert set(props) == {"choice"}
     choice = props["choice"]
-    assert choice.get("enum") == ["api", "api_session", "product", "none"]
+    assert choice.get("enum") == ["api", "api_session", "product",
+                                  "readonly", "none"]
     assert choice.get("type") == "string"
     assert schema.get("required") == ["choice"]
 
 
-@pytest.mark.parametrize("picked", ["api", "api_session", "product", "none"])
+@pytest.mark.parametrize("picked", ["api", "api_session", "product",
+                                    "readonly", "none"])
 def test_grant_choice_confirm_parses_each_value(picked):
     form = GrantChoiceConfirm(choice=picked)  # type: ignore[arg-type]
     assert form.choice == picked
@@ -535,3 +537,115 @@ def test_ctx_elicit_fn_maps_failure_to_unsupported():
 
     fn = ctx_elicit_fn(FakeCtx([RuntimeError("client rejected")]))
     assert run(fn("m", PolicyChangeConfirm)) is None
+
+
+# ---------- S-B：readonly 产品级只读档（五选一） ----------
+
+READONLY_RULES = ["VPC:*List*=allow", "VPC:*Show*=allow",
+                  "VPC:*Get*=allow", "VPC:*Query*=allow"]
+READONLY_OFFER = DenialOffer(subject="VPC:ListVpcs",
+                             rule="VPC:ListVpcs=allow",
+                             reason="safety policy 拒绝执行 VPC:ListVpcs",
+                             coarse_rule="VPC:*=allow",
+                             readonly_rules=READONLY_RULES)
+ACCEPT_READONLY = ElicitOutcome(action="accept", choice="readonly")
+
+
+def test_readonly_grant_rules_text_and_parse_roundtrip():
+    rules = policy.readonly_grant_rules("VPC")
+    assert rules == READONLY_RULES
+    for line in rules:
+        parsed = policy.parse_policy([line, "*=deny"])
+        assert parsed[0].product == "VPC"
+        assert parsed[0].allow is True
+    # 产品名插值正确
+    assert policy.readonly_grant_rules("OBS") == [
+        "OBS:*List*=allow", "OBS:*Show*=allow",
+        "OBS:*Get*=allow", "OBS:*Query*=allow"]
+
+
+def test_offer_grant_readonly_choice_grants_four_session_rules():
+    elicit = make_elicit(ACCEPT_READONLY)
+    grant = make_grant()
+    consent = PolicyConsent("auto", elicit, grant)
+    out = run(consent.offer_grant(READONLY_OFFER, dict(DENIAL_VPC)))
+    assert grant.calls == [(r, "session") for r in READONLY_RULES]  # type: ignore[attr-defined]
+    assert out["granted_rule"] == ";".join(READONLY_RULES)
+    assert "产品级只读" in out["reason"]
+    assert "请重新调用" in out["reason"]
+    assert out["reason"].startswith(DENIAL_VPC["reason"])
+
+
+def test_offer_grant_readonly_partial_failure_reports():
+    grant = make_grant()
+    calls = grant.calls  # type: ignore[attr-defined]
+
+    def grant_fn(line: str, scope: str | None = None) -> dict:
+        grant_fn_calls = calls
+        grant_fn_calls.append((line, scope))
+        if len(grant_fn_calls) >= 3:   # 第 3 条起失败
+            return {"ok": False, "action": "add", "reason": "boom"}
+        return {"ok": True, "action": "add"}
+
+    grant_fn.calls = calls  # type: ignore[attr-defined]
+    elicit = make_elicit(ACCEPT_READONLY)
+    consent = PolicyConsent("auto", elicit, grant_fn)
+    out = run(consent.offer_grant(READONLY_OFFER, dict(DENIAL_VPC)))
+    assert out["ok"] is False      # 保持拒绝
+    assert "granted_rule" not in out
+    assert "VPC:*List*=allow" in out["reason"]      # 已授予明细
+    assert "boom" in out["reason"]                  # 失败原因
+
+
+def test_offer_grant_readonly_without_rules_keeps_denial():
+    bare = DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
+                       coarse_rule="X:*=allow")
+    elicit = make_elicit(ACCEPT_READONLY)
+    grant = make_grant()
+    consent = PolicyConsent("auto", elicit, grant)
+    out = run(consent.offer_grant(bare, {"ok": False, "reason": "denied"}))
+    assert out == {"ok": False, "reason": "denied"}
+    assert grant.calls == []  # type: ignore[attr-defined]
+
+
+def test_fallback_hint_readonly_lists_five_options():
+    hint = fallback_hint(READONLY_OFFER)
+    assert "api=最小规则" in hint
+    assert "api_session=最小规则" in hint
+    assert "product=产品级规则" in hint
+    assert "readonly=产品级只读" in hint
+    assert "*List*" in hint and "*Query*" in hint
+    assert "none=不授予" in hint
+
+
+def test_fallback_hint_no_readonly_keeps_four_options():
+    hint = fallback_hint(COARSE_OFFER)   # 无 readonly_rules
+    assert "readonly" not in hint
+    assert "product=产品级规则" in hint
+
+
+def test_denial_message_readonly_presents_five_options():
+    msg = denial_message(READONLY_OFFER)
+    assert "- readonly：授予产品级只读规则" in msg
+    assert "- none：不授予" in msg
+
+
+def test_denial_message_without_readonly_keeps_four_options():
+    msg = denial_message(COARSE_OFFER)
+    assert "readonly" not in msg
+    assert "- product：授予产品级规则" in msg
+
+
+def test_grant_choice_confirm_parses_readonly():
+    assert GrantChoiceConfirm(choice="readonly").choice == "readonly"
+
+
+def test_ctx_elicit_fn_normalizes_readonly_choice():
+    from common.elicit import ctx_elicit_fn
+
+    class AcceptedReadonlyChoice:
+        action = "accept"
+        data = GrantChoiceConfirm(choice="readonly")
+
+    out = run(ctx_elicit_fn(FakeCtx([AcceptedReadonlyChoice()]))("m", GrantChoiceConfirm))
+    assert out == ElicitOutcome(action="accept", choice="readonly")

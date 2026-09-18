@@ -157,6 +157,77 @@ def test_execute_api_passes_spill_with_stem(mini_detail, tmp_path):
         assert json.load(f) == big
 
 
+# ---------- normalize_response：二进制 body（bytes → 占位 + spill .bin） ----------
+
+def _png_like(n: int = 64) -> bytes:
+    return b"\x89PNG\r\n\x1a\n" + bytes((i * 7 + 0x80) & 0xFF for i in range(n))
+
+
+def test_normalize_response_binary_body_placeholder_and_spill(tmp_path):
+    import hashlib
+
+    from mcp_openapi.spill import SpillConfig
+    raw = _png_like()
+    out = execute.normalize_response(
+        {"status": 200, "headers": {"Content-Type": "image/png"}, "body": raw},
+        spill=SpillConfig(dir=tmp_path), stem="X-Dl")
+    assert out["truncated"] is True
+    body = out["body"]
+    assert body["binary"] is True
+    assert body["size"] == len(raw)
+    assert body["content_type"] == "image/png"
+    assert body["sha256"] == hashlib.sha256(raw).hexdigest()  # 独立真值
+    assert "落盘" in body["note"]
+    info = out["spill"]
+    assert info["format"] == "bin"
+    assert info["path"].startswith(str(tmp_path))
+    with open(info["path"], "rb") as f:
+        assert f.read() == raw                 # disk == wire（逐位一致）
+
+
+def test_normalize_response_binary_body_small_still_spills(tmp_path):
+    # bytes 恒落盘（不设体积门槛）：小二进制不落盘即整段丢失
+    from mcp_openapi.spill import SpillConfig
+    raw = b"\x00\x01\x02\xff"
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": raw},
+                                     spill=SpillConfig(dir=tmp_path), stem="x")
+    with open(out["spill"]["path"], "rb") as f:
+        assert f.read() == raw
+    assert out["body"]["size"] == 4
+
+
+def test_normalize_response_binary_body_without_spill_config():
+    raw = _png_like(8)
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": raw})
+    assert out["truncated"] is True
+    assert "spill" not in out
+    assert out["body"]["binary"] is True
+    assert "不可得" in out["body"]["note"]    # 明示数据未保留，不再输出乱码
+
+
+def test_normalize_response_binary_body_content_type_case_insensitive(tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    raw = b"\xff\xfe\xfd"
+    out = execute.normalize_response(
+        {"status": 200, "headers": {"content-type": "application/zip"}, "body": raw},
+        spill=SpillConfig(dir=tmp_path), stem="x")
+    assert out["body"]["content_type"] == "application/zip"
+
+
+def test_normalize_response_binary_error_body_hex_msg(tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    raw = b"\x89PNG\x00\xff"
+    out = execute.normalize_response(
+        {"status": 500, "headers": {"Content-Type": "image/png"}, "body": raw},
+        spill=SpillConfig(dir=tmp_path), stem="x")
+    assert out["status"] == 500
+    assert out["error_msg"].startswith("binary body")
+    assert raw[:16].hex() in out["error_msg"]
+    assert out["body"]["binary"] is True      # 错误分支同样占位+落盘
+    with open(out["spill"]["path"], "rb") as f:
+        assert f.read() == raw
+
+
 # ---------- normalize_response：错误体形状兼容（矩阵经单一接口断言） ----------
 
 def test_normalize_response_error_body_always_present():

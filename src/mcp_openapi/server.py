@@ -54,12 +54,14 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 - 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口；
 - 被拒接口确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认，再调用
   `manage_policy(action="add", line=...)` 授予规则（如 "OBS:GetObject=allow"，
-  或产品级 "VPC:*=allow"），规则热生效后重试即可通过；问询按四选一口径：
+  或产品级 "VPC:*=allow"），规则热生效后重试即可通过；问询按五选一口径：
   api=最小规则（一次性，用后即焚）/ api_session=最小规则（会话内，本次会话内
   持续放行该 API，重启即失）/ product=产品级规则（会话内，覆盖该产品全部
-  API，重启即失）/ none=不授予；
+  API，重启即失）/ readonly=产品级只读规则集（会话内，List/Show/Get/Query
+  四条通配，浏览类任务首选）/ none=不授予；同会话第二次问询建议直接推荐
+  session 或 readonly 档；
   部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
-  经 MCP elicitation 弹出同样的四选一提议（结果携带 `granted_rule` 字段）；
+  经 MCP elicitation 弹出同样的五选一提议（结果携带 `granted_rule` 字段）；
   默认 off 或客户端不支持 elicitation 时，拒绝原因会附带同样的兜底指引，
   按指引问询确认后再授予；
 - 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
@@ -284,10 +286,12 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         （信封 note 字段给出警示口径）。桶管理类接口仍由 gateway 直连执行。
 
         被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户弹窗四选一提议授予（用户确认后热生效并携带 granted_rule）：
+        向用户弹窗五选一提议授予（用户确认后热生效并携带 granted_rule）：
         api=最小规则（一次性，用后即焚）/ api_session=最小规则（会话内，本次
         会话内持续放行该 API，重启即失）/ product=产品级规则如 "VPC:*=allow"
-        （会话内放行该产品全部 API，重启即失）/ none=不授予；
+        （会话内放行该产品全部 API，重启即失）/ readonly=产品级只读规则集
+        （会话内放行 List/Show/Get/Query 四组只读 API，浏览类任务首选，重启
+        即失）/ none=不授予；
         默认 off 或客户端不支持 elicitation 时，拒绝原因附带同样的兜底指引
         （先经交互式问询向用户确认，再经 manage_policy 授予）；
         亦可经 manage_policy 授予（add/remove 前服务端先 elicit 确认）。

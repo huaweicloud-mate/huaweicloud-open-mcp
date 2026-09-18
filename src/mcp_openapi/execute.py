@@ -2,6 +2,7 @@
 safety policy 检查已由 ToolService.execute_api 在上层完成。
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -201,12 +202,34 @@ def build_request(op: dict[str, Any], path: str, params: dict[str, Any],
     return filled, query, body, headers, None
 
 
+def _content_type(headers: dict[str, str] | None) -> str | None:
+    """大小写不敏感提取响应 Content-Type（urllib 头键 casing 不稳定）。"""
+    if not headers:
+        return None
+    for k, v in headers.items():
+        if isinstance(k, str) and k.lower() == "content-type" and v:
+            return str(v)
+    return None
+
+
 def _render_body(raw: Any, spill: SpillConfig | None = None,
-                 stem: str = "response") -> tuple[Any, bool, SpillInfo | None]:
+                 stem: str = "response",
+                 content_type: str | None = None) -> tuple[Any, bool, SpillInfo | None]:
     """响应体渲染（成功/错误分支共用）：超限截断；配置 spill 时先把完整原始体
-    保真落盘（S12 层级 1，截断前真值）。返回 (body, truncated, spill_info)。"""
+    保真落盘（S12 层级 1，截断前真值）。返回 (body, truncated, spill_info)。
+
+    bytes 分支（不透明二进制，parse_body 分类产出）：恒占位不进信封（防乱码
+    污染上下文），完整字节无条件落盘 `.bin`（无体积门槛——不落盘即整段丢失），
+    占位携带 sha256 供 agent 独立校验；spill 未启用时 note 明示数据不可得。
+    """
     if raw is None:
         return None, False, None
+    if isinstance(raw, bytes):
+        info = spill_body(raw, cfg=spill, stem=stem) if spill is not None else None
+        note = ("二进制响应，完整字节已落盘（见 spill，可用占位体 sha256 校验）"
+                if info is not None else "二进制响应未渲染（spill 未启用，完整数据不可得）")
+        return {"binary": True, "size": len(raw), "content_type": content_type,
+                "sha256": hashlib.sha256(raw).hexdigest(), "note": note}, True, info
     text = json.dumps(raw, ensure_ascii=False, default=str) \
         if not isinstance(raw, str) else raw
     if len(text) > MAX_RESPONSE_CHARS:
@@ -224,12 +247,15 @@ def normalize_response(resp: ClientResponse, spill: SpillConfig | None = None,
     """把客户端响应规范化为结构化输出。
 
     2xx：body 恒透出（超限截断；配置 spill 时完整原始体先落盘并在结果附
-    spill 信封）。非 2xx：error_code/error_msg 为尽力规范化字段（多形态兼容
-    抽取，不命中保持 null）；body 恒透出原始体（真值源兜底）。
-    未配置 spill 时与既有行为逐字段一致（回归红线）。
+    spill 信封）。bytes body（不透明二进制）：占位 + `.bin` 落盘（保真不变量
+    disk == wire）。非 2xx：error_code/error_msg 为尽力规范化字段（多形态兼容
+    抽取，不命中保持 null）；body 恒透出原始体（真值源兜底），bytes 走
+    占位 + 短 hex 描述。
+    未配置 spill 时与既有行为逐字段一致（回归红线，bytes 占位除外）。
     """
     status = resp.get("status", 0)
-    body, truncated, info = _render_body(resp.get("body"), spill, stem)
+    body, truncated, info = _render_body(resp.get("body"), spill, stem,
+                                         content_type=_content_type(resp.get("headers")))
     out: ExecuteResult = {"status": status, "body": body}
     if truncated:
         out["truncated"] = True
@@ -240,6 +266,8 @@ def normalize_response(resp: ClientResponse, spill: SpillConfig | None = None,
     raw = resp.get("body")
     if isinstance(raw, dict):
         out["error_code"], out["error_msg"] = _extract_error_fields(raw)
+    elif isinstance(raw, bytes):
+        out["error_msg"] = f"binary body ({len(raw)} bytes): {raw[:16].hex()}"
     else:
         out["error_msg"] = str(raw)[:1000] if raw else f"HTTP {status}"
     return out

@@ -3,6 +3,7 @@
 import urllib.error
 
 from common.auth import Credentials
+from common.http import parse_body
 from mcp_openapi.signer.client import HttpClient
 
 CRED = Credentials(ak="AK", sk="SK", project_id="pid")
@@ -153,3 +154,43 @@ def test_mock_api_client_url(monkeypatch):
     assert "status_code=200" in url
     assert "number=2" in url
     assert "region_id=cn-north-4" in url
+
+
+# ---------- parse_body：二进制检测（S4 扩展，body 契约 bytes 分支） ----------
+
+def test_parse_body_empty_returns_none():
+    assert parse_body(b"") is None
+
+
+def test_parse_body_json_and_text_unchanged():
+    assert parse_body(b'{"a": 1}') == {"a": 1}
+    assert parse_body(b"plain text") == "plain text"
+
+
+def test_parse_body_invalid_utf8_returns_bytes():
+    raw = b"\x89PNG\r\n\x1a\n" + bytes(range(0x80, 0x90))
+    out = parse_body(raw)
+    assert isinstance(out, bytes)
+    assert out == raw
+
+
+def test_parse_body_nul_returns_bytes():
+    raw = b"abc\x00def"
+    out = parse_body(raw)
+    assert isinstance(out, bytes)
+    assert out == raw
+
+
+def test_parse_body_ascii_control_chars_stay_text():
+    # 全 ASCII 控制字符（无 NUL）：合法 UTF-8 → 文本分类；
+    # decode/encode 字节恒等，spill 仍保真（disk == wire 不变量不受分类影响）
+    raw = b"\x01\x02PK\x03\x04"
+    assert parse_body(raw) == "\x01\x02PK\x03\x04"
+
+
+def test_parse_body_str_roundtrip_byte_identical():
+    # 保真不变量：str 分支 re-encode 与线上字节一致
+    raw = "中文内容".encode("utf-8")
+    out = parse_body(raw)
+    assert isinstance(out, str)
+    assert out.encode("utf-8") == raw

@@ -473,3 +473,74 @@ def test_match_l4_alias_still_wins_over_candidates():
     got = match_apis(APIS_INDEX, records, build_alias_index(PRODUCTS))
     assert got["matched"][0]["product"] == "ECS"
     assert got["unmatched"] == []
+
+
+# ---------- S13c 扩展：curated 提示合并（curation，再生不丢） ----------
+
+CURATION = {"products": {"FunctionGraph": {"apis": {
+    "ShowFunctionCode": "实际响应仅含 func_code.link（OBS 下载链接），不含 base64 "
+                        "代码内容；私有桶直链会 403，需经 OBS:GetObject 预签发下载。"}}}}
+
+
+def test_apply_curation_to_hints_merges_new_and_existing_products():
+    from apie import build_help_hints
+    hints_raw = build_hints([
+        {"product": "OBS", "api": "CreateBucket", "url": "https://u/3",
+         "detail_desc": "", "matched_by": "summary", "help_intro": "创建桶。"}])
+    merged = build_help_hints.apply_curation_to_hints(hints_raw, CURATION)
+    assert merged["products"]["FUNCTIONGRAPH"]["apis"]["showfunctioncode"].startswith(
+        "实际响应仅含 func_code.link")
+    assert merged["products"]["OBS"]["apis"]["createbucket"].endswith("https://u/3")
+    parsed = parse_hints(merged)   # round-trip：API 键 lower 归一化语义
+    assert parsed.api_notes("FunctionGraph", "ShowFunctionCode").startswith(
+        "实际响应仅含 func_code.link")
+
+
+def test_apply_curation_to_hints_curated_wins_on_collision():
+    from apie import build_help_hints
+    hints_raw = build_hints([
+        {"product": "FunctionGraph", "api": "ShowFunctionCode", "url": "https://u/fg",
+         "detail_desc": "", "matched_by": "name", "help_intro": "获取指定函数的代码。"}])
+    merged = build_help_hints.apply_curation_to_hints(hints_raw, CURATION)
+    assert merged["products"]["FUNCTIONGRAPH"]["apis"]["showfunctioncode"] == \
+        "实际响应仅含 func_code.link（OBS 下载链接），不含 base64 " \
+        "代码内容；私有桶直链会 403，需经 OBS:GetObject 预签发下载。"
+
+
+def test_apply_curation_to_hints_none_or_empty_same_object():
+    from apie import build_help_hints
+    hints_raw = build_hints([])
+    assert build_help_hints.apply_curation_to_hints(hints_raw, None) is hints_raw
+    assert build_help_hints.apply_curation_to_hints(hints_raw, {}) is hints_raw
+    assert build_help_hints.apply_curation_to_hints(
+        hints_raw, {"products": {}}) is hints_raw
+
+
+def test_apply_curation_to_hints_copy_on_write():
+    from apie import build_help_hints
+    hints_raw = build_hints([
+        {"product": "OBS", "api": "CreateBucket", "url": "https://u/3",
+         "detail_desc": "", "matched_by": "summary", "help_intro": "创建桶。"}])
+    import json as _json
+    original = _json.loads(_json.dumps(hints_raw))
+    build_help_hints.apply_curation_to_hints(hints_raw, CURATION)
+    assert hints_raw == original    # 入参恒不改写
+
+
+def test_build_completions_applies_curation(tmp_path):
+    import json as _json
+
+    from apie import build_help_hints
+    raw = tmp_path / "raw"
+    data = tmp_path / "data"
+    raw.mkdir()
+    data.mkdir()
+    (raw / "help_docs.json").write_text(_json.dumps({"records": {}}), encoding="utf-8")
+    (raw / "apis_docs.json").write_text(_json.dumps({"apis": []}), encoding="utf-8")
+    (raw / "huawei_products.json").write_text(_json.dumps({"groups": []}), encoding="utf-8")
+    build_help_hints.build_completions(raw, data, curation=CURATION)
+    hints = _json.loads(
+        (data / "hints" / "help-docs-hints.json").read_text(encoding="utf-8"))
+    assert hints["products"]["FUNCTIONGRAPH"]["apis"]["showfunctioncode"].startswith(
+        "实际响应仅含 func_code.link")
+    parse_hints(hints)  # 产物 round-trip

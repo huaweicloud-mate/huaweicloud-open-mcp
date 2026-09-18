@@ -17,7 +17,6 @@ from mcp_openapi.execute_obs import (
     execute_obs_api,
     is_obs,
     parse_obs_error,
-    render_response_body,
     serialize_body_xml,
 )
 
@@ -337,23 +336,67 @@ def test_build_obs_request_missing_required_query_reports():
     assert out == "缺少必填参数: uploadId"
 
 
-# ---------- D：二进制下载占位 / C：响应头摘取 ----------
+# ---------- D：二进制响应统一走 parse_body（bytes → normalize 占位+落盘） ----------
 
-def test_render_response_body_binary_placeholder():
-    raw = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-    out = render_response_body(200, "image/png", raw)
-    assert out == {"note": "二进制响应未渲染", "size": len(raw), "content_type": "image/png"}
+def _fake_urlopen(monkeypatch, status: int, headers: dict, raw: bytes) -> None:
+    import urllib.request as ur
+    code = status
+    hdrs = headers
+
+    class _Resp:
+        status = code
+        headers = hdrs
+
+        def read(self):
+            return raw
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(ur, "urlopen", lambda req, timeout=None: _Resp())
 
 
-def test_render_response_body_text_passthrough_when_decodable():
-    out = render_response_body(200, "application/x-custom", b"<List>x</List>")
-    assert out == "<List>x</List>"
+def test_obs_http_client_binary_body_passthrough_bytes(monkeypatch):
+    """OBS adapter 不再本地渲染二进制：raw bytes 原样进 ClientResponse
+    （判据单点收拢于 parse_body，与 real/mock lane 同源）。"""
+    raw = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+    _fake_urlopen(monkeypatch, 200, {"Content-Type": "image/png"}, raw)
+    client = ObsHttpClient(credentials=None)
+    resp = client.request("get", "obs.cn-north-4.myhuaweicloud.com",
+                          bucket="b", object_key="o.png")
+    assert isinstance(resp["body"], bytes)
+    assert resp["body"] == raw
 
 
-def test_render_response_body_error_and_xml_always_text():
-    xml = "<Error><Code>X</Code></Error>".encode()
-    assert render_response_body(404, "image/png", xml) == "<Error><Code>X</Code></Error>"
-    assert render_response_body(200, "application/xml", xml) == "<Error><Code>X</Code></Error>"
+def test_normalize_obs_binary_body_placeholder_and_spill(tmp_path):
+    """统一占位契约：OBS 二进制与 real/mock lane 同形 + .bin 保真。"""
+    from mcp_openapi.spill import SpillConfig
+    raw = b"\x89PNG\r\n\x1a\n\x00\xff"
+    out = execute_obs._normalize_obs(
+        {"status": 200, "headers": {"Content-Type": "image/png"}, "body": raw},
+        spill=SpillConfig(dir=tmp_path), stem="OBS-Get")
+    assert out["body"]["binary"] is True
+    assert out["body"]["content_type"] == "image/png"
+    assert out["body"]["size"] == len(raw)
+    assert out["spill"]["format"] == "bin"
+    with open(out["spill"]["path"], "rb") as f:
+        assert f.read() == raw                   # disk == wire
+
+
+def test_obs_http_client_error_xml_text_roundtrip(monkeypatch):
+    """错误 XML（合法 UTF-8 无 NUL）恒文本：parse_obs_error 判定不受影响。"""
+    xml = b"<Error><Code>NoSuchKey</Code><Message>m</Message></Error>"
+    _fake_urlopen(monkeypatch, 404, {"Content-Type": "application/xml"}, xml)
+    client = ObsHttpClient(credentials=None)
+    resp = client.request("get", "obs.cn-north-4.myhuaweicloud.com",
+                          bucket="b", object_key="missing")
+    assert resp["body"] == xml.decode()
+    out = execute_obs._normalize_obs(resp)
+    assert out["error_code"] == "NoSuchKey"
+    assert out["error_msg"] == "m"
 
 
 def test_normalize_obs_picks_whitelisted_headers():
@@ -606,6 +649,126 @@ def test_execute_presign_api_missing_object_key_passthrough():
         credentials=Credentials(ak="A", sk="B"))
     assert out["ok"] is False
     assert "object_key" in (out.get("reason") or "")
+
+
+# ---------- S9f-c GetObject 预签发 HEAD 预检 ----------
+
+def _presign_call(client=None, api="GetObject", method="get",
+                  params: dict | None = None):
+    from common.auth.credentials import Credentials
+    return execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", method, PRESIGN_OP_GET, "OBS", api,
+        "cn-north-4", params if params is not None
+        else {"bucket_name": "b", "object_key": "o"},
+        credentials=Credentials(ak="AK", sk="SK"), client=client)
+
+
+def test_presign_head_precheck_200_fills_expected():
+    fake = _FakeObsClient({"status": 200,
+                           "headers": {"Content-Length": "716",
+                                       "ETag": '"abc123"'},
+                           "body": None})
+    out = _presign_call(client=fake)
+    assert out["ok"] is True
+    assert fake.captured["method"] == "HEAD"
+    assert fake.captured["bucket"] == "b"
+    assert fake.captured["object_key"] == "o"
+    ps = out["presign"]
+    assert ps["expected_size"] == 716
+    assert ps["expected_etag"] == '"abc123"'
+    assert "expected_size" in ps.get("note", "")
+
+
+def test_presign_head_precheck_headers_case_insensitive():
+    fake = _FakeObsClient({"status": 200,
+                           "headers": {"content-length": "716", "etag": "abc"},
+                           "body": None})
+    ps = _presign_call(client=fake)["presign"]
+    assert ps["expected_size"] == 716
+    assert ps["expected_etag"] == "abc"
+
+
+def test_presign_head_404_denies_presign():
+    fake = _FakeObsClient({"status": 404, "headers": {}, "body": None})
+    out = _presign_call(client=fake)
+    assert out["ok"] is False
+    assert "presign" not in out
+    assert "不存在" in (out.get("reason") or "")
+    assert "func_code.link" in (out.get("reason") or "")
+
+
+def test_presign_head_404_with_error_xml_denies():
+    fake = _FakeObsClient({"status": 404, "headers": {},
+                           "body": "<Error><Code>NoSuchBucket</Code>"
+                                   "<Message>missing</Message></Error>"})
+    out = _presign_call(client=fake)
+    assert out["ok"] is False
+    assert "NoSuchBucket" in (out.get("reason") or "")
+
+
+def test_presign_head_403_degrades():
+    fake = _FakeObsClient({"status": 403, "headers": {}, "body": None})
+    out = _presign_call(client=fake)
+    assert out["ok"] is True
+    ps = out["presign"]
+    assert "expected_size" not in ps and "expected_etag" not in ps
+    assert "预检" in ps.get("note", "")
+
+
+def test_presign_head_network_error_degrades():
+    class _Boom:
+        def request(self, *args, **kwargs):
+            raise OSError("network down")
+
+    out = _presign_call(client=_Boom())
+    assert out["ok"] is True
+    ps = out["presign"]
+    assert "expected_size" not in ps
+    assert "预检" in ps.get("note", "")
+
+
+def test_presign_no_client_regression_red_line():
+    # client=None：信封与既有行为逐字段一致（回归红线）
+    from common.auth.credentials import Credentials
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "get", PRESIGN_OP_GET, "OBS", "GetObject",
+        "cn-north-4", {"bucket_name": "b", "object_key": "o"},
+        credentials=Credentials(ak="AK9", sk="SK9"), client=None)
+    assert out["ok"] is True
+    ps = out["presign"]
+    assert set(ps.keys()) == {"url", "method", "expires_in",
+                              "signed_content_type", "headers"}
+
+
+def test_presign_put_no_head_even_with_client():
+    fake = _FakeObsClient({"status": 200, "headers": {}, "body": None})
+    out = _presign_call(client=fake, api="PutObject", method="put")
+    assert out["ok"] is True
+    assert fake.captured == {}      # 写对象不预检
+    assert "expected_size" not in out["presign"]
+
+
+def test_presign_head_versionid_passthrough():
+    fake = _FakeObsClient({"status": 200,
+                           "headers": {"Content-Length": "5", "ETag": "e"},
+                           "body": None})
+    _presign_call(client=fake, params={"bucket_name": "b", "object_key": "o",
+                                       "versionId": "v1"})
+    assert fake.captured["query"] == {"versionId": "v1"}
+
+
+def test_presign_head_precheck_skipped_without_object_key():
+    # 无 object_key（桶根列举形态）：不预检
+    from common.auth.credentials import Credentials
+    fake = _FakeObsClient({"status": 200, "headers": {}, "body": None})
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/", "get", {"parameters": [
+            {"name": "bucket_name", "in": "query", "required": True}]},
+        "OBS", "GetObject", "cn-north-4", {"bucket_name": "b"},
+        credentials=Credentials(ak="A", sk="B"), client=fake)
+    assert out["ok"] is True
+    assert fake.captured == {}
+    assert "expected_size" not in out["presign"]
 
 
 # ---------- spill 透传（S12） ----------

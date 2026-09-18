@@ -199,6 +199,16 @@ def grant_server_rule(server: str, tool: str | None = None) -> str:
     return f"server:{server}:{tool}=allow"
 
 
+def readonly_grant_rules(product: str) -> list[str]:
+    """构造产品级只读规则集（拒绝后 readonly 提议授予用，S-B）。
+
+    覆盖绝大多数只读 op 的命名动词：List/Show/Get/Query 四组通配，
+    session 档整组授予；极少数非命名只读 API 仍需单独最小授予。
+    """
+    return [f"{product}:{verb}=allow"
+            for verb in ("*List*", "*Show*", "*Get*", "*Query*")]
+
+
 def load_policy_file(path: str) -> list[PolicyRule]:
     with open(path, encoding="utf-8") as f:
         content = f.read()

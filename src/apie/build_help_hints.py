@@ -36,15 +36,41 @@ def _write_json(path: Path, data: Any) -> None:
                     encoding="utf-8")
 
 
+def apply_curation_to_hints(hints: dict[str, Any],
+                            curation: dict[str, Any] | None) -> dict[str, Any]:
+    """curated 提示合并进 hints（内缝，S13c 扩展）。
+
+    curation schema 镜像 hints 的 products→apis 段：
+    ``{"products": {PRODUCT: {"apis": {api_lower: note}}}}``；curated 条目恒在
+    （再生不丢）、同键 curated 优先；curation 为 None/空恒返回原对象
+    （零行为变化）；copy-on-write 不改写入参。
+    """
+    if not curation or not (curation.get("products") or {}):
+        return hints
+    out = dict(hints)
+    products = dict(out.get("products") or {})
+    for product, spec in (curation.get("products") or {}).items():
+        entry = dict(products.get((product or "").upper()) or {"apis": {}})
+        apis = dict(entry.get("apis") or {})
+        for api, note in (spec.get("apis") or {}).items():
+            apis[(api or "").lower()] = note
+        entry["apis"] = apis
+        products[(product or "").upper()] = entry
+    out["products"] = products
+    return out
+
+
 def build_completions(raw_dir: Path, data_dir: Path, *,
                       detail_path: Path | None = None,
                       products: list[str] | None = None,
                       min_gain: int = 20, cap: int = 2000,
-                      overrides: dict[str, str] | None = None) -> dict:
+                      overrides: dict[str, str] | None = None,
+                      curation: dict[str, Any] | None = None) -> dict:
     """匹配 → 差集 → 落盘三产物，返回 report 摘要。
 
     - detail_path 缺省取 raw_dir/apis_detail.json（真实调用传 region 感知路径）；
     - products 过滤（PRODUCT_UPPER 白名单，试点用）；
+    - curation 为 curated 提示合并（apply_curation_to_hints，再生不丢）；
     - 覆盖门不设：产物按时间戳重写（数据产物可重建）。
     """
     help_docs = _read_json(Path(raw_dir) / "help_docs.json")
@@ -99,7 +125,8 @@ def build_completions(raw_dir: Path, data_dir: Path, *,
     _write_json(Path(data_dir) / "help_completions" / "deprecated.json",
                 {"products": deprecated})
     _write_json(Path(data_dir) / "hints" / "help-docs-hints.json",
-                build_hints(completions, cap=cap))
+                apply_curation_to_hints(build_hints(completions, cap=cap),
+                                        curation))
     logger.info("helphints matched=%d completions=%d unmatched=%d ambiguous=%d",
                 report["matched"], report["completions"],
                 report["unmatched"], report["ambiguous"])
@@ -136,11 +163,13 @@ def main() -> int:
     if args.overrides:
         overrides = {k: v for k, v in
                      _read_json(Path(args.overrides)).items()}
+    curation_path = root / "configs" / "help-docs-hints-curation.json"
+    curation = _read_json(curation_path) if curation_path.exists() else None
     report = build_completions(
         raw_dir=root / "raw", data_dir=root / "data",
         detail_path=root / region_paths.raw_detail_path(args.region),
         products=args.product, min_gain=args.min_gain, cap=args.cap,
-        overrides=overrides)
+        overrides=overrides, curation=curation)
     logger.info("summary: completions=%d matched=%d",
                 report["completions"], report["matched"])
     return 0

@@ -52,7 +52,8 @@ INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现
   或服务级全工具 "server:@huaweicloud/ecs:*=allow"），规则热生效后重试即可通过；
   call_tool 问询按四选一口径：api=最小工具规则（一次性，用后即焚）/
   api_session=最小工具规则（会话内，本次会话内持续放行该工具，重启即失）/
-  product=服务级全工具规则（会话内，覆盖该 server 全部工具，重启即失）/ none=不授予；
+  product=服务级全工具规则（会话内，覆盖该 server 全部工具，重启即失）/ none=不授予
+  （readonly 产品级只读档仅 openapi 侧提供，discover 拒绝不含只读规则集）；
   connect 为单一确认（会话内连接级授予）；
   部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
   经 MCP elicitation 弹出同样的提议（结果携带 `granted_rule` 字段）；
@@ -201,13 +202,13 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
 
         arguments 为工具参数 dict；policy 匹配 server:serverId:toolPattern=allow|deny。
         被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户弹窗四选一提议授予（用户确认后热生效并携带 granted_rule）：
+        向用户弹窗提议授予（用户确认后热生效并携带 granted_rule）：
         api=最小工具规则（一次性，用后即焚）/ api_session=最小工具规则（会话内，
         本次会话内持续放行该工具，重启即失）/ product=服务级全工具规则如
         "server:@huaweicloud/ecs:*=allow"（会话内放行该 server 全部工具，
-        重启即失）/ none=不授予；默认 off 或客户端不支持 elicitation 时，
-        拒绝原因附带同样的兜底指引（先经交互式问询向用户确认，再经
-        manage_policy 授予）。
+        重启即失）/ none=不授予（readonly 只读档仅 openapi 侧提供）；默认 off
+        或客户端不支持 elicitation 时，拒绝原因附带同样的兜底指引（先经交互式
+        问询向用户确认，再经 manage_policy 授予）。
         """
         logger.info("call_server_tool server=%s tool=%s", server, tool)
         result = await ds.call_tool(server, tool, arguments=arguments)

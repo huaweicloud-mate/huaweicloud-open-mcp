@@ -740,7 +740,10 @@ def _object_data_store(api: str, method: str) -> MemoryStore:
 
 @pytest.mark.parametrize("api,method", OBJECT_DATA_CASES)
 def test_object_data_apis_auto_presign_without_flag(api, method):
-    """真实模式：名单接口不带 _presign 也自动返回预签名信封，gateway 不经手字节。"""
+    """真实模式：名单接口不带 _presign 也自动返回预签名信封，gateway 不经手字节。
+
+    GetObject 签发前执行一次 HEAD 元数据预检（S9f-c）；其余数据面接口零客户端调用。
+    """
     obs_client = StubObsClient()
     svc = ToolService(store=_object_data_store(api, method),
                       config=ServiceConfig(
@@ -751,7 +754,14 @@ def test_object_data_apis_auto_presign_without_flag(api, method):
                           params={"bucket_name": "bkt", "object_key": "k.bin"})
     assert out["ok"] is True
     assert out["presign"]["method"] == method.upper()
-    assert obs_client.calls == []
+    if api == "GetObject":
+        assert [(c[0], c[2], c[3]) for c in obs_client.calls] == \
+            [("HEAD", "bkt", "k.bin")]
+        # Stub 200 无元数据头 → 预检降级：无 expected 字段，note 说明
+        assert "expected_size" not in out["presign"]
+        assert "预检" in out["presign"].get("note", "")
+    else:
+        assert obs_client.calls == []
     assert out["presign"]["url"].startswith("https://bkt.obs.cn-north-4.")
     assert "AccessKeyId=DATA-AK&Expires=" in out["presign"]["url"]
     # 信封透出签名口径：缺省空 CT，headers 照抄清单为空

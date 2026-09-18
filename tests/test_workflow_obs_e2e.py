@@ -183,11 +183,17 @@ def test_obs_write_chain_with_cleanup(session):
         assert etag, f"直传响应缺 ETag: {r}"
         created_objects.append("hello.txt")
 
-        # ⑤ 文本对象读回：GetObject 同样返回预签名 URL，客户端直连比对
+        # ⑤ 文本对象读回：GetObject 同样返回预签名 URL，客户端直连比对；
+        #    S9f-c：信封携带 HEAD 预检产物 expected_size/expected_etag
         r = call("GetObject", {"bucket_name": bucket, "object_key": "hello.txt"})
         assert r.get("ok") is True and r["presign"]["method"] == "GET"
+        assert r["presign"].get("expected_size") == len(b"hello-mcp-e2e"), \
+            f"GetObject presign 缺 expected_size 预检: {r}"
+        assert r["presign"].get("expected_etag") == etag, \
+            f"GetObject presign expected_etag 与直传 ETag 不一致: {r}"
         with urllib.request.urlopen(r["presign"]["url"], timeout=60) as resp:
             got = resp.read()
+        assert len(got) == r["presign"]["expected_size"], "回读长度与预期不一致"
         assert hashlib.md5(got).hexdigest() == etag, "回读内容与 ETag 不一致"
 
         # ⑥ 对象 ACL：GetBucketAcl 取 Owner → SetObjectAcl（schema 裸数组形状 +

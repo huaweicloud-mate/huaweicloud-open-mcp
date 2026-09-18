@@ -170,10 +170,23 @@ def query_url(base: str, params: dict[str, Any]) -> str:
 
 
 def parse_body(raw: bytes) -> Any:
-    """解析 HTTP 响应体为 JSON 或原始文本。"""
+    """解析 HTTP 响应体为 JSON、文本或原始字节。
+
+    分类判据（载荷内在属性，与 Content-Type 无关）：
+    - 空 → None；合法 UTF-8 → JSON（可解析时）或 str；
+    - 不可无损 UTF-8 解码、或含 NUL → 原始 bytes（不透明二进制，调用方不得文本化）。
+    保真不变量（disk == wire）：str 分支 re-encode 与线上字节一致（合法 UTF-8 的
+    decode/encode 为字节恒等），bytes 分支即线上体——任何分类下落盘内容与线上
+    字节逐位一致。
+    """
     if not raw:
         return None
-    text = raw.decode("utf-8", errors="replace")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw
+    if "\x00" in text:
+        return raw
     try:
         return json.loads(text)
     except Exception:

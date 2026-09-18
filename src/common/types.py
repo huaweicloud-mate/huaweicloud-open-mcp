@@ -6,7 +6,13 @@ from typing_extensions import NotRequired, TypedDict
 
 
 class ClientResponse(TypedDict):
-    """HTTP 客户端统一响应结构。body 为解析后的 JSON 或原始文本。"""
+    """HTTP 客户端统一响应结构。
+
+    body 契约：None（空体）| dict/list（解析后 JSON）| str（合法 UTF-8 文本，
+    re-encode 与线上字节一致）| bytes（不透明二进制——不可无损 UTF-8 解码或含
+    NUL；调用方不得文本化，只能透传给 normalize_response 走占位+落盘）。
+    保真不变量（disk == wire）：任何分类下 spill 落盘内容与线上字节逐位一致。
+    """
 
     status: int
     headers: dict[str, str]
@@ -62,6 +68,9 @@ class PresignInfo(TypedDict):
     signed_content_type: str
     headers: dict[str, str]
     note: NotRequired[str]   # 仅 PUT/POST 未锁定 Content-Type 时注入口径警示
+    # GetObject 预签发 HEAD 预检产物（S9f-c）：签发前对象元数据快照，供下载端核对
+    expected_size: NotRequired[int]
+    expected_etag: NotRequired[str]
 
 
 class ToolError(TypedDict):

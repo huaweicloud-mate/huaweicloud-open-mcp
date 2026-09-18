@@ -35,7 +35,7 @@ logger = logging.getLogger("common.elicit")
 ElicitMode = Literal["auto", "required", "off"]
 ELICIT_MODES: tuple[ElicitMode, ...] = ("auto", "required", "off")
 
-GrantChoice = Literal["api", "api_session", "product", "none"]
+GrantChoice = Literal["api", "api_session", "product", "readonly", "none"]
 
 
 class PolicyChangeConfirm(BaseModel):
@@ -45,8 +45,9 @@ class PolicyChangeConfirm(BaseModel):
 
 
 class GrantChoiceConfirm(BaseModel):
-    """拒绝提议四选一表单 schema：api=最小规则（一次性）/ api_session=最小规则
-    （会话内）/ product=产品级规则（会话内）/ none=不授予。
+    """拒绝提议五选一表单 schema：api=最小规则（一次性）/ api_session=最小规则
+    （会话内）/ product=产品级规则（会话内）/ readonly=产品级只读规则集
+    （会话内，offer.readonly_rules 存在时可用）/ none=不授予。
 
     仅 primitive 枚举字段（MCP spec 限制）；拒绝路径独用，
     manage_policy 确认门仍用 PolicyChangeConfirm。
@@ -61,12 +62,16 @@ class DenialOffer:
 
     coarse_rule 为可选的产品级（openapi）/服务级全工具（discover）通配规则，
     存在时弹窗三选一（api/product/none），None 时退化为二选一（api/none）。
+    readonly_rules 为可选的产品级只读规则集（openapi 侧经
+    safety.policy.readonly_grant_rules 构造挂载；discover 不挂载 → readonly
+    选项数据缺席即不可达，误选按 none 处理）。
     """
 
     subject: str
     rule: str
     reason: str
     coarse_rule: str | None = None
+    readonly_rules: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -113,9 +118,15 @@ def denial_message(offer: DenialOffer) -> str:
 
     有 coarse_rule：并列 api/api_session/product/none 四选项（api=一次性最小规则，
     api_session=会话内最小规则，product=会话内产品级规则，none=不授予）；
+    offer.readonly_rules 存在时在 none 前并列 readonly=产品级只读规则集；
     无 coarse_rule：单一最小规则二选一确认（一次性语义，与历史文案一致）。
     """
     if offer.coarse_rule:
+        readonly = ""
+        if offer.readonly_rules:
+            readonly = (f"- readonly：授予产品级只读规则集 "
+                        f"（{'/'.join(offer.readonly_rules)}，"
+                        "会话内生效，重启即失）\n")
         return (f"{offer.reason}\n\n"
                 f"是否授予规则放行 {offer.subject}？\n"
                 f"- api：仅授予最小规则 '{offer.rule}'"
@@ -125,6 +136,7 @@ def denial_message(offer: DenialOffer) -> str:
                 f"- product：授予产品级规则 '{offer.coarse_rule}'"
                 "（会话内生效，覆盖该产品全部 API，重启即失；"
                 "需持久授权请经 manage_policy 显式授予）\n"
+                f"{readonly}"
                 "- none：不授予")
     return (f"{offer.reason}\n\n"
             f"是否授予最小规则 '{offer.rule}' 放行 {offer.subject}？"
@@ -143,9 +155,14 @@ def fallback_hint(offer: DenialOffer) -> str:
     base = ("；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认后，"
             "调用 manage_policy 授予：")
     if offer.coarse_rule:
+        readonly = ""
+        if offer.readonly_rules:
+            readonly = (f"/readonly=产品级只读规则集 '{'/'.join(offer.readonly_rules)}'"
+                        "（会话内，重启即失）")
         return (base + f"api=最小规则 '{offer.rule}'（一次性）/"
                 f"api_session=最小规则 '{offer.rule}'（会话内）/"
-                f"product=产品级规则 '{offer.coarse_rule}'（会话内）/none=不授予")
+                f"product=产品级规则 '{offer.coarse_rule}'（会话内）"
+                f"{readonly}/none=不授予")
     return base + f"规则 '{offer.rule}'"
 
 
@@ -153,14 +170,18 @@ class PolicyConsent:
     """safety policy 变更的确认机制：何时问、怎么问、如何解释回答。
 
     offer_grant 用于拒绝路径（accept → 自动授予并增强 denial；coarse_rule
-    存在时四选一——api=最小规则（minimal_scope 档）、api_session=最小规则
-    （固定 session 档）、product=产品级规则（固定 session 档）、none=不授予）；
-    gate_change 用于 manage_policy add/remove（check 习语：None=放行）。
+    存在时五选一——api=最小规则（minimal_scope 档）、api_session=最小规则
+    （固定 session 档）、product=产品级规则（固定 session 档）、
+    readonly=产品级只读规则集（offer.readonly_rules 存在时可用，逐条 session
+    档授予 best-effort 无回滚）、none=不授予）；gate_change 用于
+    manage_policy add/remove（check 习语：None=放行）。
 
     scope 知识内聚于本模块：choice→scope 映射（api→minimal_scope，
-    api_session/product→session）是接口不变量，调用方仅经 minimal_scope 注入
-    最小授予档（openapi execute/discover call_tool 缺省 once；discover connect
-    传 session）。
+    api_session/product/readonly→session）是接口不变量，调用方仅经
+    minimal_scope 注入最小授予档（openapi execute/discover call_tool 缺省
+    once；discover connect 传 session）。规则文本语法知识在
+    ``safety.policy.grant_rule`` / ``readonly_grant_rules``，本模块仅消费
+    offer 携带的规则文本（数据驱动，discover 不挂 readonly_rules 即不可达）。
     session 档 = 本次 code agent 会话（进程存活期），非 discover 到远端 MCP
     server 的连接会话（断开/空闲回收后 session 档授权仍在）。
     """
@@ -195,6 +216,8 @@ class PolicyConsent:
             logger.warning("grant offer skipped: client unsupported elicitation (mode=%s)",
                            self.mode)
             return self._with_fallback_hint(offer, denial)
+        if outcome.action == "accept" and outcome.choice == "readonly":
+            return self._grant_readonly(offer, denial)
         if outcome.action == "accept" and offer.coarse_rule:
             picked = self._pick_coarse(outcome, offer)
             if picked is None:   # none / 缺失 / 未知 choice：不授予
@@ -234,6 +257,43 @@ class PolicyConsent:
                             denial: Mapping[str, Any]) -> Mapping[str, Any]:
         """未问询即保持拒绝：reason 追加兜底指引（拒绝本体不变）。"""
         return {**denial, "reason": denial.get("reason", "") + fallback_hint(offer)}
+
+    def _grant_readonly(self, offer: DenialOffer,
+                        denial: Mapping[str, Any]) -> Mapping[str, Any]:
+        """readonly 选择：逐条授予产品级只读规则集（session 档，best-effort 无回滚）。
+
+        session 档为内存 overlay（无文件 I/O）且规则文本构造期校验，add 失败
+        近乎不可达；部分失败如实报告已授予/失败明细（只读 + 会话内 + 重启即失，
+        部分授予无害），不引入 revoke seam（deletion test）。
+        """
+        grant = self._grant
+        rules = offer.readonly_rules or []
+        if grant is None or not rules:
+            logger.warning("readonly grant unavailable: rules=%s grant_wired=%s",
+                           len(rules), grant is not None)
+            return denial
+        granted: list[str] = []
+        failed: list[str] = []
+        for rule in rules:
+            result = grant(rule, "session")
+            if result.get("ok"):
+                granted.append(rule)
+            else:
+                failed.append(f"{rule}: {result.get('reason') or '未知原因'}")
+        if not failed:
+            logger.info("grant accepted: readonly ruleset (%d rules, scope=session)",
+                        len(granted))
+            return {**denial, "granted_rule": ";".join(granted),
+                    "reason": (f"{denial.get('reason', '')}"
+                               f"；用户已通过确认授予会话内产品级只读规则 "
+                               f"（{';'.join(granted)}，热生效），请重新调用")}
+        logger.warning("readonly grant partial: granted=%d failed=%d",
+                       len(granted), len(failed))
+        parts = [f"{denial.get('reason', '')}；readonly 规则集部分授予失败"]
+        if granted:
+            parts.append(f"已授予（会话内）: {';'.join(granted)}")
+        parts.append(f"失败: {';'.join(failed)}；可经 manage_policy 手动补授")
+        return {**denial, "reason": "；".join(p for p in parts if p)}
 
     @staticmethod
     def _pick_coarse(outcome: ElicitOutcome,
@@ -294,7 +354,8 @@ def ctx_elicit_fn(ctx: ElicitContext) -> ElicitFn:
             return ElicitOutcome(
                 action="accept",
                 confirm=bool(confirm) if confirm is not None else None,
-                choice=choice if choice in ("api", "api_session", "product", "none")
+                choice=choice
+                if choice in ("api", "api_session", "product", "readonly", "none")
                 else None)
         if action == "decline":
             return ElicitOutcome(action="decline")

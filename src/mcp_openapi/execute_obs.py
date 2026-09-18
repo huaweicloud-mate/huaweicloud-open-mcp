@@ -333,27 +333,7 @@ def build_obs_url(host: str, bucket: str, object_key: str = "",
     return base
 
 
-# ---------- 响应渲染与 XML 错误解析（S9d） ----------
-
-_TEXTUAL_CT_MARKS = ("/json", "/xml", "text/")
-
-
-def render_response_body(status: int, content_type: str | None, raw: bytes) -> Any:
-    """响应体渲染：2xx 且非文本类媒体（或字节不可解码/含 NUL）时返回二进制占位，
-    避免把图片等对象内容 utf-8-replace 成乱码文本。其余走通用解析。"""
-    raw = raw or b""
-    ct = (content_type or "").lower()
-    if 200 <= status < 300 and raw and not any(m in ct for m in _TEXTUAL_CT_MARKS):
-        try:
-            decoded = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            decoded = None
-        if decoded is None or "\x00" in decoded:
-            return {"note": "二进制响应未渲染", "size": len(raw),
-                    "content_type": content_type}
-        return common_http.parse_body(raw)
-    return common_http.parse_body(raw)
-
+# ---------- XML 错误解析（S9d） ----------
 
 def _tag_text(xml_text: str, name: str) -> str | None:
     m = re.search(rf"<{name}>(.*?)</{name}>", xml_text, re.DOTALL)
@@ -443,10 +423,10 @@ class ObsHttpClient:
         except urllib.error.HTTPError as e:
             status, resp_headers, raw = e.code, dict(e.headers), e.read()
         logger.info("%s %s -> %s", method, url, status)
+        # 响应体分类判据单点在 common_http.parse_body（bytes ⇔ 不透明二进制），
+        # 占位 + .bin 落盘由 normalize_response 统一渲染（与 real/mock lane 同形）。
         return {"status": status, "headers": resp_headers,
-                "body": render_response_body(
-                    status, resp_headers.get("Content-Type") or resp_headers.get("content-type"),
-                    raw)}
+                "body": common_http.parse_body(raw)}
 
 
 # ---------- 编排（S9e） ----------
@@ -519,15 +499,59 @@ def execute_obs_api(doc: dict[str, Any], path: str, method: str, op: dict[str, A
 PRESIGN_DEFAULT_EXPIRES = 900
 
 
+def _presign_head_check(client: ObsClient, host: str, bucket: str,
+                        object_key: str, query: dict[str, Any] | None,
+                        ) -> tuple[dict[str, Any] | None, str | None]:
+    """GetObject 预签发前的 HEAD 元数据预检（内部接缝，S9f-c）。
+
+    返回 (snapshot, denial)：snapshot 非空 = 预检成功（expected_size/expected_etag）；
+    denial 非空 = 桶/对象不存在（404），调用方拒签；双空 = 预检不可用，降级放行。
+    元数据面调用，对象字节不经 gateway（数据面单口径不变）。
+    """
+    try:
+        resp = client.request("HEAD", host, bucket=bucket, object_key=object_key,
+                              query=query)
+    except Exception as exc:
+        logger.warning("presign head precheck unavailable: %s", exc)
+        return None, None
+    status = resp.get("status")
+    if status == 200:
+        headers = {str(k).lower(): v for k, v in (resp.get("headers") or {}).items()}
+        snapshot: dict[str, Any] = {}
+        size_raw = headers.get("content-length")
+        if size_raw is not None:
+            try:
+                snapshot["expected_size"] = int(size_raw)
+            except (TypeError, ValueError):
+                pass
+        etag = headers.get("etag")
+        if etag:
+            snapshot["expected_etag"] = str(etag)
+        return snapshot or None, None
+    if status == 404:
+        err = parse_obs_error(resp.get("body"))
+        detail = f"（{err[0]}: {err[1]}）" if err else ""
+        return None, (
+            "对象预检失败（HEAD 404）：桶或对象不存在，未签发访问 URL。"
+            f"{detail}"
+            "code_type=obs 的函数源桶可能已删除——可用 ShowFunctionCode 返回的 "
+            "func_code.link 定位 functionstorage 部署副本后重试")
+    logger.warning("presign head precheck degraded: HEAD status=%s", status)
+    return None, None
+
+
 def execute_presign_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
                         product: str, api_name: str, region: str,
                         params: dict[str, Any], *,
-                        credentials: Credentials | None) -> ExecuteResult:
+                        credentials: Credentials | None,
+                        client: ObsClient | None = None) -> ExecuteResult:
     """预签发 OBS 访问 URL（gateway 只签名，字节流由客户端直连 OBS 完成）。
 
     `_presign_expires` 有效期秒数（默认 900）；`_presign_content_type` 可锁定 PUT 的
     Content-Type 参与签名；其余参数按常规 lane 切分桶/对象/白名单 query。
-    本路径零网络请求、零落盘，部署拓扑无关。
+    签发路径零对象字节搬运；GetObject 有 client 时执行一次 HEAD 元数据预检
+    （404 拒签报结构化错误，其它异常降级放行并在 note 说明），信封附带
+    expected_size/expected_etag 供下载端核对（S9f-c）。
     """
     logger.info("execute %s:%s region=%s mode=presign", product, api_name, region)
 
@@ -552,6 +576,21 @@ def execute_presign_api(doc: dict[str, Any], path: str, method: str, op: dict[st
     if not isinstance(host, str) or not host:
         return {"ok": False, "reason": "接口元数据缺少 host，无法执行"}
 
+    snapshot: dict[str, Any] = {}
+    presign_notes: list[str] = []
+    if (client is not None and api_name == "GetObject" and method.upper() == "GET"
+            and built.bucket and built.object_key):
+        snap, denial = _presign_head_check(client, host, built.bucket,
+                                           built.object_key, built.query)
+        if denial:
+            return {"ok": False, "reason": denial}
+        if snap:
+            snapshot = snap
+            presign_notes.append("下载后核对响应 Content-Length 与 expected_size"
+                                 "（及 ETag）一致，不一致说明对象已变更或下载异常")
+        else:
+            presign_notes.append("HEAD 预检不可用，信封未附带对象元数据预期值")
+
     import time
     url = obs_sign.sign_obs_url(
         method.upper(), ak=credentials.ak, sk=credentials.sk, host=host,
@@ -563,6 +602,12 @@ def execute_presign_api(doc: dict[str, Any], path: str, method: str, op: dict[st
                           signed_content_type=content_type,
                           headers=({"Content-Type": content_type}
                                    if content_type else {}))
+    if "expected_size" in snapshot:
+        presign["expected_size"] = snapshot["expected_size"]
+    if "expected_etag" in snapshot:
+        presign["expected_etag"] = snapshot["expected_etag"]
+    if presign_notes:
+        presign["note"] = "；".join(presign_notes)
     if not content_type and method.upper() in ("PUT", "POST"):
         presign["note"] = (
             "签名按空 Content-Type 计算：直连请求请勿携带该头"
