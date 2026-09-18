@@ -195,7 +195,7 @@ def build_openapi_app(service: ToolService | None = None, *,
 def register_openapi_tools(server: MCPServer, svc: ToolService, *,
                            consent_mode: str,
                            include_manage_policy: bool = True) -> None:
-    """注册 openapi 模式 7 工具（混装装配复用；instructions 由 builder 自持）。
+    """注册 openapi 模式工具（7 领域工具 + manage_policy 共 8；混装装配复用）。
 
     include_manage_policy：混装时 manage_policy 全局只注册一次（由 composite 决定归属）。
     """

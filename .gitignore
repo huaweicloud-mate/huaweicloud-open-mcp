@@ -38,3 +38,6 @@ apis_detail_by_tag_openapi2_*/
 apis_detail_by_tag_merged_*/
 validation_issues.json
 validation_progress.txt
+
+# opencode 会话产物（计划文件等）
+.opencode/

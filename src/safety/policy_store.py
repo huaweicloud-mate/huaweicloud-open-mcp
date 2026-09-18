@@ -224,7 +224,7 @@ class PolicyStore:
         if scope not in SCOPES:
             return MutationResult(
                 ok=False, scope=scope,
-                reason=f"未知 scope: {scope}（可选 permanent/temporary/session）")
+                reason=f"未知 scope: {scope}（可选 permanent/temporary/session/once）")
         if ttl_seconds is not None and scope != "temporary":
             return MutationResult(
                 ok=False, scope=scope, reason="ttl_seconds 仅支持 scope=temporary")

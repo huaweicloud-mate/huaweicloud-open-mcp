@@ -259,6 +259,21 @@ def test_offer_grant_coarse_api_choice_grants_minimal_once():
     assert out["reason"].startswith(DENIAL_VPC["reason"])
 
 
+def test_offer_grant_coarse_api_choice_honors_injected_minimal_scope():
+    """choice=api：scope 取注入的 minimal_scope（docstring 契约 api→minimal_scope）。
+
+    coarse 表单路径与单一确认路径（test_offer_grant_minimal_scope_session_wiring）
+    同口径——注入 session 时 api 选择授予会话内最小规则。
+    """
+    elicit = make_elicit(ACCEPT_API)
+    grant = make_grant()
+    consent = PolicyConsent("auto", elicit, grant, minimal_scope="session")
+    out = run(consent.offer_grant(COARSE_OFFER, dict(DENIAL_VPC)))
+    assert grant.calls == [("VPC:CreateVpc=allow", "session")]  # type: ignore[attr-defined]
+    assert out["granted_rule"] == "VPC:CreateVpc=allow"
+    assert "会话内最小规则" in out["reason"]
+
+
 def test_offer_grant_coarse_product_choice_grants_session():
     """choice=product：授予产品级规则（VPC:*=allow），scope 固定 session。"""
     elicit = make_elicit(ACCEPT_PRODUCT)

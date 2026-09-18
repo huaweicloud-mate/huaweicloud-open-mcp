@@ -61,7 +61,9 @@ class DenialOffer:
     """一次可授予的 policy 拒绝：主体 / 最小规则文本 / 原始拒绝 reason。
 
     coarse_rule 为可选的产品级（openapi）/服务级全工具（discover）通配规则，
-    存在时弹窗三选一（api/product/none），None 时退化为二选一（api/none）。
+    存在时弹窗五选一（api/api_session/product/readonly/none；readonly 仅在
+    readonly_rules 存在时可用，误选按 none 处理），None 时退化为单一最小规则
+    确认（PolicyChangeConfirm）。
     readonly_rules 为可选的产品级只读规则集（openapi 侧经
     safety.policy.readonly_grant_rules 构造挂载；discover 不挂载 → readonly
     选项数据缺席即不可达，误选按 none 处理）。
@@ -148,8 +150,8 @@ def fallback_hint(offer: DenialOffer) -> str:
     """未发生问询路径（off 档 / 客户端不支持）的拒绝兜底指引。
 
     prompt 约定（软兜底）：引导调用方 LLM 经对话/交互式问询（如 question 工具）
-    向用户确认后经 manage_policy 授予；选项语义与 elicitation 四选一表单一致
-    （coarse 存在时 api/api_session/product/none，否则仅最小规则），
+    向用户确认后经 manage_policy 授予；选项语义与 elicitation 五选一表单一致
+    （coarse 存在时 api/api_session/product/readonly?/none，否则仅最小规则），
     不提及协议级 elicitation。
     """
     base = ("；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认后，"
@@ -295,13 +297,16 @@ class PolicyConsent:
         parts.append(f"失败: {';'.join(failed)}；可经 manage_policy 手动补授")
         return {**denial, "reason": "；".join(p for p in parts if p)}
 
-    @staticmethod
-    def _pick_coarse(outcome: ElicitOutcome,
+    def _pick_coarse(self, outcome: ElicitOutcome,
                      offer: DenialOffer) -> tuple[str, str] | None:
-        """解释 coarse 四选一回答 → (规则文本, scope)；不授予返回 None。"""
+        """解释 coarse 五选一回答 → (规则文本, scope)；不授予返回 None。
+
+        choice→scope 映射与单一确认路径同口径：api 取注入的 minimal_scope
+        （缺省 once），api_session/product 固定 session。
+        """
         choice = outcome.choice
         if choice == "api":
-            return offer.rule, "once"
+            return offer.rule, self._minimal_scope
         if choice == "api_session":
             return offer.rule, "session"
         if choice == "product" and offer.coarse_rule:

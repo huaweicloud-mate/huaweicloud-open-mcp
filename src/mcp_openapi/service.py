@@ -1,7 +1,7 @@
-"""ToolService：六工具的业务编排层。
+"""ToolService：八工具的业务编排层。
 
-职责：配置（region/mock/policy/凭证）、拥有 MemoryStore 并注入 catalog、
-调用纯函数层（tools.metadata / tools.execute）与执行客户端。
+职责：配置（region/mock/policy/凭证/hints/纠偏）、拥有 MemoryStore 并注入
+catalog、调用元数据纯函数层（apie.metadata）与执行层（execute/execute_obs）。
 """
 
 from __future__ import annotations

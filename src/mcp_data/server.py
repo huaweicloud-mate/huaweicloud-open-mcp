@@ -1,7 +1,8 @@
 """data 模式 server 装配（MCP 协议层）。
 
-工具集：单 data 模式仅注册 query_data（不注册 manage_policy——query_data
-不涉 policy，授予流不存在；混装时 manage_policy 由 openapi/discover 侧提供）。
+工具集：单 data 模式注册 query_data + transform_data（不注册 manage_policy
+——data 工具不涉 policy，授予流不存在；混装时 manage_policy 由 openapi/discover
+侧提供）。
 """
 
 import argparse

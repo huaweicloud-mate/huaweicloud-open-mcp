@@ -36,7 +36,7 @@ def _args(mock_base=None, policy_file=None, **kw):
     return ns
 
 
-def test_all_seven_tools_registered():
+def test_all_tools_registered():
     app = build_app()
     assert _tool_names(app) == EXPECTED_TOOLS
 
