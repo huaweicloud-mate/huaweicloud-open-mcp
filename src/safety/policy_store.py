@@ -441,3 +441,47 @@ class PolicyStore:
             return f"写入后校验失败：{exc}"
         self._apply(new_entries, self._is_json, rules, self._stamp_of(path))
         return None
+
+
+def manage_policy_ops(store: PolicyStore | None, action: str,
+                      line: str | None = None, scope: str | None = None,
+                      ttl_seconds: int | None = None) -> dict[str, Any]:
+    """manage_policy 工具信封（openapi/discover 两模式共用单一实现）。
+
+    action 归一、store 分派（list/add/remove）、结果信封
+    （ok/action/scope?/reason?/policy）与日志内聚于此；store=None 时拒绝
+    （NOT_CONFIGURED_REASON，消灭两模式文案漂移）。规则语法与四档 scope
+    知识归 PolicyStore.add_rule/remove_rule，本函数仅承载工具信封语义
+    （删除测试：信封语义消失则须在两模式各自重建——47 行 ×2 重复即此）。
+    """
+    action = (action or "").strip().lower()
+    logger.info("manage_policy action=%s line=%s scope=%s ttl=%s",
+                action, line or "-", scope or "-", ttl_seconds)
+    if store is None:
+        return {"ok": False, "reason": NOT_CONFIGURED_REASON}
+    if action == "list":
+        return {"ok": True, "action": "list", "policy": store.text(),
+                "rules": [{"line": r.line, "scope": r.scope,
+                           "expires_in": r.expires_in}
+                          for r in store.list_rules()]}
+    if action not in ("add", "remove"):
+        return {"ok": False, "reason": f"未知 action: {action}（可选 list/add/remove）"}
+    rule_text = (line or "").strip()
+    if not rule_text:
+        return {"ok": False, "reason": f"{action} 需要提供 line 参数（规则文本）"}
+    if action == "remove":
+        if scope is not None or ttl_seconds is not None:
+            return {"ok": False, "reason": (
+                "remove 不接受 scope/ttl_seconds 参数"
+                "（跨层匹配：先会话/临时后文件，首个语义命中移除）")}
+        result = store.remove_rule(rule_text)
+    else:
+        result = store.add_rule(rule_text, scope=scope, ttl_seconds=ttl_seconds)
+    logger.info("manage_policy %s result=%s", action, "ok" if result.ok else "deny")
+    out: dict[str, Any] = {"ok": result.ok, "action": action}
+    if result.scope:
+        out["scope"] = result.scope
+    if result.reason:
+        out["reason"] = result.reason
+    out["policy"] = store.text()
+    return out

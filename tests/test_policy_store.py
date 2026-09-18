@@ -10,7 +10,7 @@ import json
 import pytest
 
 from safety import policy
-from safety.policy_store import PolicyStore
+from safety.policy_store import NOT_CONFIGURED_REASON, PolicyStore, manage_policy_ops
 
 
 def make_stat_fn():
@@ -638,3 +638,98 @@ def test_concurrent_removes_all_applied(tmp_path):
         pat = line.split(":")[1].split("=")[0]
         assert pat not in leftover   # 每条目标规则都真实消失（无覆盖回滚）
     assert store.rules() and len(store.rules()) == 2   # 仅剩 ECS allow + * deny
+
+
+# ---------- manage_policy_ops：两模式 manage_policy 工具共用的运维信封 ----------
+
+def test_manage_policy_ops_unconfigured():
+    """store=None：ok=False，reason 为统一 NOT_CONFIGURED_REASON（消灭文案漂移）。"""
+    out = manage_policy_ops(None, "list")
+    assert out["ok"] is False
+    assert out["reason"] == NOT_CONFIGURED_REASON
+    assert "--policy" in out["reason"]
+
+
+def test_manage_policy_ops_action_normalized(tmp_path):
+    """action 大小写/空白归一后分派（'List' ≡ 'list'）。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    out = manage_policy_ops(make_store(p), "  LIST ")
+    assert out["ok"] is True and out["action"] == "list"
+
+
+def test_manage_policy_ops_list_envelope(tmp_path):
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "list")
+    assert out["ok"] is True and out["action"] == "list"
+    assert "*=deny" in out["policy"]
+    assert out["rules"] == [{"line": "*=deny", "scope": "permanent",
+                             "expires_in": None}]
+
+
+def test_manage_policy_ops_add_session_envelope(tmp_path):
+    """缺省 add = session 档：信封携带 scope；policy 渲染文件规则（overlay 不入，
+    与 PolicyStore.text() 契约一致）；文件不动。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    before = p.read_text(encoding="utf-8")
+    out = manage_policy_ops(store, "add", "ECS:*=allow")
+    assert out["ok"] is True and out["action"] == "add"
+    assert out["scope"] == "session"
+    assert out["policy"] == before   # text() 仅文件规则，session overlay 不可见
+    assert p.read_text(encoding="utf-8") == before   # session 档不落盘
+
+
+def test_manage_policy_ops_add_permanent_persists(tmp_path):
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "add", "ECS:*=allow", scope="permanent")
+    assert out["ok"] is True and out["scope"] == "permanent"
+    assert "ECS:*=allow" in p.read_text(encoding="utf-8")
+
+
+def test_manage_policy_ops_remove_rejects_scope_and_ttl(tmp_path):
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:*=allow\n*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "remove", "ECS:*=allow", scope="session")
+    assert out["ok"] is False
+    assert "remove 不接受 scope/ttl_seconds" in out["reason"]
+    out = manage_policy_ops(store, "remove", "ECS:*=allow", ttl_seconds=60)
+    assert out["ok"] is False
+    assert store.rules() == tuple(policy.parse_policy(
+        ["ECS:*=allow", "*=deny"]))   # 状态未动
+
+
+def test_manage_policy_ops_remove_envelope_and_disk_sync(tmp_path):
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:*=allow\n*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "remove", "ECS:*=allow")
+    assert out["ok"] is True and out["action"] == "remove"
+    assert "ECS:*=allow" not in p.read_text(encoding="utf-8")   # 跨层移除含文件
+
+
+def test_manage_policy_ops_unknown_action_and_missing_line(tmp_path):
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "grant", line="ECS:*=allow")
+    assert out["ok"] is False and "未知 action: grant" in out["reason"]
+    out = manage_policy_ops(store, "add")
+    assert out["ok"] is False and "需要提供 line" in out["reason"]
+
+
+def test_manage_policy_ops_add_rule_error_passthrough(tmp_path):
+    """store 层拒绝（未知 scope / 规则格式非法）→ 信封 ok=False + reason 透传。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "add", "ECS:*=allow", scope="forever")
+    assert out["ok"] is False and "scope" in (out.get("reason") or "")
+    out = manage_policy_ops(store, "add", "not a rule")
+    assert out["ok"] is False and out.get("reason")

@@ -32,7 +32,7 @@ from common.types import (
     ToolError,
 )
 from safety import policy as safety_policy
-from safety.policy_store import PolicyStore
+from safety.policy_store import PolicyStore, manage_policy_ops
 
 from . import execute, execute_obs
 from .deprecated import DeprecatedIndex
@@ -186,41 +186,10 @@ class ToolService:
         remove 跨层先 overlay 后文件并回报 scope；不接受 scope/ttl_seconds。
         安全约定：调用方（Agent）应先经交互式问询（如 question 工具）向用户
         确认再 add/remove；审计日志强制记录。
+        信封语义委托 safety.policy_store.manage_policy_ops（两模式单一实现）。
         """
-        action = (action or "").strip().lower()
-        logger.info("manage_policy action=%s line=%s scope=%s ttl=%s",
-                    action, line or "-", scope or "-", ttl_seconds)
-        store = self.config.policy_store
-        if store is None:
-            return {"ok": False, "reason": (
-                "未配置 safety policy 文件，manage_policy 不可用"
-                "（--policy 或环境变量 HUAWEICLOUD_MCP_POLICY_FILE）")}
-        if action == "list":
-            return {"ok": True, "action": "list", "policy": store.text(),
-                    "rules": [{"line": r.line, "scope": r.scope,
-                               "expires_in": r.expires_in}
-                              for r in store.list_rules()]}
-        if action not in ("add", "remove"):
-            return {"ok": False, "reason": f"未知 action: {action}（可选 list/add/remove）"}
-        rule_text = (line or "").strip()
-        if not rule_text:
-            return {"ok": False, "reason": f"{action} 需要提供 line 参数（规则文本）"}
-        if action == "remove":
-            if scope is not None or ttl_seconds is not None:
-                return {"ok": False, "reason": (
-                    "remove 不接受 scope/ttl_seconds 参数"
-                    "（跨层匹配：先会话/临时后文件，首个语义命中移除）")}
-            result = store.remove_rule(rule_text)
-        else:
-            result = store.add_rule(rule_text, scope=scope, ttl_seconds=ttl_seconds)
-        logger.info("manage_policy %s result=%s", action, "ok" if result.ok else "deny")
-        out: dict[str, Any] = {"ok": result.ok, "action": action}
-        if result.scope:
-            out["scope"] = result.scope
-        if result.reason:
-            out["reason"] = result.reason
-        out["policy"] = store.text()
-        return out
+        return manage_policy_ops(self.config.policy_store, action,
+                                 line, scope, ttl_seconds)
 
     # ---------- 提示注入（Hints：配置驱动塑形，copy-on-write） ----------
 
