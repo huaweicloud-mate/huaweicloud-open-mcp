@@ -85,7 +85,7 @@ class ServiceConfig:
     credentials: Credentials | None = None
     mock_base: str = apie_mock.MOCK_BASE
     mock_passthrough: bool = False
-    http_client_factory: Callable[[], execute.ApiExecutor] | None = None
+    http_client_factory: Callable[[], execute.SignedClient] | None = None
     mock_client_factory: Callable[[], apie_mock.MockApiClient] | None = None
     obs_client_factory: Callable[[], execute_obs.ObsClient] | None = None
     hints: Hints = Hints.empty()
@@ -105,7 +105,7 @@ class ToolService:
         self.store = store or MemoryStore()
         self._mock_client: apie_mock.MockApiClient | None = None
 
-    def _make_http_client(self) -> execute.ApiExecutor:
+    def _make_http_client(self) -> execute.SignedClient:
         if self.config.http_client_factory is not None:
             return self.config.http_client_factory()
         return HttpClient(credentials=self.config.credentials)
@@ -377,11 +377,19 @@ class ToolService:
 
     # ---------- 执行工具 ----------
 
+    def _real_executor(self) -> execute.RealApiExecutor:
+        client: execute.SignedClient = self._make_http_client()
+        return execute.RealApiExecutor(client, self.config.credentials)
+
+    def _mock_executor(self) -> execute.MockApiExecutor:
+        return execute.MockApiExecutor(self._make_mock_client(),
+                                       passthrough=self.config.mock_passthrough)
+
     @_audited
     @_guarded
     def execute_api(self, product: str, api: str, region: str | None = None,
                     params: dict[str, Any] | None = None) -> ExecuteResult:
-        """执行 API。safety policy 细检，mock/real 分支共享。
+        """执行 API。safety policy 细检；lane 决策（mock/obs/real）单点求值。
 
         spill：超限响应自动落盘（S12）；params["_spill"]=false 按次退出
         （控制键在 dispatch 前剥离，不进入 query/body）。
@@ -395,39 +403,41 @@ class ToolService:
         spill_cfg = self.config.spill
         if params.pop("_spill", None) is False:
             spill_cfg = None
+        mode = "mock" if self.config.mock else "real"
         policy_err = self._check_policy(product, api)
         if policy_err:
             logger.warning("execute %s:%s region=%s mode=%s policy=%s",
-                           product, api, region,
-                           "mock" if self.config.mock else "real",
+                           product, api, region, mode,
                            "unconfigured" if self._effective_policy_rules() is None else "deny")
             return {"ok": False, "reason": policy_err}
 
         hit = self.load_api_doc(product, api, region)
         if hit is None:
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
-        doc, path, method, op = hit.doc, hit.path, hit.method, hit.op
 
-        # 预签发分支：OBS 专用，gateway 只签名不搬运字节；先于 mock/real 分流
+        # lane 决策单点（C6）：is_obs 恒一次求值；审计 mode 归 lane/executor 所有
+        is_obs_op = execute_obs.is_obs(product, hit.doc)
+        lane = "mock" if self.config.mock else ("obs" if is_obs_op else "real")
+
+        # 预签发分支：OBS 专用，gateway 只签名不搬运字节；先于主分流
         if params.get("_presign"):
-            if not execute_obs.is_obs(product, doc):
+            if not is_obs_op:
                 return {"ok": False,
                         "reason": "_presign 仅支持 OBS 产品（其余服务无预签发语义）"}
             gate_err = self._authorize(product, api)   # 预签发前消费一次性授权
             if gate_err:
                 logger.warning("execute %s:%s region=%s mode=%s policy=%s",
-                               product, api, region,
-                               "mock" if self.config.mock else "real", "deny")
+                               product, api, region, mode, "deny")
                 return {"ok": False, "reason": gate_err}
             return execute_obs.execute_presign_api(
-                doc, path, method, op, product, api, region, params,
-                credentials=self.config.credentials,
+                hit.doc, hit.path, hit.method, hit.op, product, api, region,
+                params, credentials=self.config.credentials,
                 client=None if self.config.mock else self._make_obs_client())
 
         # OpenAPI 元数据 schema 校验（policy 接缝）：mock/real 共享；
         # OBS lane（XML body/自身参数切分）不适用，跳过
-        if not execute_obs.is_obs(product, doc):
-            err = execute.validate_params(doc, path, op, params,
+        if not is_obs_op:
+            err = execute.validate_params(hit.doc, hit.path, hit.op, params,
                                           self.config.credentials)
             if err:
                 logger.warning("execute %s:%s schema=reject reason=%s", product, api, err)
@@ -437,59 +447,30 @@ class ToolService:
         gate_err = self._authorize(product, api)
         if gate_err:
             logger.warning("execute %s:%s region=%s mode=%s policy=%s",
-                           product, api, region,
-                           "mock" if self.config.mock else "real", "deny")
+                           product, api, region, mode, "deny")
             return {"ok": False, "reason": gate_err}
 
         logger.info("execute %s:%s region=%s mode=%s policy=allow",
-                    product, api, region,
-                    "mock" if self.config.mock else "real")
+                    product, api, region, lane)
 
-        if self.config.mock:
-            return self._execute_mock(product, api, region, params, spill=spill_cfg)
+        if lane == "mock":
+            return execute.execute_api(hit, product, api, region, params,
+                                       executor=self._mock_executor(),
+                                       spill=spill_cfg)
 
-        if execute_obs.is_obs(product, doc):
-            if execute_obs.is_object_data_api(api, op):
+        if lane == "obs":
+            if execute_obs.is_object_data_api(api, hit.op):
                 # 对象数据面单口径：恒返回预签名 URL，gateway 不搬运对象字节
                 return execute_obs.execute_presign_api(
-                    doc, path, method, op, product, api, region, params,
-                    credentials=self.config.credentials,
-                    client=self._make_obs_client(),
-                )
-            logger.info("execute %s:%s region=%s mode=obs policy=allow",
-                        product, api, region)
+                    hit.doc, hit.path, hit.method, hit.op, product, api,
+                    region, params, credentials=self.config.credentials,
+                    client=self._make_obs_client())
             return execute_obs.execute_obs_api(
-                doc, path, method, op, product, api, region, params,
-                client=self._make_obs_client(),
+                hit.doc, hit.path, hit.method, hit.op, product, api, region,
+                params, client=self._make_obs_client(),
                 credentials=self.config.credentials,
-                spill=spill_cfg,
-            )
+                spill=spill_cfg)
 
-        return execute.execute_api(
-            doc, path, method, op, product, api, region, params,
-            client=self._make_http_client(),
-            credentials=self.config.credentials,
-            spill=spill_cfg,
-        )
-
-    def _execute_mock(self, product: str, api: str, region: str,
-                      params: dict[str, Any],
-                      *, spill: SpillConfig | None = None) -> ExecuteResult:
-        """mock 模式：直接路由到 API Explorer mock 端点（policy 已在上层检查）。
-
-        mock_passthrough 开启时把业务参数转发到端点（标量→query、body→POST JSON，
-        控制键剥离）；默认关，保持 API Explorer mock 契约。
-        """
-        status_code = params.get("_status_code", 200)
-        number = params.get("_number", 1)
-        client = self._make_mock_client()
-        if self.config.mock_passthrough:
-            resp = client.mock_request(product, api, region,
-                                       status_code=status_code, number=number,
-                                       params=params)
-        else:
-            resp = client.mock_request(product, api, region,
-                                       status_code=status_code, number=number)
-        out = execute.normalize_response(resp, spill, stem=f"{product}-{api}")
-        out.update({"ok": True, "product": product, "api": api})
-        return out
+        return execute.execute_api(hit, product, api, region, params,
+                                   executor=self._real_executor(),
+                                   spill=spill_cfg)

@@ -6,10 +6,12 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any, Callable, Protocol
 
 import jsonschema
 
+from apie.api_location import ApiLocation
 from common.auth.credentials import Credentials
 from common.types import ClientResponse, ExecuteResult, SpillInfo
 
@@ -46,8 +48,12 @@ _AUTH_HEADERS = frozenset({
 # 独立方言模块（OBS lane 先例）。
 
 
-class ApiExecutor(Protocol):
-    """执行层协议：execute_api 只依赖 request()，不耦合具体客户端实现。"""
+class SignedClient(Protocol):
+    """传输端口：签名客户端形状（HttpClient 满足；测试注入 stub）。
+
+    原名 ApiExecutor——2026-09 起让位于操作上下文执行接缝（CONTEXT.md A），
+    本协议降为 RealApiExecutor 内部的传输端口。
+    """
 
     def request(self, method: str, host: str, path: str, *,
                 query: dict[str, Any] | None = None,
@@ -55,8 +61,96 @@ class ApiExecutor(Protocol):
                 headers: dict[str, str] | None = None) -> ClientResponse: ...
 
 
-def _refuse(reason: str) -> ExecuteResult:
-    return {"ok": False, "reason": reason}
+class RequestRefusal(Exception):
+    """真实执行 adapter 的拒绝（缺必填路径参数 / doc 缺 host）。
+
+    execute_api 捕获后转 {ok: false, reason}；mock adapter 永不抛出
+    （mock URL 不含真实 path，无路径语义）。
+    """
+
+
+class ApiExecutor(Protocol):
+    """执行接缝（CONTEXT.md A）：ToolService 与「操作如何到达华为云」之间。
+
+    两个 adapter：RealApiExecutor（SDK-HMAC-SHA256 签名 + 从 OpenAPI 操作
+    构建请求）与 MockApiExecutor（派生 API Explorer mock URL，剥 _ 控制键）。
+    execute_api 调用之，再规范化 + 包装信封。
+    """
+
+    mode: str
+
+    def request(self, location: "ApiLocation", product: str, api_name: str,
+                region: str, params: dict[str, Any]) -> ClientResponse: ...
+
+
+class RealApiExecutor:
+    """真实 adapter：build_request（路径填充/参数切分）→ 默认 CT → basePath
+    前缀 → X-Project-Id → 签名客户端发送。"""
+
+    mode = "real"
+
+    def __init__(self, client: SignedClient,
+                 credentials: Credentials | None = None):
+        self.client = client
+        self.credentials = credentials
+
+    def request(self, location: "ApiLocation", product: str, api_name: str,
+                region: str, params: dict[str, Any]) -> ClientResponse:
+        filled, query, body, headers, err = build_request(
+            location.op, location.path, params, self.credentials)
+        if err:
+            raise RequestRefusal(err)
+        assert filled is not None
+
+        headers.setdefault("Content-Type", "application/json")
+
+        host = location.doc.get("host")
+        if not isinstance(host, str) or not host:
+            raise RequestRefusal("接口元数据缺少 host，无法执行")
+
+        base = location.doc.get("basePath")
+        if isinstance(base, str) and base and base != "/":
+            filled = base.rstrip("/") + filled
+
+        if (self.credentials and self.credentials.project_id
+                and "{project_id}" not in location.path):
+            headers.setdefault("X-Project-Id", self.credentials.project_id)
+
+        return self.client.request(location.method.upper(), host, filled,
+                                   query=query, body=body, headers=headers)
+
+
+class MockClient(Protocol):
+    """mock 端点客户端端口（apie.mock.MockApiClient 满足；测试注入 stub）。"""
+
+    def mock_request(self, product: str, api_name: str, region: str,
+                     status_code: int = 200, number: int = 1,
+                     params: Mapping[str, Any] | None = None) -> ClientResponse: ...
+
+
+class MockApiExecutor:
+    """mock adapter：剥 _status_code/_number 控制键 → API Explorer mock 端点。
+
+    passthrough 开启时把业务参数原样交 mock 层编码（标量→query、body→POST）。
+    永不抛 RequestRefusal（mock URL 不含真实 path，无路径语义）。
+    """
+
+    mode = "mock"
+
+    def __init__(self, client: MockClient, *, passthrough: bool = False):
+        self.client = client
+        self.passthrough = passthrough
+
+    def request(self, location: "ApiLocation", product: str, api_name: str,
+                region: str, params: dict[str, Any]) -> ClientResponse:
+        status_code = params.get("_status_code", 200)
+        number = params.get("_number", 1)
+        if self.passthrough:
+            return self.client.mock_request(
+                product, api_name, region, status_code=status_code,
+                number=number, params=params)
+        return self.client.mock_request(product, api_name, region,
+                                        status_code=status_code, number=number)
 
 
 def _describe(value: Any) -> str:
@@ -337,38 +431,21 @@ def _extract_error_fields(raw: Any) -> tuple[str | None, str | None]:
     return None, None
 
 
-def execute_api(doc: dict[str, Any], path: str, method: str, op: dict[str, Any],
-                product: str, api_name: str, region: str, params: dict[str, Any],
-                *, client: ApiExecutor,
-                credentials: Credentials | None = None,
+def execute_api(location: ApiLocation, product: str, api_name: str,
+                region: str, params: dict[str, Any], *,
+                executor: ApiExecutor,
                 spill: SpillConfig | None = None) -> ExecuteResult:
-    """执行真实 API：请求构建 → 调用 → 规范化（safety 已由 ToolService 完成）。
+    """经执行接缝发出操作：executor adapter 请求 → 响应规范化 → 信封包装。
 
+    safety 已由 ToolService 完成；lane 决策（mock/obs/real）在 service 单点
+    完成（C6），本函数只面向 executor——审计命名的 mode 归 adapter 所有。
+    RequestRefusal（真实 lane 的路径参数/host 拒绝）转 {ok: false, reason}。
     spill 配置透传响应规范化：超限 body 完整落盘（S12 层级 1）。
     """
-    logger.info("execute %s:%s region=%s mode=real",
-                product, api_name, region)
-
-    filled, query, body, headers, err = build_request(op, path, params, credentials)
-    if err:
-        return _refuse(err)
-    assert filled is not None
-
-    headers.setdefault("Content-Type", "application/json")
-
-    host = doc.get("host")
-    if not isinstance(host, str) or not host:
-        return _refuse("接口元数据缺少 host，无法执行")
-
-    base = doc.get("basePath")
-    if isinstance(base, str) and base and base != "/":
-        filled = base.rstrip("/") + filled
-
-    if credentials and credentials.project_id and "{project_id}" not in path:
-        headers.setdefault("X-Project-Id", credentials.project_id)
-
-    resp = client.request(method.upper(), host, filled,
-                          query=query, body=body, headers=headers)
+    try:
+        resp = executor.request(location, product, api_name, region, params)
+    except RequestRefusal as exc:
+        return {"ok": False, "reason": str(exc)}
     out = normalize_response(resp, spill, stem=f"{product}-{api_name}")
     out.update({"ok": True, "product": product, "api": api_name})
     return out

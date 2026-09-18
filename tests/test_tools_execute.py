@@ -38,8 +38,8 @@ CRED = Credentials(ak="AK", sk="SK", project_id="proj123")
 # ---------- build_request ----------
 
 def test_build_request_fills_path_and_query(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    filled, query, body, headers, err = execute.build_request(op, path, {"limit": 10}, CRED)
+    loc = _get_op(mini_detail)
+    filled, query, body, headers, err = execute.build_request(loc.op, loc.path, {"limit": 10}, CRED)
     assert err is None
     assert filled == "/v1/proj123/cloudservers"
     assert query == {"limit": 10}
@@ -47,16 +47,16 @@ def test_build_request_fills_path_and_query(mini_detail):
 
 
 def test_build_request_missing_path_param(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    filled, query, body, headers, err = execute.build_request(op, path, {}, Credentials(ak="AK", sk="SK"))
+    loc = _get_op(mini_detail)
+    filled, query, body, headers, err = execute.build_request(loc.op, loc.path, {}, Credentials(ak="AK", sk="SK"))
     assert err is not None
     assert "project_id" in err
 
 
 def test_build_request_body(mini_detail):
-    doc, path, method, op = _get_op(mini_detail, "RabbitMQ::BatchCreateOrDeleteRabbitMqTag")
+    loc = _get_op(mini_detail, "RabbitMQ::BatchCreateOrDeleteRabbitMqTag")
     params = {"instance_id": "inst-1", "body": {"action": "create", "tags": []}}
-    filled, query, body, headers, err = execute.build_request(op, path, params, CRED)
+    filled, query, body, headers, err = execute.build_request(loc.op, loc.path, params, CRED)
     assert err is None
     assert filled == "/v2/proj123/rabbitmq/inst-1/tags/action"
     assert body == {"action": "create", "tags": []}
@@ -141,14 +141,15 @@ def test_normalize_response_without_spill_config_unchanged():
 
 def test_execute_api_passes_spill_with_stem(mini_detail, tmp_path):
     from mcp_openapi.spill import SpillConfig
-    doc, path, method, op = _get_op(mini_detail)
+    loc = _get_op(mini_detail)
     big = {"servers": [{"id": "s"} for _ in range(1)], "fill": "x" * 250_000}
     client = StubClient([{"status": 200, "headers": {}, "body": big}])
-    out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                              {"limit": 1}, client=client,
-                              spill=SpillConfig(dir=tmp_path),
-                              credentials=Credentials(ak="AK", sk="SK",
-                                                      project_id="proj123"))
+    out = execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                              {"limit": 1},
+                              executor=execute.RealApiExecutor(
+                                  client, Credentials(ak="AK", sk="SK",
+                                                      project_id="proj123")),
+                              spill=SpillConfig(dir=tmp_path))
     assert out["ok"] is True
     name = os.path.basename(out["spill"]["path"])
     assert name.startswith("ECS-ListServers-")
@@ -317,22 +318,25 @@ def test_normalize_response_non_scalar_code_rejected():
 # ---------- execute_api ----------
 
 def test_execute_missing_doc_host_returns_error(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    doc.pop("host", None)
+    loc = _get_op(mini_detail)
+    loc.doc.pop("host", None)
     client = StubClient()
     cred = Credentials(ak="AK", sk="SK", project_id="proj123")
-    out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                              {"limit": 1}, client=client, credentials=cred)
+    out = execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                              {"limit": 1},
+                              executor=execute.RealApiExecutor(client, cred))
     assert out["ok"] is False
     assert "host" in out["reason"]
 
 
 def test_execute_allow_calls_client(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
+    loc = _get_op(mini_detail)
     client = StubClient([{"status": 200, "headers": {}, "body": {"count": 0}}])
-    out = execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                              {"limit": 1}, client=client,
-                              credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    out = execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                              {"limit": 1},
+                              executor=execute.RealApiExecutor(
+                                  client, Credentials(ak="AK", sk="SK",
+                                                      project_id="proj123")))
     assert out["ok"] is True
     assert out["status"] == 200
     assert client.calls[0][0] == "GET"
@@ -346,42 +350,50 @@ def test_execute_allow_calls_client(mini_detail):
 
 
 def test_execute_applies_basepath_prefix(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    doc["basePath"] = "/v2"
+    loc = _get_op(mini_detail)
+    loc.doc["basePath"] = "/v2"
     client = StubClient()
-    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                        {"limit": 1}, client=client,
-                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                        {"limit": 1},
+                        executor=execute.RealApiExecutor(
+                            client, Credentials(ak="AK", sk="SK",
+                                                project_id="proj123")))
     assert client.calls[0][2] == "/v2/v1/proj123/cloudservers"
 
 
 def test_execute_basepath_root_unchanged(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    doc["basePath"] = "/"
+    loc = _get_op(mini_detail)
+    loc.doc["basePath"] = "/"
     client = StubClient()
-    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                        {"limit": 1}, client=client,
-                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                        {"limit": 1},
+                        executor=execute.RealApiExecutor(
+                            client, Credentials(ak="AK", sk="SK",
+                                                project_id="proj123")))
     assert client.calls[0][2] == "/v1/proj123/cloudservers"
 
 
 def test_execute_basepath_missing_unchanged(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    doc.pop("basePath", None)
+    loc = _get_op(mini_detail)
+    loc.doc.pop("basePath", None)
     client = StubClient()
-    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                        {"limit": 1}, client=client,
-                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                        {"limit": 1},
+                        executor=execute.RealApiExecutor(
+                            client, Credentials(ak="AK", sk="SK",
+                                                project_id="proj123")))
     assert client.calls[0][2] == "/v1/proj123/cloudservers"
 
 
 def test_execute_basepath_trailing_slash_normalized(mini_detail):
-    doc, path, method, op = _get_op(mini_detail)
-    doc["basePath"] = "/v2/"
+    loc = _get_op(mini_detail)
+    loc.doc["basePath"] = "/v2/"
     client = StubClient()
-    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                        {"limit": 1}, client=client,
-                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                        {"limit": 1},
+                        executor=execute.RealApiExecutor(
+                            client, Credentials(ak="AK", sk="SK",
+                                                project_id="proj123")))
     assert client.calls[0][2] == "/v2/v1/proj123/cloudservers"
 
 
@@ -403,11 +415,13 @@ _BODYLESS_WRITE_DOC = {"host": "ecs.cn-north-4.myhuaweicloud.com", "basePath": "
 
 def test_execute_api_bodyless_get_defaults_content_type(mini_detail):
     """任意产品无 body GET 默认携带 Content-Type（原「非方言不带」红线翻转，全局默认）。"""
-    doc, path, method, op = _get_op(mini_detail)
+    loc = _get_op(mini_detail)
     client = StubClient()
-    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                        {}, client=client,
-                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                        {},
+                        executor=execute.RealApiExecutor(
+                            client, Credentials(ak="AK", sk="SK",
+                                                project_id="proj123")))
     headers = client.calls[0][5]
     assert headers["Content-Type"] == "application/json"
 
@@ -416,9 +430,11 @@ def test_execute_api_bodyless_get_defaults_content_type(mini_detail):
 def test_execute_api_bodyless_defaults_content_type(method):
     """无 body 请求全方法默认携带 Content-Type（setdefault，不注入 body）。"""
     client = StubClient()
-    execute.execute_api(_BODYLESS_WRITE_DOC, "/v1/{project_id}/cloudservers/action",
-                        method, _BODYLESS_WRITE_OP, "ECS", "StartupInstance",
-                        "cn-north-4", {}, client=client, credentials=CRED)
+    execute.execute_api(
+        ApiLocation(_BODYLESS_WRITE_DOC, "/v1/{project_id}/cloudservers/action",
+                    method, _BODYLESS_WRITE_OP),
+        "ECS", "StartupInstance", "cn-north-4", {},
+        executor=execute.RealApiExecutor(client, CRED))
     method_, host_, path_, query, body, headers = client.calls[0]
     assert headers["Content-Type"] == "application/json"
     assert body is None  # 只补头，不注入空 JSON 体
@@ -426,14 +442,17 @@ def test_execute_api_bodyless_defaults_content_type(method):
 
 def test_execute_api_explicit_content_type_wins(mini_detail):
     """显式传入的 Content-Type 不被默认值覆盖（setdefault 语义）。"""
-    doc, path, method, op = _get_op(mini_detail)
-    op = dict(op)
+    loc = _get_op(mini_detail)
+    op = dict(loc.op)
     op["parameters"] = list(op.get("parameters") or []) + [
         {"name": "Content-Type", "in": "header", "type": "string"}]
+    loc = ApiLocation(loc.doc, loc.path, loc.method, op)
     client = StubClient()
-    execute.execute_api(doc, path, method, op, "ECS", "ListServers", "cn-north-4",
-                        {"Content-Type": "text/plain"}, client=client,
-                        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"))
+    execute.execute_api(loc, "ECS", "ListServers", "cn-north-4",
+                        {"Content-Type": "text/plain"},
+                        executor=execute.RealApiExecutor(
+                            client, Credentials(ak="AK", sk="SK",
+                                                project_id="proj123")))
     headers = client.calls[0][5]
     assert headers["Content-Type"] == "text/plain"
 
