@@ -380,8 +380,6 @@ class ObsHttpClient:
                 query: dict[str, Any] | None = None,
                 headers: dict[str, str] | None = None,
                 body: str | bytes | None = None) -> ClientResponse:
-        import urllib.error
-        import urllib.request
 
         method = method.upper()
         headers = dict(headers or {})
@@ -405,24 +403,18 @@ class ObsHttpClient:
         ) if creds and creds.ak and creds.sk else {}
         headers.update(extra)
 
-        url = build_obs_url(host, bucket, object_key, query or {})
+        req_url = build_obs_url(host, bucket, object_key, query or {})
         logger.debug("obs request %s %s ct=%s md5=%s body[:200]=%r",
-                     method, url, headers.get("Content-Type"),
+                     method, req_url, headers.get("Content-Type"),
                      headers.get("Content-MD5"),
                      (body_bytes or b"")[:200])
-        req = urllib.request.Request(url, data=body_bytes, method=method, headers=headers)
 
-        def _do() -> tuple[int, dict[str, str], bytes]:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return resp.status, dict(resp.headers), resp.read()
-
-        try:
-            status, resp_headers, raw = common_http._retry(
-                _do, max_retries=self.max_retries, backoff=self.retry_backoff,
-                logger_name="mcp_openapi.execute_obs")
-        except urllib.error.HTTPError as e:
-            status, resp_headers, raw = e.code, dict(e.headers), e.read()
-        logger.info("%s %s -> %s", method, url, status)
+        # 传输委托 common.http.open_with_retry（单一接缝，HTTP 错误按 status 返回）
+        status, resp_headers, raw = common_http.open_with_retry(
+            req_url, method=method, headers=headers, data=body_bytes,
+            timeout=self.timeout, retries=self.max_retries,
+            backoff=self.retry_backoff, logger_name="mcp_openapi.execute_obs")
+        logger.info("%s %s -> %s", method, req_url, status)
         # 响应体分类判据单点在 common_http.parse_body（bytes ⇔ 不透明二进制），
         # 占位 + .bin 落盘由 normalize_response 统一渲染（与 real/mock lane 同形）。
         return {"status": status, "headers": resp_headers,

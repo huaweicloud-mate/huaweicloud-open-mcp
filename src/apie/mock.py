@@ -12,11 +12,10 @@ passthrough（opt-in）：mock_request(params=...) 把 execute 业务参数转�
 import json
 import logging
 import urllib.parse
-import urllib.request
 from collections.abc import Mapping
 from typing import Any
 
-from common.http import _retry, parse_body
+from common.http import open_with_retry, parse_body
 from common.types import ClientResponse
 
 logger = logging.getLogger("apie.mock")
@@ -71,22 +70,17 @@ class MockApiClient:
                                         ("number", str(number)),
                                         ("region_id", region),
                                         *passthrough_query]
-        url = f"{self.base_url}{MOCK_PATH}/{product}/{api_name}?{urllib.parse.urlencode(query)}"
+        req_url = f"{self.base_url}{MOCK_PATH}/{product}/{api_name}?{urllib.parse.urlencode(query)}"
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         data: bytes | None = None
         if passthrough_body is not None:
             data = json.dumps(passthrough_body, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=data, headers=headers)
 
-        def _do() -> tuple[int, dict[str, str], Any]:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return resp.status, dict(resp.headers), parse_body(resp.read())
-
-        try:
-            status, headers, body = _retry(_do, max_retries=self.max_retries,
-                                           backoff=self.retry_backoff,
-                                           logger_name="apie.mock")
-            return {"status": status, "headers": headers, "body": body}
-        except urllib.error.HTTPError as e:
-            return {"status": e.code, "headers": dict(e.headers), "body": parse_body(e.read())}
+        # 传输委托 common.http.open_with_retry（单一接缝，HTTP 错误按 status 返回）
+        status, resp_headers, raw = open_with_retry(
+            req_url, data=data, headers=headers, timeout=self.timeout,
+            retries=self.max_retries, backoff=self.retry_backoff,
+            logger_name="apie.mock")
+        return {"status": status, "headers": resp_headers,
+                "body": parse_body(raw)}

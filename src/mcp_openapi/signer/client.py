@@ -3,13 +3,11 @@
 import json
 import logging
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any
 
 from common.auth.credentials import Credentials
-from common.http import _retry, parse_body
+from common.http import open_with_retry, parse_body
 from common.types import ClientResponse
 
 from . import sign
@@ -30,19 +28,13 @@ class HttpClient:
         self.retry_backoff = retry_backoff
 
     def _open(self, url: str, method: str, headers: dict[str, str],
-               body_bytes: bytes | None) -> tuple[int, dict[str, str], bytes]:
-        req = urllib.request.Request(url, data=body_bytes, method=method, headers=headers)
-
-        def _do() -> tuple[int, dict[str, str], bytes]:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return resp.status, dict(resp.headers), resp.read()
-
-        try:
-            return _retry(_do, max_retries=self.max_retries,
-                          backoff=self.retry_backoff,
-                          logger_name="mcp_openapi.signer.client")
-        except urllib.error.HTTPError as e:
-            return e.code, dict(e.headers), e.read()
+              body_bytes: bytes | None) -> tuple[int, dict[str, str], bytes]:
+        """传输委托 common.http.open_with_retry（单一接缝，HTTP 错误按 status 返回）。"""
+        return open_with_retry(url, method=method, headers=headers,
+                               data=body_bytes, timeout=self.timeout,
+                               retries=self.max_retries,
+                               backoff=self.retry_backoff,
+                               logger_name="mcp_openapi.signer.client")
 
     def request(self, method: str, host: str, path: str, *,
                 query: dict[str, Any] | None = None, body: dict[str, Any] | None = None,

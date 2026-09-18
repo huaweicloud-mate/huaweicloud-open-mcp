@@ -55,6 +55,34 @@ def _retry(fn: Callable[[], T], *, max_retries: int, backoff: float,
     raise last_err  # type: ignore[misc]
 
 
+def open_with_retry(url: str, *, method: str | None = None,
+                    headers: dict[str, str] | None = None,
+                    data: bytes | None = None,
+                    timeout: int = 30,
+                    retries: int = 4, backoff: float = 2.0,
+                    logger_name: str = "common.http",
+                    ) -> tuple[int, dict[str, str], bytes]:
+    """单一传输接缝：打开 URL 并重试，返回 (status, headers, body bytes)。
+
+    429 指数退避、其它瞬时异常线性退避（_retry 语义，retries 为重试次数、
+    不含首次）；HTTP 错误不抛——返回 (e.code, e.headers, e.read())，调用方
+    据 status 分流（real/mock/OBS 三 lane 共用，消灭各 lane 的 _do 闭包
+    重复）；重试耗尽的非 HTTP 异常原样抛出。
+    """
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers=dict(headers) if headers else {})
+
+    def _do() -> tuple[int, dict[str, str], bytes]:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, dict(resp.headers), resp.read()
+
+    try:
+        return _retry(_do, max_retries=retries, backoff=backoff,
+                      logger_name=logger_name)
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
 def open_url(url: str, *, timeout: int = 30) -> tuple[dict[str, Any], HttpError | None]:
     """打开 URL 一次。返回 (解析后 JSON, HTTPError|None)；网络异常直接抛出。"""
     req = urllib.request.Request(url, headers=HEADERS)
