@@ -214,6 +214,7 @@ curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-st
 
 - Content-Type 参与签名。上传建议传 `_presign_content_type` 锁定类型，并按 `headers` 清单原样携带；未锁定时签名按空 Content-Type 计算，直连请求不得携带该头（`curl -H 'Content-Type:'`）。命中该情形时信封的 `note` 字段会给出警示。
 - `_presign_expires` 调整有效期（秒，默认 900）。
+- `GetObject` 预签发前执行一次 `HEAD` 元数据预检（对象字节仍不过网关）：信封附带 `expected_size` / `expected_etag` 供下载后核对；404（桶/对象不存在——如 FunctionGraph 函数源桶已删除）直接拒签并指引核对部署副本，避免签出一个只会下载 XML 错误页的 URL；其它预检异常降级放行（无预期字段，note 说明）。
 - 其余 OBS 接口（桶管理、tagging、ACL 等）照常经网关执行；需要 URL 时可显式传 `_presign=true`。非 OBS 产品传 `_presign` 会被拒绝。mock 模式继续走 mock 端点。
 
 ## 工具（openapi 模式）
@@ -256,7 +257,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 - 未配置 `--policy` → 全部执行被拒。
 - `manage_policy` add 的授予档位：`once`（一次性，用后即焚）· `session`（缺省；仅本次 Agent 会话）· `temporary`（TTL 自动过期）· `permanent`（写入 policy 文件）。
 - 一切热生效：外部编辑文件即时生效；经 `manage_policy` 增删亦然。优先授予最小规则（`once`/`session`），产品级仅在确有必要时使用。
-- 拒绝结果附可操作原因；开启 `--elicitation auto|required` 后，server 会经 MCP elicitation 提议授予（四选一：api=最小规则（一次性）/ api_session=最小规则（会话内）/ product=产品级规则（会话内）/ none=不授予）。默认 `off`，保证跨客户端行为可预期。
+- 拒绝结果附可操作原因；开启 `--elicitation auto|required` 后，server 会经 MCP elicitation 提议授予（五选一：api=最小规则（一次性）/ api_session=最小规则（会话内）/ product=产品级规则（会话内）/ readonly=产品级只读规则集（`*List*/*Show*/*Get*/*Query*` 四条，会话内，浏览类任务首选）/ none=不授予）。默认 `off`，保证跨客户端行为可预期。
 
 包内附带更丰富的示例：`configs/safety-policy.example.json`。
 

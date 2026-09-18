@@ -213,6 +213,7 @@ Rules that matter:
 
 - Content-Type is part of the signature. For uploads, pass `_presign_content_type` to lock it and send exactly the headers listed in `headers`; if you don't lock it, the signature assumes no Content-Type — the direct request must not send one (`curl -H 'Content-Type:'`). The envelope's `note` field warns about this case.
 - `_presign_expires` tunes validity in seconds (default 900).
+- `GetObject` presigns run one `HEAD` metadata pre-check first (object bytes still never pass the gateway). The envelope then carries `expected_size` / `expected_etag` for post-download verification; a 404 (bucket/object gone — e.g. a deleted FunctionGraph source bucket) denies the presign outright instead of handing out a URL that downloads an XML error page; other pre-check failures degrade gracefully (no expected fields, note explains).
 - All other OBS APIs (bucket management, tagging, ACL, …) execute through the gateway as usual; pass `_presign=true` explicitly if you want a URL for one of them. Non-OBS products reject `_presign`. Mock mode keeps hitting the mock endpoint.
 
 ## Tools (openapi mode)
@@ -255,7 +256,7 @@ A policy file is a JSON array (or plain text) of rules, evaluated top-down, firs
 - No `--policy` configured → every execution denied.
 - Grant scopes (via `manage_policy` add): `once` (single execution, burned after use) · `session` (default; this agent session only) · `temporary` (TTL) · `permanent` (written to the policy file).
 - Hot everywhere: external edits to the file apply immediately; add/remove via `manage_policy` too. Grant minimal rules first (`once`/`session`), product-wide only when justified.
-- Denials return an actionable reason; with `--elicitation auto|required` the server proposes a grant over MCP elicitation (four choices: `api` = minimal rule, one-shot / `api_session` = minimal rule, session-scoped / `product` = product-wide, session-scoped / `none`). Default is `off` for predictable cross-client behavior.
+- Denials return an actionable reason; with `--elicitation auto|required` the server proposes a grant over MCP elicitation (five choices: `api` = minimal rule, one-shot / `api_session` = minimal rule, session-scoped / `product` = product-wide, session-scoped / `readonly` = product read-only rule set (`*List*/*Show*/*Get*/*Query*`, session-scoped — preferred for browsing tasks) / `none`). Default is `off` for predictable cross-client behavior.
 
 A richer example ships with the package: `configs/safety-policy.example.json`.
 
