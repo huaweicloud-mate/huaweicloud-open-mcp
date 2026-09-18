@@ -23,7 +23,7 @@ from .cases import BenchmarkCase, load_cases
 from .openapi.stub_server import StubServer
 from .report import CaseStats, RunResult, aggregate, dump_baseline, render_markdown
 from .scorer import ToolCall, score
-from .trace import extract_trace, extract_trace_from_raw, extract_usage, parse_run_output
+from .trace import ExportResult, parse_export, parse_run_output
 
 _RAW_USAGE_KEY = "__raw_usage__"
 _RAW_TOOLS_KEY = "__raw_tools__"
@@ -65,8 +65,14 @@ def build_benchdir_config(policy: str, mock_base: str | None, *,
     return json.dumps(config, ensure_ascii=False, indent=2)
 
 
-def export_session(opencode_bin: str, session_id: str, retries: int = 3) -> dict | None:
-    """opencode export 带重试：会话刚结束时导出可能读到未落盘数据而截断。"""
+def export_session(opencode_bin: str, session_id: str,
+                   retries: int = 3) -> ExportResult | None:
+    """opencode export 带重试：会话刚结束时导出可能读到未落盘数据而截断。
+
+    返回单一类型化产物 ExportResult（CONTEXT.md B）——恢复机制藏于
+    trace.parse_export；仅末次尝试启用截断恢复（recover 门），非末次保持
+    严格解析以争取完整导出。
+    """
     last_err: Exception | None = None
     for attempt in range(retries):
         if attempt:
@@ -76,25 +82,16 @@ def export_session(opencode_bin: str, session_id: str, retries: int = 3) -> dict
                 [opencode_bin, "export", session_id],
                 capture_output=True, timeout=60,
             )
-            raw_text = proc.stdout.decode("utf-8", errors="replace")
-            if raw_text.strip():
-                data = json.loads(raw_text)
-                if isinstance(data, dict) and data.get("messages") is not None:
-                    return data
-        except json.JSONDecodeError:
-            # JSON 截断/格式异常 → 重试或从 raw 文本提取
-            if attempt < retries - 1:
-                continue
-            usage = extract_usage(raw_text)
-            if usage:
-                result: dict = {_RAW_USAGE_KEY: usage}
-                tools = extract_trace_from_raw(raw_text)
-                if tools:
-                    result[_RAW_TOOLS_KEY] = tools
-                return result
-            return None
         except Exception as e:  # noqa: BLE001
             last_err = e
+            continue
+        raw_text = proc.stdout.decode("utf-8", errors="replace")
+        if raw_text.strip():
+            result = parse_export(raw_text, recover=(attempt == retries - 1))
+            if result is not None:
+                return result
+            if attempt >= retries - 1:
+                return None   # 末次已尽力恢复仍不可用 → 失败逸出
     if last_err is not None:
         raise last_err
     return None
@@ -119,27 +116,19 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
     elapsed = time.monotonic() - t0
     parsed = parse_run_output(proc.stdout)
     session_id = parsed["session_id"]
-    trace: list[ToolCall] = []
-    answer: str = parsed["answer"]
-    export_raw: dict | None = None
+    answer: str = parsed["answer"]   # answer 唯一真值源：live NDJSON 流（CONTEXT.md B）
+    export_result: ExportResult | None = None
     export_error: str | None = None
-    raw_usage: dict[str, int | float] | None = None
     if session_id:
         try:
-            export_raw = export_session(opencode_bin, session_id)
+            export_result = export_session(opencode_bin, session_id)
         except Exception as e:  # noqa: BLE001
             export_error = f"export 失败: {e}"
-        if isinstance(export_raw, dict) and _RAW_USAGE_KEY in export_raw:
-            raw_usage = export_raw[_RAW_USAGE_KEY]
-            raw_tools = export_raw.get(_RAW_TOOLS_KEY, [])
-            if raw_tools:
-                trace = raw_tools
-            export_raw = None
-            export_error = "export JSON 解析异常，token/trace 从 raw 文本提取"
-        elif export_raw is not None:
-            trace, answer = extract_trace(export_raw)
-        elif export_error is None:
+        if export_result is None and export_error is None:
             export_error = "export 失败: JSON 解析异常或结果为空"
+        elif export_result is not None and export_result.recovered:
+            export_error = "export JSON 截断，token/trace 从 raw 文本恢复"
+    trace: list[ToolCall] = list(export_result.trace) if export_result else []
     if not session_id:
         error = f"opencode run 失败 exit={proc.returncode}"
     elif export_error:
@@ -152,12 +141,8 @@ def run_once(case: BenchmarkCase, backend: str, repeat: int, model: str,
     tokens: dict[str, int | float | None] = {"cost": None, "input": None, "output": None,
                                              "reasoning": None, "cache_read": None,
                                              "cache_write": None}
-    if raw_usage:
-        tokens.update(raw_usage)
-    elif export_raw is not None:
-        usage = extract_usage(export_raw)
-        if usage:
-            tokens.update(usage)
+    if export_result is not None and export_result.usage:
+        tokens.update(export_result.usage)
     return RunResult(
         case_id=case.id, backend=backend, repeat=repeat, session_id=session_id,
         model=model, elapsed_s=elapsed,

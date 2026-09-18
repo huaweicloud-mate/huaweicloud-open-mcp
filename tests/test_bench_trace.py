@@ -1,6 +1,14 @@
 """S6：benchmark trace 提取（export JSON/NDJSON）单测。"""
 
-from benchmarks.trace import extract_trace, extract_trace_from_raw, extract_usage, parse_run_output
+import json as _json
+
+from benchmarks.trace import (
+    extract_trace,
+    extract_trace_from_raw,
+    extract_usage,
+    parse_export,
+    parse_run_output,
+)
 
 EXPORT = {
     "info": {
@@ -46,13 +54,12 @@ EXPORT = {
 
 
 def test_extract_trace_tools_and_assistant_text():
-    tools, answer = extract_trace(EXPORT)
+    tools = extract_trace(EXPORT)
     assert [(t.tool, t.status) for t in tools] == [
         ("huaweicloud-open-mcp_list_products", "completed"),
         ("huaweicloud-open-mcp_execute_api", "completed"),
     ]
     assert tools[1].input == {"product": "ECS", "api": "ListServersDetails", "params": {"limit": 1}}
-    assert answer == "找到了产品\n共 1 台 bench-server"
 
 
 def test_extract_trace_tolerates_missing_state():
@@ -62,10 +69,9 @@ def test_extract_trace_tolerates_missing_state():
             {"type": "text", "text": "x"},
         ]},
     ]}
-    tools, answer = extract_trace(export)
+    tools = extract_trace(export)
     assert tools[0].input == {}
     assert tools[0].status == ""
-    assert answer == "x"
 
 
 def test_extract_usage():
@@ -156,3 +162,58 @@ def test_extract_trace_from_raw_multiple_tools():
         "huaweicloud-open-mcp_execute_api",
     ]
     assert tools[1].input == {"product": "ECS", "api": "ListServers", "params": {"limit": 1}}
+
+
+# ---------- parse_export：单一类型化产物（CONTEXT.md B，哨兵键退役） ----------
+
+
+
+
+def test_parse_export_full_json():
+    out = parse_export(_json.dumps(EXPORT))
+    assert out is not None and out.recovered is False
+    assert out.usage == extract_usage(EXPORT)
+    assert [t.tool for t in out.trace] == [
+        "huaweicloud-open-mcp_list_products", "huaweicloud-open-mcp_execute_api"]
+
+
+def test_parse_export_truncated_recovers():
+    """截断 JSON：regex 恢复 usage + trace，recovered=True（恢复机制不外泄）。"""
+    raw = _json.dumps(EXPORT) + '{"info": {"tokens"'   # 尾部截断
+    out = parse_export(raw, recover=True)
+    assert out is not None and out.recovered is True
+    assert out.usage is not None and out.usage["input"] == 100
+    assert len(out.trace) == 2
+
+
+def test_parse_export_truncated_no_recovery_is_none():
+    raw = _json.dumps(EXPORT) + '{"info": {"tokens"'
+    assert parse_export(raw, recover=False) is None
+
+
+def test_parse_export_truncated_without_tokens_returns_none():
+    raw = '{"info":{"id":"x"},"messages":[]'
+    assert parse_export(raw, recover=True) is None
+
+
+def test_parse_export_invalid_shapes_none():
+    assert parse_export("") is None
+    assert parse_export("[]") is None                        # 非 dict
+    assert parse_export('{"no_messages": 1}') is None        # 缺 messages
+    assert parse_export("not json at all", recover=True) is None  # 无 tokens 可恢复
+
+
+def test_parse_export_trace_only_recovered():
+    """无 usage 可恢复但有工具调用：usage=None + trace 恢复。"""
+    raw = 'xx"messages": ["type": "tool", "tool": "t1"'
+
+    out = parse_export(raw, recover=True)
+    assert out is not None and out.usage is None and out.recovered is True
+
+
+# ---------- extract_trace 新契约：仅工具序列（answer 归 live 流） ----------
+
+def test_extract_trace_returns_tools_only():
+    tools = extract_trace(EXPORT)
+    assert [t.tool for t in tools] == [
+        "huaweicloud-open-mcp_list_products", "huaweicloud-open-mcp_execute_api"]

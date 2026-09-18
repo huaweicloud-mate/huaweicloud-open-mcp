@@ -1,10 +1,25 @@
-"""从 opencode 输出/导出中提取会话 trace（S6 纯函数）。"""
+"""从 opencode 输出/导出中提取会话 trace（S6 纯函数）。
+
+导出接缝（CONTEXT.md B）：``parse_export`` 返回单一类型化产物 ``ExportResult``
+（usage + trace 工具调用），完整解析与截断恢复（regex）都藏在本模块内——
+runner 不再看见 ``__raw_usage__``/``__raw_tools__`` 哨兵键。answer 的唯一
+真值源是 live ``opencode run --format json`` NDJSON 流（``parse_run_output``），
+export 只供给 usage + trace。
+"""
 
 import json
 import re
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from .scorer import ToolCall
+
+
+class ExportResult(NamedTuple):
+    """导出产物（完整解析或截断恢复同形）；recovered 标记数据来自 regex 恢复。"""
+
+    usage: dict[str, int | float] | None
+    trace: list[ToolCall]
+    recovered: bool = False
 
 
 def extract_usage(export: dict[str, Any] | str) -> dict[str, int | float] | None:
@@ -151,14 +166,13 @@ def extract_trace_from_raw(raw: str) -> list[ToolCall]:
     return tools
 
 
-def extract_trace(export: dict[str, Any]) -> tuple[list[ToolCall], str]:
-    """opencode export JSON → (工具调用序列, assistant 文本回答)。
+def extract_trace(export: dict[str, Any]) -> list[ToolCall]:
+    """opencode export JSON → 工具调用序列（仅 assistant 消息的 tool parts）。
 
-    工具调用仅取 assistant 消息的 tool parts；回答文本拼接 assistant 的 text parts
-    （用户消息的文本不参与 answer 断言，避免与 prompt 撞词误判）。
+    answer 不由 export 供给（CONTEXT.md B：唯一真值源是 live NDJSON 流的
+    ``parse_run_output``，避免与 prompt 撞词误判的口径由此单点保证）。
     """
     tools: list[ToolCall] = []
-    texts: list[str] = []
     for m in export.get("messages") or []:
         if (m.get("info") or {}).get("role") != "assistant":
             continue
@@ -173,9 +187,30 @@ def extract_trace(export: dict[str, Any]) -> tuple[list[ToolCall], str]:
                     output=_parse_output(st.get("output")),
                     status=st.get("status") or "",
                 ))
-            elif p.get("type") == "text":
-                texts.append(p.get("text") or "")
-    return tools, "\n".join(texts)
+    return tools
+
+
+def parse_export(raw_text: str, *, recover: bool = True) -> ExportResult | None:
+    """opencode export 原始文本 → 单一类型化产物；不可用返回 None。
+
+    完整 JSON → usage（info.tokens）+ trace（messages 工具调用）；
+    截断/非法 → recover=True 时 regex 恢复（recovered=True，usage 与 trace
+    独立尽力，两者皆空返回 None），recover=False 严格返回 None——重试循环
+    用此门仅在末次尝试启用恢复，保住「先争取完整导出」的语义。
+    """
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        if not recover:
+            return None
+        usage = _extract_usage_from_raw(raw_text)
+        trace = extract_trace_from_raw(raw_text)
+        if usage is None and not trace:
+            return None
+        return ExportResult(usage=usage, trace=trace, recovered=True)
+    if not isinstance(data, dict) or data.get("messages") is None:
+        return None
+    return ExportResult(usage=extract_usage(data), trace=extract_trace(data))
 
 
 def parse_run_output(ndjson: str) -> dict[str, Any]:
