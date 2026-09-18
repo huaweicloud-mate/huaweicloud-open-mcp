@@ -4,6 +4,8 @@ import shutil
 
 import pytest
 
+from common import paths
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
@@ -81,6 +83,20 @@ def swagger_schema():
         pytest.skip(f"Swagger 2.0 schema 缺失: {schema_path}")
     with open(schema_path, encoding="utf-8") as f:
         return json.load(f)
+
+
+@pytest.fixture
+def sealed_configs(tmp_path, monkeypatch):
+    """密封仓库 configs/ 与宿主 cwd 的测试环境（此前在 3 个测试文件复制粘贴）。
+
+    project_root 指向空 tmp 仓库（无 configs/）：缺省档配置装配不受宿主
+    文件系统泄入影响。需要真实配置文件的用例在返回的仓库根下自行建
+    configs/，或用例内再覆写 project_root 指向自己的场景目录。
+    """
+    repo = tmp_path / "repo"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(paths, "project_root", lambda: repo)
+    return repo
 
 
 def pytest_collection_modifyitems(config, items):

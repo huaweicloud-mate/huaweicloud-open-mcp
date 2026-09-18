@@ -16,13 +16,8 @@ EXPECTED_TOOLS = {
     "get_api_examples", "execute_api", "manage_policy",
 }
 
-
-@pytest.fixture(autouse=True)
-def _seal_from_repo_configs(tmp_path, monkeypatch):
-    """隔离真实仓库 configs/ 与宿主 cwd：缺省 hints 装配不受文件系统泄入影响
-    （需要 configs 文件的用例自行建 tmp configs 并覆写 project_root）。"""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+# 文件级密封（conftest 共享 fixture）：缺省 hints 装配不受宿主文件系统泄入影响
+pytestmark = pytest.mark.usefixtures("sealed_configs")
 
 
 def _tool_names(app):

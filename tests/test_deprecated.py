@@ -10,7 +10,6 @@ import pytest
 
 from apie.memory_store import MemoryStore
 from apie.metadata import list_apis
-from common import paths as common_paths
 from mcp_openapi.deprecated import (
     DeprecatedEntry,
     DeprecatedIndex,
@@ -20,13 +19,8 @@ from mcp_openapi.deprecated import (
 from mcp_openapi.server import build_openapi_config
 from mcp_openapi.service import ServiceConfig, ToolService
 
-
-@pytest.fixture(autouse=True)
-def _seal_from_repo_configs(tmp_path, monkeypatch):
-    """隔离真实仓库 configs/：缺省 hints 装配不依赖宿主文件系统（本文件只测
-    deprecated 语义，hints 缺省档静默 empty 即可）。"""
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(common_paths, "project_root", lambda: tmp_path / "repo")
+# 文件级密封（conftest 共享 fixture）：缺省 hints 装配不依赖宿主文件系统
+pytestmark = pytest.mark.usefixtures("sealed_configs")
 
 RAW = {
     "products": {
