@@ -14,7 +14,7 @@ from mcp.client._memory import InMemoryTransport
 
 from apie.memory_store import MemoryStore
 from huaweicloud_open_mcp.cli import parse_modes
-from huaweicloud_open_mcp.composite import build_composite_app, merge_instructions
+from huaweicloud_open_mcp.deployment import build_app, merge_instructions
 from mcp_openapi.service import ServiceConfig, ToolService
 from safety.policy_store import PolicyStore
 from tests.test_elicit_mcp import _OPENAPI_DOC, _StubMockClient, result_dict
@@ -68,7 +68,7 @@ def list_tool_names(app):
 # ---------- 工具集与去重 ----------
 
 def test_openapi_data_toolset_with_dedup():
-    app = build_composite_app(["openapi", "data"], make_args(),
+    app = build_app(["openapi", "data"], make_args(),
                               openapi_service=make_openapi_service())
     names = list_tool_names(app)
     assert set(names) == _OPENAPI_TOOLS | {"query_data", "transform_data"}
@@ -77,7 +77,7 @@ def test_openapi_data_toolset_with_dedup():
 
 
 def test_discover_data_toolset_with_dedup():
-    app = build_composite_app(["discover", "data"], make_args())
+    app = build_app(["discover", "data"], make_args())
     names = list_tool_names(app)
     assert set(names) == _DISCOVER_TOOLS | {"query_data", "transform_data"}
     assert len(names) == 10
@@ -85,7 +85,7 @@ def test_discover_data_toolset_with_dedup():
 
 
 def test_all_three_modes_toolset():
-    app = build_composite_app(["openapi", "discover", "data"], make_args())
+    app = build_app(["openapi", "discover", "data"], make_args())
     names = list_tool_names(app)
     assert set(names) == _OPENAPI_TOOLS | _DISCOVER_TOOLS | {"query_data", "transform_data"}
     assert len(names) == 17
@@ -103,19 +103,20 @@ def test_merge_instructions_sections():
 
 
 def test_composite_app_instructions_reach_client():
-    app = build_composite_app(["discover", "data"], make_args())
+    app = build_app(["discover", "data"], make_args())
     instructions = app.instructions or ""
     assert "## 模式：discover（MCP server 发现连接）" in instructions
     assert "## 模式：data（数据分析）" in instructions
 
 
+# （deployment.build_app 取代 composite.build_composite_app；共享 policy 行为语义不变）
 # ---------- 共享 policy 行为（openapi,data 同 server 闭环） ----------
 
 def test_openapi_data_policy_roundtrip_and_data_isolation(tmp_path, monkeypatch):
     monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
     policy_file = tmp_path / "policy.json"
     policy_file.write_text('["*=deny"]', encoding="utf-8")
-    app = build_composite_app(["openapi", "data"], make_args(),
+    app = build_app(["openapi", "data"], make_args(),
                               openapi_service=make_openapi_service(policy_file))
 
     async def _run():

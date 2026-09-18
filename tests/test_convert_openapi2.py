@@ -3,8 +3,6 @@
 import json
 import os
 
-import pytest
-
 from apie import convert_openapi2 as conv
 
 # ---------- fix_schema_type ----------
@@ -439,19 +437,6 @@ def test_convert_api_demote_exempt_exact():
     hdrs = {p["name"]: p.get("required")
             for p in op["parameters"] if p["in"] == "header"}
     assert hdrs["x-auth-token"] is True
-
-
-def test_parse_auth_demote_policy():
-    p = conv.parse_auth_demote_policy(None, None)
-    assert p.enabled is True and p.exempt == frozenset()
-    assert conv.parse_auth_demote_policy("off", None).enabled is False
-    assert conv.parse_auth_demote_policy("ON", None).enabled is True
-    p = conv.parse_auth_demote_policy(None, "RDS:ListVolumeInfo, DDS:* ,Dds")
-    assert p.exempt == frozenset({("rds", "listvolumeinfo"), ("dds", "*")})
-    with pytest.raises(ValueError):
-        conv.parse_auth_demote_policy("banana", None)
-    with pytest.raises(ValueError):
-        conv.parse_auth_demote_policy(None, ":ListVolumeInfo")
 
 
 # ---------- 参数 $ref 解析（finalize 内缝：去重前的 ref 展开） ----------

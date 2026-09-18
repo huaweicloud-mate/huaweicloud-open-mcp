@@ -2,17 +2,29 @@
 
 import argparse
 import functools
-import os
 from typing import Any, cast
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
 
 from apie import mock as apie_mock
-from apie.convert_openapi2 import parse_auth_demote_policy
+from apie.convert_openapi2 import AuthDemotePolicy
 from apie.metadata_corrections import load_metadata_corrections
-from common.audit import sink_from_path
+from common.audit import AuditSink, sink_from_path
 from common.auth import credentials as cred_mod
+from common.deployment import (
+    ENV_AUTH_DEMOTE,
+    ENV_AUTH_DEMOTE_PASS,
+    ENV_DEPRECATED_INDEX,
+    ENV_DEPRECATED_MODE,
+    ENV_ENTITY_INDEX,
+    ENV_METADATA_CORRECTIONS,
+    ENV_OPENAPI_HINTS,
+    ENV_REGION,
+    ENV_SPILL_DIR,
+    Deployment,
+    resolve_deployment,
+)
 from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
 from common.types import (
     ApiDetailResult,
@@ -127,23 +139,65 @@ def build_instructions(hints: Hints | None = None) -> str:
     return text
 
 
-def build_openapi_config(args: argparse.Namespace, *,
-                         data_enabled: bool = False) -> ServiceConfig:
-    mock = (args.mock if args.mock is not None
-            else os.environ.get("HUAWEICLOUD_MCP_MOCK", "") in ("1", "true", "yes"))
-    policy_file = args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")
-    region = args.region or os.environ.get("HUAWEICLOUD_MCP_REGION") or None
-    mock_base = args.mock_base or os.environ.get("HUAWEICLOUD_MCP_MOCK_BASE") or None
-    mock_passthrough = (args.mock_passthrough if getattr(args, "mock_passthrough", None) is not None
-                        else os.environ.get("HUAWEICLOUD_MCP_MOCK_PASSTHROUGH", "")
-                        in ("1", "true", "yes"))
-    hints_file = getattr(args, "hints", None) or os.environ.get("HUAWEICLOUD_MCP_OPENAPI_HINTS")
-    audit_file = (getattr(args, "audit_file", None)
-                  or os.environ.get("HUAWEICLOUD_MCP_AUDIT_FILE"))
+def parse_auth_demote_policy(demote: str | None = None,
+                             pass_list: str | None = None) -> AuthDemotePolicy:
+    """装配解析：--auth-demote / --auth-demote-pass（或对应 env）→ 策略。
+
+    demote：None/空串→默认开启；"on"→开启；"off"→禁用；其余 fail-fast。
+    pass_list：逗号分隔条目，"PRODUCT:API"（精确）/ "PRODUCT" 或 "PRODUCT:*"
+    （产品级）；条目缺产品名 fail-fast；大小写 casefold 归一。配置错误要响，
+    仿 hints 严格校验先例。
+    （2026-09 起自 apie.convert_openapi2 迁入：CLI 方言解析属装配侧，
+    AuthDemotePolicy 值类型留 apie——转换期概念，消费方 apie.catalog/
+    live_fallback 依赖。）
+    """
+    enabled = True
+    if demote is not None:
+        value = demote.strip().lower()
+        if value == "off":
+            enabled = False
+        elif value not in ("", "on"):
+            raise ValueError(
+                f"无效的 --auth-demote 值: {demote!r}（可选 on/off）")
+    exempt: set[tuple[str, str]] = set()
+    if pass_list:
+        for raw in pass_list.split(","):
+            entry = raw.strip()
+            if not entry:
+                continue
+            product, sep, api = entry.partition(":")
+            p = product.strip().casefold()
+            if not p:
+                raise ValueError(
+                    f"--auth-demote-pass 条目缺少产品名: {entry!r}")
+            a = api.strip().casefold()
+            if not sep or a in ("", "*"):
+                a = "*"
+            exempt.add((p, a))
+    return AuthDemotePolicy(enabled=enabled, exempt=frozenset(exempt))
+
+
+def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None, *,
+                         data_enabled: bool = False,
+                         policy_store: PolicyStore | None = None,
+                         audit_sink: AuditSink | None = None) -> ServiceConfig:
+    """openapi 模式 ServiceConfig 构建（internal seam；external seam 是
+    huaweicloud_open_mcp.deployment.build_app）。
+
+    dep 缺省时按 args+os.environ 自解析（测试直调原口）；共享旋钮
+    （mock/policy/audit）由 Deployment 归一供给，store/sink 可由装配方
+    构造注入（混装共享单例，消灭事后覆写）。
+    """
+    dep = dep or resolve_deployment(args)
+    env = dep.env
+    region = (getattr(args, "region", None)
+              or env.get(ENV_REGION) or None)
+    hints_file = (getattr(args, "hints", None)
+                  or env.get(ENV_OPENAPI_HINTS))
     deprecated_file = (getattr(args, "deprecated_index", None)
-                       or os.environ.get("HUAWEICLOUD_MCP_DEPRECATED_INDEX"))
+                       or env.get(ENV_DEPRECATED_INDEX))
     deprecated_mode = (getattr(args, "deprecated_mode", None)
-                       or os.environ.get("HUAWEICLOUD_MCP_DEPRECATED_MODE"))
+                       or env.get(ENV_DEPRECATED_MODE))
     if deprecated_mode and not deprecated_file:
         raise ValueError("--deprecated-mode 需要同时配置 --deprecated-index")
     if deprecated_mode not in (None, "annotate", "hide", "off"):
@@ -151,32 +205,33 @@ def build_openapi_config(args: argparse.Namespace, *,
                          "（可选 annotate/hide/off）")
     deprecated_index = load_deprecated_index(deprecated_file or None)
     entity_index_file = (getattr(args, "entity_index", None)
-                         or os.environ.get("HUAWEICLOUD_MCP_ENTITY_INDEX"))
-    policy_store = PolicyStore(policy_file) if policy_file else None
+                         or env.get(ENV_ENTITY_INDEX))
+    if policy_store is None:
+        policy_store = PolicyStore(dep.policy_file) if dep.policy_file else None
     spill_raw = getattr(args, "spill_dir", None)
     if spill_raw is None:
-        spill_raw = os.environ.get("HUAWEICLOUD_MCP_SPILL_DIR")
+        spill_raw = env.get(ENV_SPILL_DIR)
     demote_raw = (getattr(args, "auth_demote", None)
-                  or os.environ.get("HUAWEICLOUD_MCP_AUTH_DEMOTE"))
+                  or env.get(ENV_AUTH_DEMOTE))
     demote_pass_raw = (getattr(args, "auth_demote_pass", None)
-                       or os.environ.get("HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS"))
+                       or env.get(ENV_AUTH_DEMOTE_PASS))
     corrections_raw = (getattr(args, "metadata_corrections", None)
-                       or os.environ.get("HUAWEICLOUD_MCP_METADATA_CORRECTIONS"))
+                       or env.get(ENV_METADATA_CORRECTIONS))
     return ServiceConfig(
         region=region or "cn-north-4",
-        mock=mock,
+        mock=dep.mock,
         policy_store=policy_store,
         policy_rules=policy_store.rules() if policy_store else None,
-        credentials=None if mock else cred_mod.get_credentials(),
-        mock_base=mock_base or apie_mock.MOCK_BASE,
-        mock_passthrough=mock_passthrough,
+        credentials=None if dep.mock else cred_mod.get_credentials(),
+        mock_base=dep.mock_base or apie_mock.MOCK_BASE,
+        mock_passthrough=dep.mock_passthrough,
         hints=load_hints_file(hints_file),
         deprecated_index=deprecated_index,
         deprecated_mode=deprecated_mode or ("annotate" if deprecated_file else "off"),
         entity_graph=load_entity_index(entity_index_file),
         auth_demote=parse_auth_demote_policy(demote_raw, demote_pass_raw),
         corrections=load_metadata_corrections(corrections_raw),
-        audit_sink=sink_from_path(audit_file),
+        audit_sink=audit_sink if audit_sink is not None else sink_from_path(dep.audit_file),
         spill=parse_spill_config(spill_raw, data_enabled=data_enabled),
     )
 

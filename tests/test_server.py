@@ -247,3 +247,19 @@ def test_build_config_spill_data_enabled(tmp_path):
                        data_enabled=True)
     assert cfg.spill is not None
     assert cfg.spill.data_enabled is True
+
+
+# ---------- parse_auth_demote_policy（2026-09 起自 apie.convert_openapi2 迁入装配侧） ----------
+
+def test_parse_auth_demote_policy():
+    from mcp_openapi.server import parse_auth_demote_policy
+    p = parse_auth_demote_policy(None, None)
+    assert p.enabled is True and p.exempt == frozenset()
+    assert parse_auth_demote_policy("off", None).enabled is False
+    assert parse_auth_demote_policy("ON", None).enabled is True
+    p = parse_auth_demote_policy(None, "RDS:ListVolumeInfo, DDS:* ,Dds")
+    assert p.exempt == frozenset({("rds", "listvolumeinfo"), ("dds", "*")})
+    with pytest.raises(ValueError):
+        parse_auth_demote_policy("banana", None)
+    with pytest.raises(ValueError):
+        parse_auth_demote_policy(None, ":ListVolumeInfo")

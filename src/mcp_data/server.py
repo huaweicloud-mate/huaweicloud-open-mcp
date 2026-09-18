@@ -6,11 +6,11 @@
 """
 
 import argparse
-import os
 
 from mcp.server.mcpserver import MCPServer
 
-from common.audit import sink_from_path
+from common.audit import AuditSink, sink_from_path
+from common.deployment import Deployment, resolve_deployment
 from common.types import QueryDataResult, ToolError, TransformDataResult
 
 from .service import DataConfig, DataService
@@ -47,11 +47,15 @@ INSTRUCTIONS_DATA = """# 华为云 Open MCP 使用指引（Data 数据分析模�
 """
 
 
-def build_data_config(args: argparse.Namespace) -> DataConfig:
-    """从 CLI/env 构建 DataConfig（data 模式无 policy/凭证/mock 语义）。"""
-    audit_file = (getattr(args, "audit_file", None)
-                  or os.environ.get("HUAWEICLOUD_MCP_AUDIT_FILE"))
-    return DataConfig(audit_sink=sink_from_path(audit_file))
+def build_data_config(args: argparse.Namespace, dep: Deployment | None = None, *,
+                      audit_sink: AuditSink | None = None) -> DataConfig:
+    """data 模式 DataConfig 构建（internal seam；共享旋钮经 Deployment，
+    data 模式无 policy/凭证/mock 语义）。audit_sink 可由装配方注入
+    （混装共享单例）。"""
+    dep = dep or resolve_deployment(args)
+    if audit_sink is None:
+        audit_sink = sink_from_path(dep.audit_file)
+    return DataConfig(audit_sink=audit_sink)
 
 
 def register_data_tools(server: MCPServer, ds: DataService) -> None:

@@ -550,41 +550,6 @@ def demote_auth_headers(doc: dict[str, Any], product: str, api: str,
     return doc
 
 
-def parse_auth_demote_policy(demote: str | None = None,
-                             pass_list: str | None = None) -> AuthDemotePolicy:
-    """装配解析：--auth-demote / --auth-demote-pass（或对应 env）→ 策略。
-
-    demote：None/空串→默认开启；"on"→开启；"off"→禁用；其余 fail-fast。
-    pass_list：逗号分隔条目，"PRODUCT:API"（精确）/ "PRODUCT" 或 "PRODUCT:*"
-    （产品级）；条目缺产品名 fail-fast；大小写 casefold 归一。配置错误要响，
-    仿 hints 严格校验先例。
-    """
-    enabled = True
-    if demote is not None:
-        value = demote.strip().lower()
-        if value == "off":
-            enabled = False
-        elif value not in ("", "on"):
-            raise ValueError(
-                f"无效的 --auth-demote 值: {demote!r}（可选 on/off）")
-    exempt: set[tuple[str, str]] = set()
-    if pass_list:
-        for raw in pass_list.split(","):
-            entry = raw.strip()
-            if not entry:
-                continue
-            product, sep, api = entry.partition(":")
-            p = product.strip().casefold()
-            if not p:
-                raise ValueError(
-                    f"--auth-demote-pass 条目缺少产品名: {entry!r}")
-            a = api.strip().casefold()
-            if not sep or a in ("", "*"):
-                a = "*"
-            exempt.add((p, a))
-    return AuthDemotePolicy(enabled=enabled, exempt=frozenset(exempt))
-
-
 def convert_api(api: dict[str, Any], *,
                 auth_demote: AuthDemotePolicy | None = None) -> dict[str, Any]:
     has3 = bool(api.get("components")) or any(

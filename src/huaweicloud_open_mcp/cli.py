@@ -5,6 +5,7 @@ import logging
 import os
 from typing import Literal
 
+from common.deployment import ENV_ELICIT, ENV_LOG_LEVEL, ENV_MODE
 from common.elicit import parse_elicit_mode
 from common.logconf import configure_logging
 
@@ -105,55 +106,19 @@ def main() -> None:
     parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")
     args = parser.parse_args()
 
-    modes = parse_modes(args.mode, os.environ.get("HUAWEICLOUD_MCP_MODE"))
+    modes = parse_modes(args.mode, os.environ.get(ENV_MODE))
 
-    level_name = (args.log_level or os.environ.get("HUAWEICLOUD_MCP_LOG_LEVEL") or "INFO").upper()
+    level_name = (args.log_level or os.environ.get(ENV_LOG_LEVEL) or "INFO").upper()
     if level_name not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         level_name = "INFO"
     configure_logging(program="huaweicloud-open-mcp", level=level_name,
                       log_file=args.log_file)
 
-    elicit_mode = parse_elicit_mode(args.elicitation
-                                    or os.environ.get("HUAWEICLOUD_MCP_ELICIT"))
+    elicit_mode = parse_elicit_mode(args.elicitation or os.environ.get(ENV_ELICIT))
 
-    if modes == ["discover"]:
-        from mcp_discover.server import build_discover_app, build_discover_config  # noqa: E402
-        discover_config = build_discover_config(args)
-        logger.info("server start: mode=discover mock=%s policy=%s catalog=%s elicit=%s",
-                     discover_config.mock,
-                     "configured" if discover_config.policy_rules else "MISSING",
-                     discover_config.catalog_path, elicit_mode)
-        if discover_config.policy_rules is None:
-            logger.warning("未配置 safety policy，discover 连接与调用将全部拒绝（--policy 指定策略文件）")
-        app = build_discover_app(discover_config, log_level=level_name,
-                                 elicit_mode=elicit_mode)
-    elif modes == ["data"]:
-        from mcp_data.server import build_data_app, build_data_config  # noqa: E402
-        data_config = build_data_config(args)
-        logger.info("server start: mode=data audit=%s",
-                    "configured" if data_config.audit_sink else "none")
-        app = build_data_app(data_config, log_level=level_name)
-    elif modes == ["openapi"]:
-        from mcp_openapi.server import build_openapi_app, build_openapi_config  # noqa: E402
-        from mcp_openapi.service import ToolService  # noqa: E402
-        openapi_config = build_openapi_config(args)
-        logger.info("server start: mode=openapi region=%s mock=%s policy=%s credentials=%s elicit=%s spill=%s",
-                     openapi_config.region, openapi_config.mock,
-                     "configured" if openapi_config.policy_rules else "MISSING",
-                     "configured" if openapi_config.credentials else "none", elicit_mode,
-                     "off" if openapi_config.spill is None else str(openapi_config.spill.dir))
-        if openapi_config.policy_rules is None:
-            logger.warning("未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）")
-        app = build_openapi_app(ToolService(openapi_config), log_level=level_name,
-                                elicit_mode=elicit_mode)
-    else:
-        from huaweicloud_open_mcp.composite import build_composite_app  # noqa: E402
-        logger.info("server start: mode=%s policy=%s elicit=%s",
-                     "+".join(modes),
-                     "configured" if (args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")) else "MISSING",
-                     elicit_mode)
-        app = build_composite_app(modes, args, log_level=level_name,
-                                  elicit_mode=elicit_mode)
+    # 单模式与混装同一路径：装配知识收拢于 deployment.build_app（external seam）
+    from huaweicloud_open_mcp.deployment import build_app
+    app = build_app(modes, args, log_level=level_name, elicit_mode=elicit_mode)
 
     app.run("stdio")
 

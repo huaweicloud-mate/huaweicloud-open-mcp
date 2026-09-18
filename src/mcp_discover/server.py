@@ -3,12 +3,18 @@
 import argparse
 import functools
 import logging
-import os
 from typing import Any, cast
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
 
+from common.deployment import (
+    ENV_MAX_SESSIONS,
+    ENV_SERVER_CATALOG,
+    ENV_SESSION_IDLE_TIMEOUT,
+    Deployment,
+    resolve_deployment,
+)
 from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
 from common.types import (
     McpCallResult,
@@ -79,21 +85,22 @@ INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现
 """
 
 
-def build_discover_config(args: argparse.Namespace) -> DiscoverConfig:
-    mock = (args.mock if args.mock is not None
-            else os.environ.get("HUAWEICLOUD_MCP_MOCK", "") in ("1", "true", "yes"))
-    policy_file = args.policy or os.environ.get("HUAWEICLOUD_MCP_POLICY_FILE")
-    catalog_path = os.environ.get("HUAWEICLOUD_MCP_SERVER_CATALOG") or DiscoverConfig.catalog_path
-    mock_base = args.mock_base or os.environ.get("HUAWEICLOUD_MCP_MOCK_BASE") or None
-    idle_timeout = int(os.environ.get("HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT",
-                                      str(DiscoverConfig.session_idle_timeout)))
-    max_sessions = int(os.environ.get("HUAWEICLOUD_MCP_MAX_SESSIONS",
-                                      str(DiscoverConfig.max_sessions)))
-    policy_store = PolicyStore(policy_file) if policy_file else None
+def build_discover_config(args: argparse.Namespace, dep: Deployment | None = None, *,
+                          policy_store: PolicyStore | None = None) -> DiscoverConfig:
+    """discover 模式 DiscoverConfig 构建（internal seam；共享旋钮经 Deployment）。"""
+    dep = dep or resolve_deployment(args)
+    env = dep.env
+    catalog_path = env.get(ENV_SERVER_CATALOG) or DiscoverConfig.catalog_path
+    idle_timeout = int(env.get(ENV_SESSION_IDLE_TIMEOUT,
+                               str(DiscoverConfig.session_idle_timeout)))
+    max_sessions = int(env.get(ENV_MAX_SESSIONS,
+                               str(DiscoverConfig.max_sessions)))
+    if policy_store is None:
+        policy_store = PolicyStore(dep.policy_file) if dep.policy_file else None
     return DiscoverConfig(
         catalog_path=catalog_path,
-        mock=mock,
-        mock_base=mock_base,
+        mock=dep.mock,
+        mock_base=dep.mock_base,
         policy_store=policy_store,
         policy_rules=policy_store.rules() if policy_store else None,
         session_idle_timeout=idle_timeout,
