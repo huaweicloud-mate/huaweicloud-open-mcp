@@ -5,6 +5,7 @@ import os
 
 import pytest
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from common.auth import Credentials
 from mcp_openapi.service import ServiceConfig, ToolService
@@ -66,8 +67,8 @@ def _prep_store(products=True, apis=True, detail=True):
     if detail:
         store.set_api_cache(
             ("ecs", "ListServersDetails", "cn-north-4"),
-            (FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
-             FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
+            ApiLocation(FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
+                        FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
         )
     return store
 
@@ -318,8 +319,8 @@ def _prep_obs_store():
     store.set_apis("OBS", [])
     store.set_api_cache(
         ("obs", "GetObject", "cn-north-4"),
-        (OBS_DOC, "/{object_key}", "get",
-         OBS_DOC["paths"]["/{object_key}"]["get"]),
+        ApiLocation(OBS_DOC, "/{object_key}", "get",
+                    OBS_DOC["paths"]["/{object_key}"]["get"]),
     )
     return store
 
@@ -565,10 +566,11 @@ def _prep_obs_store():
                             "tags": "桶操作", "product_short": "OBS",
                             "info_version": "v1"}])
     store.set_api_cache(("obs", "GetObject", "cn-north-4"),
-                        (OBS_DOC, "/{object_key}", "get",
-                         OBS_DOC["paths"]["/{object_key}"]["get"]))
+                        ApiLocation(OBS_DOC, "/{object_key}", "get",
+                                    OBS_DOC["paths"]["/{object_key}"]["get"]))
     store.set_api_cache(("obs", "ListObjects", "cn-north-4"),
-                        (OBS_DOC, "/", "get", OBS_DOC["paths"]["/"]["get"]))
+                        ApiLocation(OBS_DOC, "/", "get",
+                                    OBS_DOC["paths"]["/"]["get"]))
     return store
 
 
@@ -734,7 +736,8 @@ def _object_data_store(api: str, method: str) -> MemoryStore:
                "responses": {"200": {"description": "OK"}}}}}}
     store.set_api_cache(
         ("obs", api, "cn-north-4"),
-        (doc, "/{object_key}", method, doc["paths"]["/{object_key}"][method]))
+        ApiLocation(doc, "/{object_key}", method,
+                    doc["paths"]["/{object_key}"][method]))
     return store
 
 
@@ -801,7 +804,8 @@ def test_execute_mock_schema_reject_missing_required():
         }}},
     }
     store.set_api_cache(("ecs", "ListByStatus", "cn-north-4"),
-                        (doc, "/v1/{project_id}/servers", "get", doc["paths"]["/v1/{project_id}/servers"]["get"]))
+                        ApiLocation(doc, "/v1/{project_id}/servers", "get",
+                                    doc["paths"]["/v1/{project_id}/servers"]["get"]))
     mock_client = StubMockClient()
     service = ToolService(store=store, config=ServiceConfig(
         mock=True, policy_rules=_policy("ECS:*=allow"),
@@ -969,8 +973,8 @@ def test_get_api_oversized_definitions_guarded(tmp_path):
         "schema"] = {"$ref": "#/definitions/huge"}
     store = MemoryStore()   # 注意 set_api_cache 首写优先，须一次写入大文档
     store.set_api_cache(("ecs", "ListServersDetails", "cn-north-4"),
-                        (doc, "/v1/{project_id}/cloudservers/detail", "get",
-                         doc["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]))
+                        ApiLocation(doc, "/v1/{project_id}/cloudservers/detail", "get",
+                                    doc["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]))
     service = ToolService(store=store, config=ServiceConfig(
         spill=SpillConfig(dir=tmp_path, budget=1000)))
     out = service.get_api("ECS", "ListServersDetails")

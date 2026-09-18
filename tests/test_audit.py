@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from common.audit import NdjsonAuditSink, NullAuditSink, build_audit_event, sink_from_path
 from mcp_openapi.service import ServiceConfig, ToolService
@@ -36,8 +37,8 @@ def _prep_store(products=True, apis=True, detail=True):
     if detail:
         store.set_api_cache(
             ("ecs", "ListServersDetails", "cn-north-4"),
-            (FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
-             FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
+            ApiLocation(FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
+                        FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
         )
     return store
 

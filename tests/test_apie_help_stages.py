@@ -3,6 +3,7 @@
 import argparse
 import json
 
+from apie.api_location import ApiLocation
 from apie.help_docs import build_hints
 from apie.memory_store import MemoryStore
 from apie.refresh import (
@@ -106,7 +107,8 @@ def test_generated_hints_file_end_to_end(tmp_path):
     op = DOC_NRB["paths"]["/v2.1/{project_id}/servers/{server_id}/action"]["post"]
     store.set_api_cache(
         ("ecs", "NovaRebootServer", "cn-north-4"),
-        (DOC_NRB, "/v2.1/{project_id}/servers/{server_id}/action", "post", op))
+        ApiLocation(DOC_NRB, "/v2.1/{project_id}/servers/{server_id}/action",
+                    "post", op))
     svc = ToolService(store=store, config=cfg)
 
     app = build_openapi_app(svc)

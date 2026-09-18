@@ -14,8 +14,9 @@ from typing import Any, Callable, Sequence, TypeVar, cast
 
 from apie import catalog, metadata
 from apie import mock as apie_mock
+from apie.api_location import ApiLocation
 from apie.convert_openapi2 import AuthDemotePolicy
-from apie.memory_store import ApiHit, MemoryStore
+from apie.memory_store import MemoryStore
 from apie.metadata_corrections import MetadataCorrections
 from common.audit import AuditSink
 from common.audit import audited as _audited
@@ -122,7 +123,7 @@ class ToolService:
         return self._mock_client
 
     def load_api_doc(self, product: str, api_name: str, region: str | None = None
-                     ) -> ApiHit | None:
+                     ) -> ApiLocation | None:
         """查找接口 OpenAPI 文档（内存缓存或远端拉取），返回 (doc, path, method, op) 或 None。
 
         返回的 doc 必已纠偏（纠偏在生产时点落位——live_fallback/doc_compose，
@@ -356,8 +357,7 @@ class ToolService:
         if hit is None:
             logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
-        doc, path, method, op = hit
-        out: Any = metadata.format_api_detail(doc, product, path, method, op)
+        out: Any = metadata.format_api_detail(hit, product)
         return cast(ApiDetailResult, self._with_combined_hints(out, product, api))
 
     @_audited
@@ -371,7 +371,7 @@ class ToolService:
             logger.warning("get_api_examples %s:%s region=%s result=not_found",
                            product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
-        _, _, _, op = hit
+        op = hit.op
         return {"ok": True, "product": product, "api": api,
                 "examples": metadata.extract_examples(op)}
 
@@ -406,7 +406,7 @@ class ToolService:
         hit = self.load_api_doc(product, api, region)
         if hit is None:
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
-        doc, path, method, op = hit
+        doc, path, method, op = hit.doc, hit.path, hit.method, hit.op
 
         # 预签发分支：OBS 专用，gateway 只签名不搬运字节；先于 mock/real 分流
         if params.get("_presign"):

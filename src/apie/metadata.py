@@ -20,6 +20,8 @@ from common.types import (
     TagGroup,
 )
 
+from .api_location import ApiLocation
+
 # ---------- 产品 ----------
 
 def list_products(groups: list[dict[str, Any]], *,
@@ -137,9 +139,9 @@ def _resolve_schema(obj: Any, doc: dict[str, Any], depth: int = 0,
     return obj
 
 
-def format_api_detail(doc: dict[str, Any], product: str, path: str,
-                      method: str, op: dict[str, Any]) -> ApiDetailResult:
-    """把单个 operation 格式化为 AI 友好的结构化详情。"""
+def format_api_detail(location: "ApiLocation", product: str) -> ApiDetailResult:
+    """把单个 operation 格式化为 AI 友好的结构化详情（命名值 ApiLocation 入参）。"""
+    doc, op = location.doc, location.op
     definitions = doc.get("definitions") or {}
     collected: set[str] = set()
 
@@ -177,8 +179,8 @@ def format_api_detail(doc: dict[str, Any], product: str, path: str,
         "ok": True,
         "product": product,
         "api": op.get("operationId") or "",
-        "method": method.upper(),
-        "path": path,
+        "method": location.method.upper(),
+        "path": location.path,
         "summary": op.get("summary"),
         "description": op.get("description"),
         "x-constraint": op.get("x-constraint"),

@@ -13,6 +13,7 @@ from mcp import ClientSession
 from mcp.client._memory import InMemoryTransport
 from mcp.types import ElicitResult
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from common.elicit import parse_elicit_mode
 from mcp_discover.config import DiscoverConfig
@@ -81,7 +82,7 @@ def _cache_entries(store):
              "DeleteServers")):
         op = doc["paths"][path][method]
         store.set_api_cache(
-            ("ecs", api, "cn-north-4"), (doc, path, method, op))
+            ("ecs", api, "cn-north-4"), ApiLocation(doc, path, method, op))
 
 
 class _StubMockClient:

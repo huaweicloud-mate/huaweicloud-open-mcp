@@ -10,6 +10,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from apie.mock import MockApiClient, split_passthrough_params
 from mcp_openapi.service import ServiceConfig, ToolService
@@ -187,8 +188,8 @@ def _service(mock_client, *, passthrough):
     store = MemoryStore()
     store.set_api_cache(
         ("ecs", "ListServersDetails", "cn-north-4"),
-        (FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
-         FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
+        ApiLocation(FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
+                    FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
     )
     return ToolService(store=store, config=ServiceConfig(
         mock=True, policy_rules=_policy_allow_ecs(), mock_passthrough=passthrough,
@@ -221,8 +222,8 @@ def test_service_passthrough_end_to_end_via_local_stub():
         store = MemoryStore()
         store.set_api_cache(
             ("ecs", "ListServersDetails", "cn-north-4"),
-            (FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
-             FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
+            ApiLocation(FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
+                        FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
         )
         service = ToolService(store=store, config=ServiceConfig(
             mock=True, mock_base=stub.base_url, mock_passthrough=True,

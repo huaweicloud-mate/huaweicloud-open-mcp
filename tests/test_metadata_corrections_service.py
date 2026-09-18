@@ -9,6 +9,7 @@ doc 级指针纠偏段（FunctionGraph:CreateEvent 畸形 pattern）独立真值
 import argparse
 import json
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from apie.metadata_corrections import (
     MetadataCorrections,
@@ -62,8 +63,9 @@ def _svc(corrections=MetadataCorrections.empty(), hints=None):
                       corrections)
     op = doc["paths"]["/v3/{project_id}/instances/{instance_id}/action/startup"]["post"]
     store.set_api_cache(("rds", "StartupInstance", "cn-north-4"),
-                        (doc, "/v3/{project_id}/instances/{instance_id}/action/startup",
-                         "post", op))
+                        ApiLocation(doc,
+                                    "/v3/{project_id}/instances/{instance_id}/action/startup",
+                                    "post", op))
     config = ServiceConfig(corrections=corrections)
     if hints is not None:
         config.hints = hints
@@ -84,8 +86,9 @@ def test_get_api_correction_is_producer_side():
     store.set_apis("RDS", APIS_RDS)
     op = DOC["paths"]["/v3/{project_id}/instances/{instance_id}/action/startup"]["post"]
     store.set_api_cache(("rds", "StartupInstance", "cn-north-4"),
-                        (DOC, "/v3/{project_id}/instances/{instance_id}/action/startup",
-                         "post", op))
+                        ApiLocation(DOC,
+                                    "/v3/{project_id}/instances/{instance_id}/action/startup",
+                                    "post", op))
     with_cfg = ToolService(store=store,
                            config=ServiceConfig(corrections=CORRECTIONS))
     plain = ToolService(store=store, config=ServiceConfig())
@@ -234,7 +237,8 @@ def _fg_svc(corrections=MetadataCorrections.empty(), **kw):
     op = doc["paths"]["/v2/{project_id}/fgs/functions/{function_urn}/events"]["post"]
     store.set_api_cache(
         ("functiongraph", "CreateEvent", "cn-north-4"),
-        (doc, "/v2/{project_id}/fgs/functions/{function_urn}/events", "post", op))
+        ApiLocation(doc, "/v2/{project_id}/fgs/functions/{function_urn}/events",
+                    "post", op))
     return ToolService(store=store,
                        config=ServiceConfig(corrections=corrections, **kw))
 

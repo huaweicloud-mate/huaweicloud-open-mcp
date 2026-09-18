@@ -1,5 +1,6 @@
 """S10b：service 层提示注入（ServiceConfig.hints 接缝：6 个注入点 + 回归红线）。"""
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from mcp_openapi.hints import Hints, parse_hints
 from mcp_openapi.service import ServiceConfig, ToolService
@@ -79,10 +80,11 @@ def _prep_store(detail=True):
     if detail:
         op = DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]
         store.set_api_cache(("ecs", "ListServersDetails", "cn-north-4"),
-                            (DOC, "/v1/{project_id}/cloudservers/detail", "get", op))
+                            ApiLocation(DOC, "/v1/{project_id}/cloudservers/detail",
+                                        "get", op))
         op_q = DOC_RABBIT["paths"]["/v2/queues"]["get"]
         store.set_api_cache(("rabbitmq", "ListQueues", "cn-north-4"),
-                            (DOC_RABBIT, "/v2/queues", "get", op_q))
+                            ApiLocation(DOC_RABBIT, "/v2/queues", "get", op_q))
     return store
 
 

@@ -7,6 +7,7 @@ mock 端点行为（实测确认）：
 - status_code 为其它值时返回空 body。
 """
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from apie.mock import MockApiClient
 from mcp_openapi.service import ServiceConfig, ToolService
@@ -46,8 +47,8 @@ def _service(rules):
     store = MemoryStore()
     store.set_api_cache(
         ("ecs", "ListServersDetails", "cn-north-4"),
-        (FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
-         FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
+        ApiLocation(FULL_DOC, "/v1/{project_id}/cloudservers/detail", "get",
+                    FULL_DOC["paths"]["/v1/{project_id}/cloudservers/detail"]["get"]),
     )
     return ToolService(store=store,
                        config=ServiceConfig(mock=True, policy_rules=rules))

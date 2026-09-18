@@ -1,6 +1,7 @@
 """元数据工具纯函数单元测试（mini fixture）。"""
 
 from apie import metadata
+from apie.api_location import ApiLocation
 
 
 def test_list_products(mini_products):
@@ -88,14 +89,13 @@ def test_list_apis_case_insensitive_product(mini_docs):
 
 def test_format_api_detail(mini_detail):
     from apie import convert_openapi2 as conv
-    from apie.live_fallback import _find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"]["RabbitMQ::BatchCreateOrDeleteRabbitMqTag"])
-    path, method, op = _find_api_in_doc(doc, "BatchCreateOrDeleteRabbitMqTag")
-    out = metadata.format_api_detail(doc, "RabbitMQ", path, method, op)
+    loc = ApiLocation.find(doc, "BatchCreateOrDeleteRabbitMqTag")
+    out = metadata.format_api_detail(loc, "RabbitMQ")
     assert out["product"] == "RabbitMQ"
     assert out["api"] == "BatchCreateOrDeleteRabbitMqTag"
     assert out["method"] == "POST"
-    assert out["path"] == path
+    assert out["path"] == loc.path
     names = {p["name"] for p in out["parameters"]}
     assert "instance_id" in names
     body = [p for p in out["parameters"] if p["in"] == "body"]
@@ -107,10 +107,8 @@ def test_format_api_detail(mini_detail):
 
 def test_format_api_detail_path_required_flag(mini_detail):
     from apie import convert_openapi2 as conv
-    from apie.live_fallback import _find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"]["ECS::ListServers"])
-    path, method, op = _find_api_in_doc(doc, "ListServers")
-    out = metadata.format_api_detail(doc, "ECS", path, method, op)
+    out = metadata.format_api_detail(ApiLocation.find(doc, "ListServers"), "ECS")
     pid = [p for p in out["parameters"] if p["name"] == "project_id"][0]
     assert pid["required"] is True
 
@@ -141,8 +139,9 @@ def test_format_api_detail_resolves_ref_parameter():
         },
         "definitions": {},
     }
-    out = metadata.format_api_detail(doc, "ECS", "/v1/{project_id}/cloudservers", "get",
-                                     doc["paths"]["/v1/{project_id}/cloudservers"]["get"])
+    out = metadata.format_api_detail(
+        ApiLocation(doc, "/v1/{project_id}/cloudservers", "get",
+                    doc["paths"]["/v1/{project_id}/cloudservers"]["get"]), "ECS")
     params = {p["name"]: p for p in out["parameters"]}
     assert params["project_id"]["in"] == "path"
     assert params["project_id"]["required"] is True
@@ -162,8 +161,8 @@ def test_format_api_detail_drops_unresolved_ref_parameter():
         "parameters": {},
         "definitions": {},
     }
-    out = metadata.format_api_detail(doc, "ECS", "/p", "get",
-                                     doc["paths"]["/p"]["get"])
+    out = metadata.format_api_detail(
+        ApiLocation(doc, "/p", "get", doc["paths"]["/p"]["get"]), "ECS")
     assert out["parameters"] == []
 
 

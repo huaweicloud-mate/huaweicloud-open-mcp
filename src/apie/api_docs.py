@@ -113,9 +113,8 @@ def cmd_api(args: argparse.Namespace) -> int:
     if not hit:
         logger.error("接口 %s 未找到（产品 %s）", args.api, args.product)
         return 2
-    doc, path, method, op = hit
-    details = metadata.format_api_detail(doc, args.product, path, method, op)
-    examples = metadata.extract_examples(op)
+    details = metadata.format_api_detail(hit, args.product)
+    examples = metadata.extract_examples(hit.op)
     out = {**details, "examples": examples, "source": "remote"}
     emit(out, args.fmt)
     return 0

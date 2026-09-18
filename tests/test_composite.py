@@ -12,6 +12,7 @@ import pytest
 from mcp import ClientSession
 from mcp.client._memory import InMemoryTransport
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from huaweicloud_open_mcp.cli import parse_modes
 from huaweicloud_open_mcp.deployment import build_app, merge_instructions
@@ -43,7 +44,7 @@ def make_openapi_service(policy_file=None):
     doc = _OPENAPI_DOC
     path, method, api = "/v1/{project_id}/cloudservers/detail", "get", "ListServersDetails"
     store.set_api_cache(("ecs", api, "cn-north-4"),
-                        (doc, path, method, doc["paths"][path][method]))
+                        ApiLocation(doc, path, method, doc["paths"][path][method]))
     return ToolService(store=store, config=ServiceConfig(
         mock=True,
         policy_store=PolicyStore(str(policy_file)) if policy_file else None,

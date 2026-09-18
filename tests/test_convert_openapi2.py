@@ -4,6 +4,7 @@ import json
 import os
 
 from apie import convert_openapi2 as conv
+from apie.api_location import ApiLocation
 
 # ---------- fix_schema_type ----------
 
@@ -584,7 +585,7 @@ def test_convert_api_gold_functiongraph_invoke_function():
     from apie.metadata import format_api_detail
     path = next(iter(doc["paths"]))
     op = doc["paths"][path]["post"]
-    out = format_api_detail(doc, "FunctionGraph", path, "post", op)
+    out = format_api_detail(ApiLocation(doc, path, "post", op), "FunctionGraph")
     out_names = [p["name"] for p in out["parameters"]]
     assert "function_urn" in out_names and "Content-Type" not in out_names
 

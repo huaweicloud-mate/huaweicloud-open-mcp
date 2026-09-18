@@ -3,7 +3,9 @@
 from collections import OrderedDict
 from typing import Any
 
-ApiHit = tuple[dict[str, Any], str, str, dict[str, Any]]  # (doc, path, method, op)
+from .api_location import ApiLocation
+
+ApiHit = ApiLocation  # 历史别名：API 详情缓存条目 = 一个 ApiLocation
 
 
 class MemoryStore:
@@ -12,14 +14,14 @@ class MemoryStore:
     三层缓存：
       _products      — 产品列表（远端一次拉取，进程存活）
       _apis          — 按产品 API 列表（{product_lower: [api_basic_info]})
-      _api_details   — API 详情 LRU（(product_lower, api_name, region) → ApiHit）
+      _api_details   — API 详情 LRU（(product_lower, api_name, region) → ApiLocation）
     """
 
     def __init__(self, max_details: int = 500):
         self._products: list[dict[str, Any]] | None = None
         self._products_fetched: bool = False
         self._apis: dict[str, list[dict[str, Any]]] = {}
-        self._api_details: OrderedDict[tuple[str, str, str], ApiHit | None] = OrderedDict()
+        self._api_details: OrderedDict[tuple[str, str, str], ApiLocation | None] = OrderedDict()
         self._max_details = max_details
 
     def products(self) -> list[dict[str, Any]] | None:
@@ -39,7 +41,7 @@ class MemoryStore:
     def set_apis(self, product: str, data: list[dict[str, Any]]) -> None:
         self._apis[product.lower()] = data
 
-    def find_api(self, product: str, api_name: str, region: str) -> ApiHit | None:
+    def find_api(self, product: str, api_name: str, region: str) -> ApiLocation | None:
         """O(1) 查找 API 详情缓存（命中时刷新 LRU 位置）。"""
         key = (product.lower(), api_name, region)
         hit = self._api_details.get(key)
@@ -47,7 +49,8 @@ class MemoryStore:
             self._api_details.move_to_end(key)
         return hit
 
-    def set_api_cache(self, key: tuple[str, str, str], hit: ApiHit | None) -> None:
+    def set_api_cache(self, key: tuple[str, str, str],
+                      hit: ApiLocation | None) -> None:
         """写入 API 详情缓存（含 LRU 淘汰）。"""
         if key in self._api_details:
             self._api_details.move_to_end(key)

@@ -8,6 +8,7 @@ import argparse
 
 import pytest
 
+from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from apie.metadata import list_apis
 from mcp_openapi.deprecated import (
@@ -178,7 +179,8 @@ def _svc(mode, index=INDEX):
     store.set_apis("ECS", APIS)
     op = DOC_NRB["paths"]["/v2.1/{p}/servers/{id}/action"]["post"]
     store.set_api_cache(("ecs", "NovaRebootServer", "cn-north-4"),
-                        (DOC_NRB, "/v2.1/{p}/servers/{id}/action", "post", op))
+                        ApiLocation(DOC_NRB, "/v2.1/{p}/servers/{id}/action",
+                                    "post", op))
     return ToolService(store=store,
                        config=ServiceConfig(deprecated_index=index,
                                             deprecated_mode=mode))

@@ -5,6 +5,7 @@ import os
 
 import pytest
 
+from apie.api_location import ApiLocation
 from common.auth import Credentials
 from common.types import ClientResponse
 from mcp_openapi import execute
@@ -22,10 +23,8 @@ class StubClient:
 
 def _get_op(mini_detail, key="ECS::ListServers"):
     from apie import convert_openapi2 as conv
-    from apie.live_fallback import _find_api_in_doc
     doc = conv.convert_api(mini_detail["apis"][key])
-    path, method, op = _find_api_in_doc(doc, key.split("::")[-1])
-    return doc, path, method, op
+    return ApiLocation.find(doc, key.split("::")[-1])
 
 
 def _policy(*lines):
