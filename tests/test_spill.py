@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from mcp_openapi.spill import MAX_RESPONSE_CHARS, SpillConfig, guard_result, spill_body
+from mcp_openapi.spill import MAX_RESPONSE_CHARS, SpillConfig, guard_result, parse_spill_config, spill_body
 
 
 @pytest.fixture
@@ -214,3 +214,9 @@ def test_guard_result_truncated_without_spill_noop(tmp_path):
     """lane 已作出不落盘决策的信封（_spill=false 或落盘失败）恒不收缩——回落纯截断口径。"""
     result = {"ok": True, "status": 200, "body": "y" * 10_000, "truncated": True}
     assert guard_result(result, cfg=_tiny_cfg(tmp_path), stem="t") is result
+
+
+def test_parse_spill_config_off_case_insensitive():
+    """off 哨兵大小写不敏感（is_off 单点；修复此前 "OFF" 被当目录路径）。"""
+    assert parse_spill_config("OFF") is None
+    assert parse_spill_config(" Off ") is None

@@ -39,12 +39,11 @@ correct_api_result 信封级（既有 op 级呈现面，机制不变）。v1 指
 数据，调用方持有的 op 引用在 COW 后保持有效。
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from common.paths import resolve_config_arg
+from common.optconf import load_opt_file
 
 logger = logging.getLogger("apie.metadata_corrections")
 
@@ -388,18 +387,16 @@ def correct_doc(doc: dict[str, Any], product: str, api: str,
 def load_metadata_corrections(path: str | None) -> MetadataCorrections:
     """加载纠偏配置文件：CLI/env 原始值 → MetadataCorrections 的唯一语义入口。
 
-    - None（--metadata-corrections 与 env 均未配置）→ 缺省档：裸名
-      DEFAULT_CORRECTIONS_FILE 经 resolve_config_arg 解析，文件缺失静默
-      MetadataCorrections.empty()（隐式缺省不 fail-fast）；
-    - 空串 / "off"（strip + 大小写不敏感，对齐 spill idiom）→ 显式禁用；
-    - 显式路径/裸名 → 解析加载，缺失 fail-fast（FileNotFoundError 列全候选）。
+    分支纪律委托 common.optconf.load_opt_file（单一实现）：
+    - None → 缺省档 DEFAULT_CORRECTIONS_FILE（config_path 解析，缺失静默
+      MetadataCorrections.empty()，隐式缺省不 fail-fast）；
+    - 空串 / "off"（大小写不敏感）→ 显式禁用；
+    - 显式路径/裸名 → resolve_config_arg 解析加载，缺失 fail-fast。
     JSON 非法恒 fail-fast。命中条目记 INFO 台账（启动一次），调用时静默。
     """
-    corrections = (_load(DEFAULT_CORRECTIONS_FILE, missing_ok=True)
-                   if path is None
-                   else (MetadataCorrections.empty()
-                         if not path.strip() or path.strip().lower() == "off"
-                         else _load(path, missing_ok=False)))
+    corrections = load_opt_file(path, parse=parse_metadata_corrections,
+                                off=MetadataCorrections.empty(),
+                                default_name=DEFAULT_CORRECTIONS_FILE)
     if corrections.entries:
         def _fmt(e: CorrectionEntry) -> str:
             return ",".join(sorted(e.patches)
@@ -410,16 +407,3 @@ def load_metadata_corrections(path: str | None) -> MetadataCorrections:
                     len(corrections.entries),
                     "y" if len(corrections.entries) == 1 else "ies", keys)
     return corrections
-
-
-def _load(path: str, *, missing_ok: bool) -> MetadataCorrections:
-    """内部接缝：resolve + open + parse；missing_ok 仅豁免文件不存在。"""
-    try:
-        resolved = resolve_config_arg(path)
-    except FileNotFoundError:
-        if missing_ok:
-            return MetadataCorrections.empty()
-        raise
-    with open(resolved, encoding="utf-8") as f:
-        data = json.load(f)
-    return parse_metadata_corrections(data)

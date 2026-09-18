@@ -327,3 +327,11 @@ def test_build_config_auth_demote_invalid_pass_entry_raises(monkeypatch):
     monkeypatch.delenv("HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS", raising=False)
     with pytest.raises(ValueError):
         build_openapi_config(_args(auth_demote_pass=":X"))
+
+
+def test_load_deprecated_index_off_disabled():
+    """off/空串显式禁用（optconf 统一哨兵；修复此前 "off" 被当路径 fail-fast）。"""
+    assert load_deprecated_index("off") == DeprecatedIndex.empty()
+    assert load_deprecated_index("OFF") == DeprecatedIndex.empty()
+    assert load_deprecated_index("") == DeprecatedIndex.empty()
+    assert load_deprecated_index(None) == DeprecatedIndex.empty()

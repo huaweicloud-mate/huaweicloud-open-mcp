@@ -12,13 +12,12 @@ EntityGraph 值对象 → service 把 search_apis 作为渐进式工作流第 0 
 缺省档）；tantivy 索引在 parse 时于 RAM 构建（构建期快照，零网络）。
 """
 
-import json
 import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from common import paths as common_paths
+from common.optconf import load_opt_file
 from common.types import (
     SearchApiHit,
     SearchApisResult,
@@ -474,16 +473,9 @@ def _build_engine(apis_by_product: dict[str, tuple[_ApiNode, ...]],
 
 
 def load_entity_index(value: str | None) -> EntityGraph:
-    """三分支装配：None→缺省档 configs/entity-index.json（缺失静默空，与
-    hints 缺省档同 idiom）；off/空串→显式禁用；其余→显式路径（经
-    resolve_config_arg 支持裸文件名，缺失/非法 fail-fast）。"""
-    if value is None:
-        path = common_paths.config_path(DEFAULT_INDEX)
-        if not path.is_file():
-            return EntityGraph.empty()
-        with open(path, encoding="utf-8") as f:
-            return parse_entity_index(json.load(f))
-    if not value.strip() or value.strip().lower() == "off":
-        return EntityGraph.empty()
-    with open(common_paths.resolve_config_arg(value), encoding="utf-8") as f:
-        return parse_entity_index(json.load(f))
+    """三分支装配（分支纪律委托 common.optconf.load_opt_file 单一实现）：
+    None→缺省档 configs/entity-index.json（缺失静默空）；off/空串（大小写
+    不敏感）→显式禁用；其余→显式路径（resolve_config_arg 支持裸文件名，
+    缺失/非法 fail-fast）。"""
+    return load_opt_file(value, parse=parse_entity_index,
+                         off=EntityGraph.empty(), default_name=DEFAULT_INDEX)

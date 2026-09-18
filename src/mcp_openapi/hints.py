@@ -10,11 +10,10 @@ apie.live_fallback 匹配语义）。合并策略内聚于 combined_notes：产�
 空段跳过、换行连接。
 """
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from common.paths import resolve_config_arg
+from common.optconf import load_opt_file
 
 
 def _clean(text: Any, where: str) -> str | None:
@@ -114,30 +113,13 @@ DEFAULT_HINTS_FILE = "help-docs-hints.json"
 def load_hints_file(path: str | None) -> Hints:
     """加载 hints 配置文件：CLI/env 原始值 → Hints 的唯一语义入口。
 
-    - None（--hints 与 env 均未配置）→ 缺省档：裸名 DEFAULT_HINTS_FILE 经
-      resolve_config_arg 解析（存在的显式路径 > 仓库根 configs/ > 包内
-      configs/），文件缺失静默 Hints.empty()（隐式缺省不 fail-fast）；
-    - 空串 / "off"（strip + 大小写不敏感，对齐 spill idiom）→ 显式禁用
-      Hints.empty()；
-    - 显式路径/裸名 → 解析加载，缺失 fail-fast（FileNotFoundError 列全候选）。
-    JSON 非法恒 fail-fast（静默仅豁免「文件不存在」，不豁免「内容写坏」）。
+    分支纪律委托 common.optconf.load_opt_file（单一实现）：
+    - None → 缺省档 DEFAULT_HINTS_FILE（config_path 解析，文件缺失静默
+      Hints.empty()，隐式缺省不 fail-fast）；
+    - 空串 / "off"（大小写不敏感）→ 显式禁用 Hints.empty()；
+    - 显式路径/裸名 → resolve_config_arg 解析加载，缺失 fail-fast
+      （FileNotFoundError 列全候选）。JSON 非法恒 fail-fast（静默仅豁免
+      「文件不存在」，不豁免「内容写坏」）。
     """
-    if path is None:
-        return _load(DEFAULT_HINTS_FILE, missing_ok=True)
-    stripped = path.strip()
-    if not stripped or stripped.lower() == "off":
-        return Hints.empty()
-    return _load(path, missing_ok=False)
-
-
-def _load(path: str, *, missing_ok: bool) -> Hints:
-    """内部接缝：resolve + open + parse；missing_ok 仅豁免文件不存在。"""
-    try:
-        resolved = resolve_config_arg(path)
-    except FileNotFoundError:
-        if missing_ok:
-            return Hints.empty()
-        raise
-    with open(resolved, encoding="utf-8") as f:
-        data = json.load(f)
-    return parse_hints(data)
+    return load_opt_file(path, parse=parse_hints, off=Hints.empty(),
+                         default_name=DEFAULT_HINTS_FILE)

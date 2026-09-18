@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from common.optconf import is_off
 from common.types import SpillInfo
 
 logger = logging.getLogger("mcp_openapi.spill")
@@ -63,15 +64,14 @@ def parse_spill_config(value: str | None, *,
                        data_enabled: bool = False) -> SpillConfig | None:
     """--spill-dir / HUAWEICLOUD_MCP_SPILL_DIR 解析（部署感知披露在此入参）。
 
-    None/缺省 → 自动落盘默认目录；空串或 "off" → 禁用（回落纯截断）；
-    其余视为目录路径。
+    None/缺省 → 自动落盘默认目录；空串或 "off"（大小写不敏感，is_off 单点）
+    → 禁用（回落纯截断）；其余视为目录路径。
     """
     if value is None:
         return SpillConfig.default()
-    stripped = value.strip()
-    if stripped in ("", "off"):
+    if is_off(value):
         return None
-    return SpillConfig(dir=Path(stripped).expanduser(), data_enabled=data_enabled)
+    return SpillConfig(dir=Path(value.strip()).expanduser(), data_enabled=data_enabled)
 
 
 # ---------- 内部接缝：唯一落盘机制 ----------

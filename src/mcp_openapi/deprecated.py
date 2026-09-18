@@ -9,11 +9,10 @@ service 在 list_apis 上做 annotate（结构化标注）/ hide（过滤）塑�
 （发现面收窄 ≠ 详情拒绝）。
 """
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from common.paths import resolve_config_arg
+from common.optconf import load_opt_file
 
 
 def _clean_str(val: Any, where: str) -> str | None:
@@ -87,13 +86,11 @@ def parse_deprecated_index(raw: Any) -> DeprecatedIndex:
 
 
 def load_deprecated_index(path: str | None) -> DeprecatedIndex:
-    """加载废弃索引文件。无路径时返回空索引（no-op）；JSON 非法抛错。
+    """加载废弃索引文件（分支纪律委托 common.optconf.load_opt_file 单一实现）。
 
-    路径支持裸文件名：经 common.paths.resolve_config_arg 解析
-    （存在的显式路径原样 > 仓库根 configs/ > 包内 configs/）。
+    无缺省档：None/空串/"off"（大小写不敏感）返回空索引（no-op）；
+    显式路径/裸名经 resolve_config_arg 解析加载，缺失/JSON 非法抛错。
+    （修复：此前 "off" 非空被当路径送 resolve → FileNotFoundError。）
     """
-    if not path:
-        return DeprecatedIndex.empty()
-    with open(resolve_config_arg(path), encoding="utf-8") as f:
-        data = json.load(f)
-    return parse_deprecated_index(data)
+    return load_opt_file(path, parse=parse_deprecated_index,
+                         off=DeprecatedIndex.empty())

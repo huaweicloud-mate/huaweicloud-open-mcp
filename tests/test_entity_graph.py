@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from common import optconf
 from common import paths as common_paths
 from common.types import SearchApisResult
 from mcp_openapi.entity_graph import (
@@ -358,7 +359,7 @@ def test_load_default_bundled(tmp_path, monkeypatch):
     cfg = tmp_path / "entity-index.json"
     cfg.write_text(json.dumps(RAW, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(common_paths, "project_root", lambda: tmp_path)
-    monkeypatch.setattr(common_paths, "config_path",
+    monkeypatch.setattr(optconf, "config_path",
                         lambda name: tmp_path / name)
     assert load_entity_index(None).search_apis("云主机")["total"] == 1
 

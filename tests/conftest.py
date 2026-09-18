@@ -94,6 +94,7 @@ def sealed_configs(tmp_path, monkeypatch):
     configs/，或用例内再覆写 project_root 指向自己的场景目录。
     """
     repo = tmp_path / "repo"
+    repo.mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(paths, "project_root", lambda: repo)
     return repo
