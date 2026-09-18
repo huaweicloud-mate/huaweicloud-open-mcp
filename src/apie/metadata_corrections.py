@@ -8,9 +8,12 @@ StartupInstance 的 x-constraint 残留「该接口仅支持PostgreSQL引擎」�
 分发，--metadata-corrections / HUAWEICLOUD_MCP_METADATA_CORRECTIONS 支持部署
 自助，off/空串显式禁用。
 
-接缝：presentation 层（hints 同位）——service.get_api 对 format_api_detail
-的新鲜信封 copy-on-write 纠偏，缓存 doc 恒不改写；离线管道 convert main()
-经 correct_doc 组合同一 patch 核心。纠偏生效面 = get_api 信封 + 离线产物。
+接缝（ADR-0001，2026-09 起 3→1）：纠偏唯一应用面为生产者时点——
+``apie.doc_compose.compose_doc``（convert + correct 同一核心），live_fallback
+（运行时，缓存写入前 in-place）与离线管道 convert main() 共同委托；
+「缓存 doc 恒不改写」由构造保证（纠偏发生在缓存写入之前）。service 不再
+持有纠偏入口（correct_doc_cow/correct_api_result 已删除——对已纠偏 doc 恒
+no-op 的假想 seam）。
 红线：逐 API 精确键，禁止通用模式删除（「数据库代理(PostgreSQL)」等 tag 的
 「仅支持PostgreSQL」是真约束，泛化会误杀）；drop/replace 语义幂等，上游修复
 后自动 no-op，条目可退场。
@@ -31,12 +34,7 @@ patches 键以 `/` 开头视为对 doc 根的 JSON Pointer（RFC 6901，~0/~1 �
 v1 前缀白名单 /definitions/（schema 事实修正类），其余前缀/空段快速失败。
 指针 patch 二选一：replace（非空字符串，叶值落位，父链存在时含缺失新建）/
 drop（布尔 true，删叶键——与 op 级行级子串列表形区分，语义随目标类而变）。
-应用面三个（同一 patch 核心）：correct_doc 离线 in-place（op 级 + 指针级一次
-落位）；correct_doc_cow 运行时 copy-on-write（get_api format 前 / execute_api
-校验前，沿指针路径浅拷贝容器、未触及子树共享、原 doc 恒不改写——「缓存 doc
-恒不改写」不变量；未命中/无 doc_patches/无需变更恒返回原对象零开销）；
-correct_api_result 信封级（既有 op 级呈现面，机制不变）。v1 指针域不含 op 级
-数据，调用方持有的 op 引用在 COW 后保持有效。
+应用面唯一：compose_doc（correct_doc in-place，op 级 + 指针级一次落位）。
 """
 
 import logging
@@ -221,44 +219,6 @@ def parse_metadata_corrections(raw: Any) -> MetadataCorrections:
     return MetadataCorrections(entries=entries)
 
 
-def _patch_envelope_field(out: dict[str, Any], fname: str,
-                          patch: FieldPatch) -> dict[str, Any] | None:
-    """信封字段 patch。返回新 dict（copy-on-write）；无需变更返回 None。"""
-    current = out.get(fname)
-    if patch.replace is not None:
-        if current == patch.replace:
-            return None
-        return {**out, fname: patch.replace}
-    if not isinstance(current, str):
-        return None
-    patched = patch.apply(current)
-    if patched == current:
-        return None
-    return {**out, fname: patched}
-
-
-def correct_api_result(result: dict[str, Any],
-                       corrections: MetadataCorrections | None) -> dict[str, Any]:
-    """get_api 信封纠偏（copy-on-write）：未命中/无需变更返回原对象。
-
-    drop 对缺失/非字符串字段 no-op；全行删光置 None（保键形，format_api_detail
-    恒输出 x-constraint 键）；replace 无条件落位（含缺失新建）。
-    evidence/doc_url/verified 仅台账，不进信封。
-    """
-    if not corrections:
-        return result
-    entry = corrections.for_api(str(result.get("product", "")),
-                                str(result.get("api", "")))
-    if entry is None:
-        return result
-    updated = result
-    for fname, patch in entry.patches.items():
-        patched = _patch_envelope_field(updated, fname, patch)
-        if patched is not None:
-            updated = patched
-    return updated
-
-
 def _pointer_leaf(doc: dict[str, Any], pointer: tuple[str, ...]
                   ) -> tuple[dict[str, Any], str] | None:
     """沿指针只读遍历到叶父容器；父链缺失/中途非 dict 返回 None。"""
@@ -272,21 +232,9 @@ def _pointer_leaf(doc: dict[str, Any], pointer: tuple[str, ...]
     return node, pointer[-1]
 
 
-def _pointer_would_change(doc: dict[str, Any], pointer: tuple[str, ...],
-                          patch: FieldPatch) -> bool:
-    """指针 patch 对原结构是否需变更（父链缺失/叶已为目标态 → False）。"""
-    hit = _pointer_leaf(doc, pointer)
-    if hit is None:
-        return False
-    parent, leaf = hit
-    if patch.replace is not None:
-        return parent.get(leaf) != patch.replace
-    return leaf in parent  # drop
-
-
 def _apply_pointer_inplace(doc: dict[str, Any], pointer: tuple[str, ...],
                            patch: FieldPatch) -> None:
-    """指针 patch 的 in-place 应用（离线面）：叶值落位 / 删叶键；父链缺失 no-op。"""
+    """指针 patch 的 in-place 应用：叶值落位 / 删叶键；父链缺失 no-op。"""
     hit = _pointer_leaf(doc, pointer)
     if hit is None:
         return
@@ -321,29 +269,6 @@ def _apply_pointer_cow(original: dict[str, Any], pointer: tuple[str, ...],
             parent[leaf] = patch.replace
         return
     parent.pop(leaf, None)
-
-
-def correct_doc_cow(doc: dict[str, Any], product: str, api: str,
-                    corrections: MetadataCorrections | None) -> dict[str, Any]:
-    """运行时 doc 级纠偏（copy-on-write）：未命中/无 doc_patches/无需变更恒返回原对象。
-
-    命中且需变更时沿指针路径浅拷贝容器（未触及子树共享原对象），原 doc 恒不改写
-    ——「缓存 doc 恒不改写」不变量。v1 指针白名单 /definitions/（schema 事实修正），
-    op 级数据不在指针域内，调用方持有的 op 引用在 COW 后保持有效。既有 op 级
-    条目（如 RDS x-constraint）不经本接口——呈现面走 correct_api_result，本接口
-    对其零开销直通。
-    """
-    entry = corrections.for_api(product, api) if corrections else None
-    if entry is None or not entry.doc_patches:
-        return doc
-    if not any(_pointer_would_change(doc, ptr, patch)
-               for ptr, patch in entry.doc_patches.items()):
-        return doc
-    root: dict[str, Any] = dict(doc)
-    copied: dict[int, dict[str, Any]] = {id(doc): root}
-    for pointer, patch in entry.doc_patches.items():
-        _apply_pointer_cow(doc, pointer, patch, copied)
-    return root
 
 
 def correct_doc(doc: dict[str, Any], product: str, api: str,

@@ -1,12 +1,17 @@
-"""LiveFallback 适配器：实时拉取 API Explorer → OpenAPI 2.0 转换 → 回写内存缓存。"""
+"""LiveFallback 适配器：实时拉取 API Explorer → OpenAPI 2.0 转换 → 回写内存缓存。
+
+纠偏在生产时点落位（doc_compose，ADR-0001）：缓存写入前 in-place，「缓存
+doc 恒已纠偏」由构造保证；纠偏未命中时缓存原样转换结果。
+"""
 
 import logging
 from typing import Any
 
-from . import convert_openapi2 as conv
 from . import explorer
 from .convert_openapi2 import AuthDemotePolicy
+from .doc_compose import compose_doc
 from .memory_store import ApiHit, MemoryStore
+from .metadata_corrections import MetadataCorrections
 
 logger = logging.getLogger("apie.live_fallback")
 
@@ -30,16 +35,19 @@ def _find_api_in_doc(doc: dict[str, Any], api_name: str) -> tuple[str, str, dict
 
 
 class LiveFallback:
-    """实时回退适配器：抓取 → 转换 → 缓存。
+    """实时回退适配器：抓取 → 转换+纠偏（组合根） → 缓存。
 
-    auth_demote 为认证头 required 降级策略（None=默认开启）；策略是启动期
-    常量，doc 转换后随缓存固化——同进程内变更策略不回溯已缓存 doc。
+    auth_demote 为认证头 required 降级策略（None=默认开启）；corrections 为
+    元数据纠偏配置（None=空）。两者均为启动期常量，doc 随首次转换固化进
+    缓存——同进程内策略变更不回溯已缓存 doc。
     """
 
     def __init__(self, store: MemoryStore,
-                 auth_demote: AuthDemotePolicy | None = None):
+                 auth_demote: AuthDemotePolicy | None = None,
+                 corrections: MetadataCorrections | None = None):
         self._store = store
         self._auth_demote = auth_demote
+        self._corrections = corrections
 
     def fetch(self, product: str, api: str, region: str) -> ApiHit | None:
         try:
@@ -48,7 +56,9 @@ class LiveFallback:
             return None
         if not isinstance(raw, dict) or not raw.get("paths"):
             return None
-        doc = conv.convert_api(raw, auth_demote=self._auth_demote)
+        doc = compose_doc(raw, product=product, api=api,
+                          auth_demote=self._auth_demote,
+                          corrections=self._corrections)
         match = _find_api_in_doc(doc, api)
         if match is None:
             return None

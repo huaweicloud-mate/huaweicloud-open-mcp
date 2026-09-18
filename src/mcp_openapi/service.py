@@ -16,7 +16,7 @@ from apie import catalog, metadata
 from apie import mock as apie_mock
 from apie.convert_openapi2 import AuthDemotePolicy
 from apie.memory_store import ApiHit, MemoryStore
-from apie.metadata_corrections import MetadataCorrections, correct_api_result, correct_doc_cow
+from apie.metadata_corrections import MetadataCorrections
 from common.audit import AuditSink
 from common.audit import audited as _audited
 from common.auth.credentials import Credentials
@@ -123,10 +123,15 @@ class ToolService:
 
     def load_api_doc(self, product: str, api_name: str, region: str | None = None
                      ) -> ApiHit | None:
-        """查找接口 OpenAPI 文档（内存缓存或远端拉取），返回 (doc, path, method, op) 或 None。"""
+        """查找接口 OpenAPI 文档（内存缓存或远端拉取），返回 (doc, path, method, op) 或 None。
+
+        返回的 doc 必已纠偏（纠偏在生产时点落位——live_fallback/doc_compose，
+        ADR-0001）；corrections/auth_demote 均启动期常量随转换固化进缓存。
+        """
         return catalog.find_api_doc(self.store, product, api_name,
                                     region or self.config.region,
-                                    auth_demote=self.config.auth_demote)
+                                    auth_demote=self.config.auth_demote,
+                                    corrections=self.config.corrections)
 
     def _effective_policy_rules(self) -> Sequence[safety_policy.PolicyRule] | None:
         """当前生效规则：注入 PolicyStore 时实时热加载，否则用启动快照。"""
@@ -352,10 +357,7 @@ class ToolService:
             logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
-        doc = correct_doc_cow(doc, product, api, self.config.corrections)
         out: Any = metadata.format_api_detail(doc, product, path, method, op)
-        out = correct_api_result(cast(dict[str, Any], out),
-                                 self.config.corrections)
         return cast(ApiDetailResult, self._with_combined_hints(out, product, api))
 
     @_audited
@@ -405,7 +407,6 @@ class ToolService:
         if hit is None:
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         doc, path, method, op = hit
-        doc = correct_doc_cow(doc, product, api, self.config.corrections)
 
         # 预签发分支：OBS 专用，gateway 只签名不搬运字节；先于 mock/real 分流
         if params.get("_presign"):

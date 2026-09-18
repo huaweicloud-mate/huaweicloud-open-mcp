@@ -11,9 +11,7 @@ import pytest
 
 from apie.metadata_corrections import (
     MetadataCorrections,
-    correct_api_result,
     correct_doc,
-    correct_doc_cow,
     load_metadata_corrections,
     parse_metadata_corrections,
 )
@@ -61,7 +59,8 @@ def _doc() -> dict:
 def test_empty_is_noop():
     c = MetadataCorrections.empty()
     assert c.for_api("RDS", "StartupInstance") is None
-    assert correct_api_result(_envelope(), c) is not None
+    doc = {"paths": {}}
+    assert correct_doc(doc, "RDS", "StartupInstance", c) is doc
 
 
 def test_parse_minimal_drop_entry():
@@ -157,59 +156,6 @@ def test_patch_idempotent():
     once = e.patches["x-constraint"].apply(STARTUP_XCONSTRAINT)
     assert once is not None
     assert e.patches["x-constraint"].apply(once) == STARTUP_REMAINDER
-
-
-# ---------- correct_api_result：信封级 copy-on-write ----------
-
-def test_correct_api_result_drop():
-    c = parse_metadata_corrections(RAW)
-    env = _envelope()
-    out = correct_api_result(env, c)
-    assert out["x-constraint"] == STARTUP_REMAINDER
-    assert out["summary"] == "开启实例"          # 其余字段原样
-    assert env["x-constraint"] == STARTUP_XCONSTRAINT   # 原信封不改写
-    assert "evidence" not in out and "doc_url" not in out  # 台账字段不泄漏
-
-
-def test_correct_api_result_all_dropped_sets_none_keeps_key():
-    c = parse_metadata_corrections({"RDS:StartupInstance": {"patches": {
-        "x-constraint": {"drop": ["该接口仅支持PostgreSQL引擎"]}}}})
-    env = _envelope()
-    env["x-constraint"] = "- 该接口仅支持PostgreSQL引擎。"
-    out = correct_api_result(env, c)
-    assert out["x-constraint"] is None
-    assert "x-constraint" in out
-
-
-def test_correct_api_result_replace_sets_and_creates():
-    c = parse_metadata_corrections({"RDS:StartupInstance": {"patches": {
-        "x-constraint": {"replace": "- 官方约束。"}}}})
-    out = correct_api_result(_envelope(), c)
-    assert out["x-constraint"] == "- 官方约束。"
-    env2 = {"ok": True, "product": "RDS", "api": "StartupInstance"}
-    assert correct_api_result(env2, c)["x-constraint"] == "- 官方约束。"
-
-
-def test_correct_api_result_miss_returns_same_object():
-    c = parse_metadata_corrections(RAW)
-    env = {"ok": True, "product": "ECS", "api": "ListServersDetails",
-           "x-constraint": "- x"}
-    assert correct_api_result(env, c) is env
-    no_constraint = {"ok": True, "product": "RDS", "api": "StartupInstance"}
-    assert correct_api_result(no_constraint, c) is no_constraint  # drop 对缺失字段 no-op
-
-
-def test_correct_api_result_none_and_empty_noop():
-    env = _envelope()
-    assert correct_api_result(env, None) is env
-    assert correct_api_result(env, MetadataCorrections.empty()) is env
-
-
-def test_correct_api_result_idempotent():
-    c = parse_metadata_corrections(RAW)
-    once = correct_api_result(_envelope(), c)
-    twice = correct_api_result(once, c)
-    assert twice["x-constraint"] == STARTUP_REMAINDER
 
 
 # ---------- correct_doc：doc 级（离线管道组合根） ----------
@@ -409,66 +355,6 @@ def test_correct_doc_pointer_and_op_level_combined():
     assert (out["definitions"]["CreateEventRequestBody"]["properties"]["name"]["pattern"]
             == DOC_PATTERN_TRUTH)
 
-
-# ---------- correct_doc_cow：运行时 doc 级 copy-on-write ----------
-
-def test_cow_miss_and_op_only_entry_return_same_object():
-    doc = _fg_doc()
-    assert correct_doc_cow(doc, "ECS", "ListServersDetails",
-                           parse_metadata_corrections(FG_RAW)) is doc
-    assert correct_doc_cow(doc, "FunctionGraph", "CreateEvent",
-                           MetadataCorrections.empty()) is doc
-    assert correct_doc_cow(doc, "FunctionGraph", "CreateEvent", None) is doc
-    rds_doc = _doc()   # 既有 op 级条目（RDS 先例）：无 doc_patches → 恒同一对象零开销
-    assert correct_doc_cow(rds_doc, "RDS", "StartupInstance",
-                           parse_metadata_corrections(RAW)) is rds_doc
-
-
-def test_cow_patches_path_original_untouched_siblings_shared():
-    c = parse_metadata_corrections(FG_RAW)
-    doc = _fg_doc()
-    out = correct_doc_cow(doc, "FunctionGraph", "CreateEvent", c)
-    assert out is not doc
-    assert (doc["definitions"]["CreateEventRequestBody"]["properties"]["name"]["pattern"]
-            == BROKEN_PATTERN)  # 原 doc 恒不改写
-    assert (out["definitions"]["CreateEventRequestBody"]["properties"]["name"]["pattern"]
-            == DOC_PATTERN_TRUTH)
-    assert out["definitions"]["OtherDef"] is doc["definitions"]["OtherDef"]  # 兄弟共享
-    assert out["paths"] is doc["paths"]
-
-
-def test_cow_idempotent_returns_same_object():
-    c = parse_metadata_corrections(FG_RAW)
-    doc = _fg_doc()
-    once = correct_doc_cow(doc, "FunctionGraph", "CreateEvent", c)
-    assert correct_doc_cow(once, "FunctionGraph", "CreateEvent", c) is once
-
-
-def test_cow_missing_parent_noop_same_object():
-    c = parse_metadata_corrections({"RDS:A": {"patches": {
-        "/definitions/NoSuch/properties/x": {"replace": "v"}}}})
-    doc = {"definitions": {}, "paths": {}}
-    assert correct_doc_cow(doc, "RDS", "A", c) is doc
-
-
-def test_cow_two_pointers_shared_prefix():
-    c = parse_metadata_corrections({"FunctionGraph:CreateEvent": {"patches": {
-        "/definitions/CreateEventRequestBody/properties/name/pattern": {
-            "replace": DOC_PATTERN_TRUTH},
-        "/definitions/CreateEventRequestBody/properties/content/type": {
-            "replace": "string"},
-    }}})
-    doc = _fg_doc()
-    out = correct_doc_cow(doc, "FunctionGraph", "CreateEvent", c)
-    props = out["definitions"]["CreateEventRequestBody"]["properties"]
-    assert props["name"]["pattern"] == DOC_PATTERN_TRUTH
-    assert props["content"]["type"] == "string"
-    assert doc["definitions"]["CreateEventRequestBody"]["properties"]["name"][
-        "pattern"] == BROKEN_PATTERN  # 原 doc 恒不改写
-    assert out["definitions"]["OtherDef"] is doc["definitions"]["OtherDef"]
-
-
-# ---------- load：三分支（仿 load_hints_file idiom） ----------
 
 def test_load_file(tmp_path):
     p = tmp_path / "c.json"

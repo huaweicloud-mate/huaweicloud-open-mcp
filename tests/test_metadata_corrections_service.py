@@ -1,5 +1,7 @@
-"""S5：元数据纠偏 service 注入与装配断言（get_api 信封 + build_openapi_config）。
+"""S5：元数据纠偏 service 断言（get_api 信封 + execute 校验 + build_openapi_config）。
 
+ADR-0001（3→1）：纠偏在生产时点落位（live_fallback/doc_compose），缓存 doc
+必已纠偏——fixture 经 correct_doc 预填即模拟生产者产物；service 为纯读方。
 doc 级指针纠偏段（FunctionGraph:CreateEvent 畸形 pattern）独立真值：官方帮助
 文档 functiongraph_06_0133（2025-10-31 更新）regexp 与取值范围。
 """
@@ -8,7 +10,11 @@ import argparse
 import json
 
 from apie.memory_store import MemoryStore
-from apie.metadata_corrections import MetadataCorrections, parse_metadata_corrections
+from apie.metadata_corrections import (
+    MetadataCorrections,
+    correct_doc,
+    parse_metadata_corrections,
+)
 from mcp_openapi.server import build_openapi_config
 from mcp_openapi.service import ServiceConfig, ToolService
 from safety import policy
@@ -52,9 +58,11 @@ HINTS_RAW = {"products": {"RDS": {"apis": {"StartupInstance": "开启提示"}}}}
 def _svc(corrections=MetadataCorrections.empty(), hints=None):
     store = MemoryStore()
     store.set_apis("RDS", APIS_RDS)
-    op = DOC["paths"]["/v3/{project_id}/instances/{instance_id}/action/startup"]["post"]
+    doc = correct_doc(json.loads(json.dumps(DOC)), "RDS", "StartupInstance",
+                      corrections)
+    op = doc["paths"]["/v3/{project_id}/instances/{instance_id}/action/startup"]["post"]
     store.set_api_cache(("rds", "StartupInstance", "cn-north-4"),
-                        (DOC, "/v3/{project_id}/instances/{instance_id}/action/startup",
+                        (doc, "/v3/{project_id}/instances/{instance_id}/action/startup",
                          "post", op))
     config = ServiceConfig(corrections=corrections)
     if hints is not None:
@@ -62,7 +70,7 @@ def _svc(corrections=MetadataCorrections.empty(), hints=None):
     return ToolService(store=store, config=config)
 
 
-# ---------- get_api：信封纠偏 ----------
+# ---------- get_api：缓存 doc 已纠偏 → 信封直接反映官方口径 ----------
 
 def test_get_api_corrects_envelope():
     out = _svc(corrections=CORRECTIONS).get_api("RDS", "StartupInstance")
@@ -70,13 +78,20 @@ def test_get_api_corrects_envelope():
     assert out["x-constraint"] == REMAINDER
 
 
-def test_get_api_correction_copy_on_write_cache_untouched():
-    """缓存 doc 恒不改写：纠偏后用空纠偏服务读同一 store 仍得原文。"""
-    svc = _svc(corrections=CORRECTIONS)
-    corrected = svc.get_api("RDS", "StartupInstance")
-    assert corrected["x-constraint"] == REMAINDER
-    plain = _svc().get_api("RDS", "StartupInstance")
-    assert plain["x-constraint"] == STALE
+def test_get_api_correction_is_producer_side():
+    """纠偏不发生在 service：同一未纠偏缓存 doc，有无 corrections 配置输出一致。"""
+    store = MemoryStore()
+    store.set_apis("RDS", APIS_RDS)
+    op = DOC["paths"]["/v3/{project_id}/instances/{instance_id}/action/startup"]["post"]
+    store.set_api_cache(("rds", "StartupInstance", "cn-north-4"),
+                        (DOC, "/v3/{project_id}/instances/{instance_id}/action/startup",
+                         "post", op))
+    with_cfg = ToolService(store=store,
+                           config=ServiceConfig(corrections=CORRECTIONS))
+    plain = ToolService(store=store, config=ServiceConfig())
+    a = with_cfg.get_api("RDS", "StartupInstance")
+    b = plain.get_api("RDS", "StartupInstance")
+    assert a["x-constraint"] == b["x-constraint"] == STALE
 
 
 def test_get_api_empty_corrections_status_quo():
@@ -214,10 +229,12 @@ class _StubMockClient:
 def _fg_svc(corrections=MetadataCorrections.empty(), **kw):
     store = MemoryStore()
     store.set_apis("FunctionGraph", APIS_FG)
-    op = FG_DOC["paths"]["/v2/{project_id}/fgs/functions/{function_urn}/events"]["post"]
+    doc = correct_doc(json.loads(json.dumps(FG_DOC)), "FunctionGraph",
+                      "CreateEvent", corrections)
+    op = doc["paths"]["/v2/{project_id}/fgs/functions/{function_urn}/events"]["post"]
     store.set_api_cache(
         ("functiongraph", "CreateEvent", "cn-north-4"),
-        (FG_DOC, "/v2/{project_id}/fgs/functions/{function_urn}/events", "post", op))
+        (doc, "/v2/{project_id}/fgs/functions/{function_urn}/events", "post", op))
     return ToolService(store=store,
                        config=ServiceConfig(corrections=corrections, **kw))
 
@@ -237,16 +254,14 @@ def test_get_api_pointer_correction_fixes_envelope_both_spots():
             == DOC_PATTERN_TRUTH)
 
 
-def test_get_api_pointer_correction_cache_untouched():
+def test_get_api_pointer_correction_serves_corrected_doc():
+    """缓存 doc 已纠偏（生产时点）：get_api 信封两处均官方口径，重复读幂等。"""
     svc = _fg_svc(corrections=FG_CORRECTIONS)
     first = svc.get_api("FunctionGraph", "CreateEvent")
     assert (first["definitions"]["CreateEventRequestBody"]["properties"]["name"]
             ["pattern"] == DOC_PATTERN_TRUTH)
     second = svc.get_api("FunctionGraph", "CreateEvent")
-    assert second == first  # 幂等：缓存 doc 未被改写，每次从原文 COW
-    plain = _fg_svc().get_api("FunctionGraph", "CreateEvent")
-    assert (plain["definitions"]["CreateEventRequestBody"]["properties"]["name"]
-            ["pattern"] == BROKEN_PATTERN)  # 无纠偏服务读同一 store 仍得原文
+    assert second == first
 
 
 def test_execute_api_pointer_correction_unblocks_valid_name():

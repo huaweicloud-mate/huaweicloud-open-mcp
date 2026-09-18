@@ -579,7 +579,8 @@ def main() -> None:
     import shutil
 
     from . import region_paths
-    from .metadata_corrections import correct_doc, load_metadata_corrections
+    from .doc_compose import compose_doc
+    from .metadata_corrections import load_metadata_corrections
 
     src = region_paths.by_tag_dir()
     out = region_paths.openapi2_dir()
@@ -600,9 +601,9 @@ def main() -> None:
             apis = data.get("apis", {})
             converted = {}
             for key, api in apis.items():
-                doc = convert_api(api)
-                doc = correct_doc(doc, api.get("product_short") or "",
-                                  api.get("name") or "", corrections)
+                doc = compose_doc(api, product=api.get("product_short") or "",
+                                  api=api.get("name") or "",
+                                  corrections=corrections)
                 converted[key] = doc
                 stats["total"] += 1
                 if api.get("components"):
