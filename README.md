@@ -14,7 +14,7 @@
 
 One open, local [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents — opencode, Codex, Cursor, and any other MCP-capable client — to Huawei Cloud in natural language. No per-service wrappers: the agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrowing it down to one concrete API call, executed with locally signed requests. This is a personal, local deployment: the gateway runs entirely on your machine — your AK/SK never leave it.
 
-Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `openapi` (default) talks to Huawei Cloud OpenAPI, `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet), and `data` runs read-only SQL analytics and transformations over inline/local data with DataFusion — local compute tools that need no credentials and are not governed by the safety policy. The typical closed loop (`openapi,data`): pull a large dataset via `execute_api`, save it to a file, aggregate with `query_data` or reshape it to a new dataset with `transform_data` — only aggregated results or artifact metadata enter the model context.
+Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `openapi` (default) talks to Huawei Cloud OpenAPI, `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet), and `data` runs read-only SQL analytics and transformations over inline/local data with DataFusion — local compute tools that need no credentials and are not governed by the safety policy. The typical closed loop (`openapi,data`): pull a large dataset via `execute_api`, save it to a file, aggregate with `query_data` or reshape it to a new dataset with `transform_data` — only aggregated results or artifact metadata enter the model context. The gateway serves **stdio** by default (the form your code agent launches); `--transport http` adds **Streamable HTTP** for multi-client deployments — see [HTTP transport](#http-transport-multi-session).
 
 ## How it works
 
@@ -216,6 +216,35 @@ Rules that matter:
 - `GetObject` presigns run one `HEAD` metadata pre-check first (object bytes still never pass the gateway). The envelope then carries `expected_size` / `expected_etag` for post-download verification; a 404 (bucket/object gone — e.g. a deleted FunctionGraph source bucket) denies the presign outright instead of handing out a URL that downloads an XML error page; other pre-check failures degrade gracefully (no expected fields, note explains).
 - All other OBS APIs (bucket management, tagging, ACL, …) execute through the gateway as usual; pass `_presign=true` explicitly if you want a URL for one of them. Non-OBS products reject `_presign`. Mock mode keeps hitting the mock endpoint.
 
+## HTTP transport (multi-session)
+
+By default the gateway speaks **stdio** — the local form your code agent launches. It can also serve **Streamable HTTP** from a single process for multiple concurrent MCP client sessions:
+
+```bash
+uvx huaweicloud-open-mcp --transport http                  # listens on http://127.0.0.1:8000/mcp
+uvx huaweicloud-open-mcp --transport http --http-host 0.0.0.0 --http-port 9000
+```
+
+Point any MCP-capable client at the endpoint:
+
+```json
+{ "mcpServers": { "huaweicloud": { "type": "http", "url": "http://127.0.0.1:8000/mcp" } } }
+```
+
+What changes over HTTP — session semantics:
+
+- Every client connection gets its own policy session. `session`-scope rules granted via `manage_policy` (directly or through elicitation) are visible only to that connection and invisible to every other; reconnecting starts a fresh session with no inherited grants; `once` rules burn within the granting session. `permanent` rules land in the policy file and stay shared across sessions and restarts, as always.
+- Requests without MCP session identity (the modern single-exchange protocol) cannot write session-scoped grants — they get a structured rejection instead of silently sharing state.
+- `GET /healthz` serves probes. Audit events (with `--audit-file`) carry a `session` field attributing each call to its MCP session; over stdio the audit output is byte-identical to before.
+- Idle sessions are recycled: a session bucket untouched for 30 minutes is reclaimed and any grant dies at 24h of absolute age — a session that keeps working keeps its grants alive.
+
+Security posture:
+
+- The code default binds `127.0.0.1` (loopback also auto-enables the SDK's DNS-rebinding protection). For containers, set `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0` in the image or run command — publishing the port is already an explicit act. Binding a non-loopback address prints a warning: anyone who can reach the port can act with this deployment's AK/SK; put a reverse proxy with TLS/auth in front beyond a trusted network. v1 ships no built-in HTTP authentication.
+- Multiple worker processes are not supported (session state lives in the process).
+
+Embedding (ASGI): `build_app(...).streamable_http_app()` returns a Starlette app whose lifespan runs the MCP session manager — drive it with any ASGI runner (uvicorn/gunicorn). When you compose the HTTP serving yourself, declare it in the args passed to `build_app` (`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`) so per-session isolation is wired; composing HTTP on a stdio-declared deployment leaves session-scoped grants from session-less requests sharing one namespace.
+
 ## Tools (openapi mode)
 
 | Tool | Purpose |
@@ -334,6 +363,10 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--mode <modes>` | `openapi` | Run mode(s), comma-separated (`openapi`/`discover`/`data`, e.g. `openapi,data`; env `HUAWEICLOUD_MCP_MODE`) |
+| `--transport stdio\|http` | `stdio` | Transport: stdio (default, client-launched local form) or `http` (Streamable HTTP, single process serving multiple MCP sessions; `streamable-http` normalizes to `http`; invalid values fail fast; env `HUAWEICLOUD_MCP_TRANSPORT`) |
+| `--http-host <addr>` | `127.0.0.1` | HTTP bind address (loopback auto-enables DNS-rebinding protection; non-loopback warns — see [HTTP transport](#http-transport-multi-session); env `HUAWEICLOUD_MCP_HTTP_HOST`) |
+| `--http-port <port>` | `8000` | HTTP port (env `HUAWEICLOUD_MCP_HTTP_PORT`) |
+| `--http-path <path>` | `/mcp` | HTTP MCP endpoint path, must start with `/` (env `HUAWEICLOUD_MCP_HTTP_PATH`) |
 | `--mock` | off | Point `execute_api` at the API Explorer mock endpoint (no credentials needed) |
 | `--mock-base <url>` | — | Mock endpoint base URL override (env `HUAWEICLOUD_MCP_MOCK_BASE`) |
 | `--mock-passthrough` | off | Mock mode: forward execute business params to the mock endpoint (env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`) |
@@ -359,6 +392,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `HUAWEICLOUD_SDK_PROJECT_ID` | Optional; resolved automatically when unset |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | Optional; loaded for global-level services (full support in progress) |
 | `HUAWEICLOUD_MCP_MODE` | Same as `--mode` |
+| `HUAWEICLOUD_MCP_TRANSPORT` | Same as `--transport` |
+| `HUAWEICLOUD_MCP_HTTP_HOST` / `HUAWEICLOUD_MCP_HTTP_PORT` / `HUAWEICLOUD_MCP_HTTP_PATH` | Same as `--http-host` / `--http-port` / `--http-path` |
 | `HUAWEICLOUD_MCP_REGION` | Same as `--region` |
 | `HUAWEICLOUD_MCP_MOCK` | Same as `--mock` (`1`/`true`/`yes`) |
 | `HUAWEICLOUD_MCP_MOCK_BASE` | Mock endpoint base URL override |

@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from apie.api_location import ApiLocation
 from apie.memory_store import MemoryStore
 from common.audit import NdjsonAuditSink, NullAuditSink, build_audit_event, sink_from_path
@@ -208,3 +210,54 @@ def test_service_without_sink_unchanged():
     store = _prep_store(detail=False)
     out = ToolService(store=store).list_products()
     assert out["ok"] is True
+
+
+# ---------- 会话归因（S20：ambient session 键，stdio 恒无字段） ----------
+
+def test_audit_session_none_omits_field():
+    """stdio / 装配期：键恒 None，事件无 session 字段（NDJSON 逐字节回归红线）。"""
+    sink = MemorySink()
+    service = ToolService(store=_prep_store(detail=False),
+                          config=ServiceConfig(audit_sink=sink))
+    service.list_products()
+    assert sink.events[0] == {"tool": "list_products", "input": {}, "ok": True}
+
+
+def test_audit_session_attributed_when_bound():
+    from common.sessions import _bind_session
+
+    sink = MemorySink()
+    service = ToolService(store=_prep_store(detail=False),
+                          config=ServiceConfig(audit_sink=sink))
+    with _bind_session("sess-A"):
+        service.list_products()
+    event = sink.events[0]
+    assert event["session"] == "sess-A"
+    # provenance 在事件顶层，不进 input 快照（已发布契约纯净性）
+    assert "session" not in event["input"]
+    assert event["input"] == {}
+
+
+def test_audit_exception_path_attributed():
+    from common.sessions import _bind_session
+
+    class BoomStore(MemoryStore):
+        def products(self):
+            raise RuntimeError("boom")
+
+    sink = MemorySink()
+    service = ToolService(store=BoomStore(), config=ServiceConfig(audit_sink=sink))
+    with pytest.raises(RuntimeError), _bind_session("sess-B"):
+        service.get_product("ECS")
+    event = sink.events[0]
+    assert event["ok"] is False
+    assert event["session"] == "sess-B"
+
+
+def test_build_audit_event_contract_shape_frozen():
+    """build_audit_event（verifier 已发布契约函数）不接受 session 参数——
+    归因是写侧 provenance，payload schema 形状冻结。"""
+    import inspect
+
+    params = list(inspect.signature(build_audit_event).parameters)
+    assert params == ["tool", "input_args", "result"]

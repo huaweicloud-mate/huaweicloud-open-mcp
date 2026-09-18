@@ -15,7 +15,7 @@
 
 一个开放的本地 [Model Context Protocol](https://modelcontextprotocol.io) 网关，把 code agent —— opencode、Codex、Cursor 以及任何支持 MCP 的客户端 —— 以自然语言连接到华为云。无需逐服务手写封装：Agent 逐步探索全量目录（300+ 产品、17000+ API），收窄到一次具体调用并执行，请求在本地完成签名。这是面向个人的本地化部署方案：网关完全运行在你自己的机器上——AK/SK 永不出本机。
 
-三种模式经 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘——本地计算工具，不需要凭证、不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合 / transform_data 整形落盘，仅聚合结果或产物元数据进入模型上下文。
+三种模式经 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘——本地计算工具，不需要凭证、不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合 / transform_data 整形落盘，仅聚合结果或产物元数据进入模型上下文。网关默认走 **stdio**（MCP 客户端拉起的本地形态）；`--transport http` 补充 **Streamable HTTP** 多客户端部署——见 [HTTP 传输（多会话）](#http-传输多会话)。
 
 ## 工作原理
 
@@ -217,6 +217,35 @@ curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-st
 - `GetObject` 预签发前执行一次 `HEAD` 元数据预检（对象字节仍不过网关）：信封附带 `expected_size` / `expected_etag` 供下载后核对；404（桶/对象不存在——如 FunctionGraph 函数源桶已删除）直接拒签并指引核对部署副本，避免签出一个只会下载 XML 错误页的 URL；其它预检异常降级放行（无预期字段，note 说明）。
 - 其余 OBS 接口（桶管理、tagging、ACL 等）照常经网关执行；需要 URL 时可显式传 `_presign=true`。非 OBS 产品传 `_presign` 会被拒绝。mock 模式继续走 mock 端点。
 
+## HTTP 传输（多会话）
+
+网关默认走 **stdio**——MCP 客户端拉起的本地形态。也可用单进程对外提供 **Streamable HTTP**，并发服务多个 MCP 客户端会话：
+
+```bash
+uvx huaweicloud-open-mcp --transport http                  # 监听 http://127.0.0.1:8000/mcp
+uvx huaweicloud-open-mcp --transport http --http-host 0.0.0.0 --http-port 9000
+```
+
+把任意支持 MCP 的客户端指向该端点：
+
+```json
+{ "mcpServers": { "huaweicloud": { "type": "http", "url": "http://127.0.0.1:8000/mcp" } } }
+```
+
+HTTP 档改变的——会话语义：
+
+- 每个客户端连接拥有独立的 policy 会话。经 `manage_policy`（直接或经 elicitation）授予的 `session` 档规则仅对本连接可见、对其它连接不可见；断开重连即新会话，不继承原授予；`once` 规则在授予会话内焚毁。`permanent` 规则照旧落策略文件，跨会话、跨重启共享。
+- 无 MCP 会话身份的请求（modern 单交换协议）无法写入 session 档授予——收到结构化拒绝，而非静默共享状态。
+- `GET /healthz` 供探针使用。审计事件（配置 `--audit-file` 时）携带 `session` 字段，把每次调用归因到其 MCP 会话；stdio 下审计输出与此前逐字节一致。
+- 闲置会话回收：30 分钟无 store 活动的会话桶被回收，任何授予在 24 小时绝对年龄后失效——持续工作的会话授予持续存活。
+
+安全口径：
+
+- 代码默认绑定 `127.0.0.1`（loopback 同时自动启用 SDK 的 DNS rebinding 防护）。容器部署在镜像或运行命令里置 `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0`——发布端口本身已是显式动作。绑定非 loopback 地址会打印告警：能达端口者即可使用本部署 AK/SK 身份执行；跨出可信网段请置于带 TLS/认证的反代之后。v1 不内置 HTTP 认证。
+- 不支持多 worker 进程（会话状态在进程内）。
+
+嵌入（ASGI）：`build_app(...).streamable_http_app()` 返回 Starlette app（lifespan 已接线 MCP session manager），可交给任意 ASGI runner（uvicorn/gunicorn）驱动。自行组合 HTTP 服务时，请在传给 `build_app` 的 args 里声明（`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`）以接好按会话隔离；以 stdio 声明的装配去组合 HTTP，无会话身份请求的 session 档授予会落入共享命名空间。
+
 ## 工具（openapi 模式）
 
 | 工具 | 职责 |
@@ -335,6 +364,10 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--mode <modes>` | `openapi` | 运行模式，逗号组合（`openapi`/`discover`/`data`，如 `openapi,data`；env `HUAWEICLOUD_MCP_MODE`） |
+| `--transport stdio\|http` | `stdio` | 传输层：stdio（缺省，客户端拉起的本地形态）或 `http`（Streamable HTTP，单进程服务多 MCP 会话；`streamable-http` 别名归一 `http`；非法值启动即失败；env `HUAWEICLOUD_MCP_TRANSPORT`） |
+| `--http-host <addr>` | `127.0.0.1` | HTTP 监听地址（loopback 自动启用 DNS rebinding 防护；非 loopback 告警——见 [HTTP 传输](#http-传输多会话)；env `HUAWEICLOUD_MCP_HTTP_HOST`） |
+| `--http-port <port>` | `8000` | HTTP 端口（env `HUAWEICLOUD_MCP_HTTP_PORT`） |
+| `--http-path <path>` | `/mcp` | HTTP MCP 端点路径，须以 `/` 开头（env `HUAWEICLOUD_MCP_HTTP_PATH`） |
 | `--mock` | off | `execute_api` 指向 API Explorer mock 端点（无需凭证） |
 | `--mock-base <url>` | — | mock 端点基础地址覆盖（env `HUAWEICLOUD_MCP_MOCK_BASE`） |
 | `--mock-passthrough` | off | mock 模式转发 execute 业务参数到端点（env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`） |
@@ -360,6 +393,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `HUAWEICLOUD_SDK_PROJECT_ID` | 可选；缺省自动解析 |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | 可选；为全局级服务预留（完整支持开发中） |
 | `HUAWEICLOUD_MCP_MODE` | 等价 `--mode` |
+| `HUAWEICLOUD_MCP_TRANSPORT` | 等价 `--transport` |
+| `HUAWEICLOUD_MCP_HTTP_HOST` / `HUAWEICLOUD_MCP_HTTP_PORT` / `HUAWEICLOUD_MCP_HTTP_PATH` | 等价 `--http-host` / `--http-port` / `--http-path` |
 | `HUAWEICLOUD_MCP_REGION` | 等价 `--region` |
 | `HUAWEICLOUD_MCP_MOCK` | 等价 `--mock`（`1`/`true`/`yes`） |
 | `HUAWEICLOUD_MCP_MOCK_BASE` | mock 端点基础地址覆盖 |

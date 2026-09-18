@@ -43,6 +43,45 @@ ENV_SERVER_CATALOG = "HUAWEICLOUD_MCP_SERVER_CATALOG"
 ENV_SERVER_CATALOG_URL = "HUAWEICLOUD_MCP_SERVER_CATALOG_URL"
 ENV_SESSION_IDLE_TIMEOUT = "HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT"
 ENV_MAX_SESSIONS = "HUAWEICLOUD_MCP_MAX_SESSIONS"
+ENV_TRANSPORT = "HUAWEICLOUD_MCP_TRANSPORT"
+ENV_HTTP_HOST = "HUAWEICLOUD_MCP_HTTP_HOST"
+ENV_HTTP_PORT = "HUAWEICLOUD_MCP_HTTP_PORT"
+ENV_HTTP_PATH = "HUAWEICLOUD_MCP_HTTP_PATH"
+
+DEFAULT_HTTP_HOST = "127.0.0.1"
+DEFAULT_HTTP_PORT = 8000
+DEFAULT_HTTP_PATH = "/mcp"
+
+# transport 归一表：stdio | http（streamable-http 别名归一 http；SSE 不提供）
+_TRANSPORT_ALIASES: dict[str, str] = {
+    "stdio": "stdio",
+    "http": "http",
+    "streamable-http": "http",
+    "streamable_http": "http",
+}
+
+
+def parse_transport(raw: str | None) -> str:
+    """transport 归一单点：非法值 ValueError fail-fast（有意区别于 parse_modes
+    的宽容回退——传输拓扑错误必须响，静默降级 stdio 会让编排器挂死在无端口上）。"""
+    value = (raw or "stdio").strip().lower()
+    normalized = _TRANSPORT_ALIASES.get(value)
+    if normalized is None:
+        raise ValueError(f"未知 transport: {raw!r}（可选 stdio/http/streamable-http）")
+    return normalized
+
+
+def _resolve_http_port(argv_value: int | None, env_value: str | None) -> int:
+    raw: int | str | None = argv_value if argv_value is not None else env_value
+    if raw is None:
+        return DEFAULT_HTTP_PORT
+    try:
+        port = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"HTTP 端口非法: {raw!r}（须为 1-65535 整数）") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError(f"HTTP 端口越界: {port}（须为 1-65535）")
+    return port
 
 
 @dataclass(frozen=True)
@@ -59,6 +98,10 @@ class Deployment:
     mock_passthrough: bool = False
     policy_file: str | None = None
     audit_file: str | None = None
+    transport: str = "stdio"          # 归一后 ∈ {"stdio", "http"}
+    http_host: str = DEFAULT_HTTP_HOST
+    http_port: int = DEFAULT_HTTP_PORT
+    http_path: str = DEFAULT_HTTP_PATH
     env: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -72,6 +115,16 @@ def resolve_deployment(args: argparse.Namespace,
     env_map = os.environ if env is None else env
     mock = getattr(args, "mock", None)
     mock_passthrough = getattr(args, "mock_passthrough", None)
+    transport = parse_transport(
+        getattr(args, "transport", None) or env_map.get(ENV_TRANSPORT))
+    http_host = (getattr(args, "http_host", None)
+                 or env_map.get(ENV_HTTP_HOST) or DEFAULT_HTTP_HOST)
+    http_port = _resolve_http_port(getattr(args, "http_port", None),
+                                   env_map.get(ENV_HTTP_PORT))
+    http_path = (getattr(args, "http_path", None)
+                 or env_map.get(ENV_HTTP_PATH) or DEFAULT_HTTP_PATH)
+    if not http_path.startswith("/"):
+        raise ValueError(f"--http-path 非法: {http_path!r}（须以 / 开头，如 /mcp）")
     return Deployment(
         mock=(mock if mock is not None
               else _env_flag(env_map.get(ENV_MOCK, ""))),
@@ -83,5 +136,9 @@ def resolve_deployment(args: argparse.Namespace,
                      or env_map.get(ENV_POLICY_FILE) or None),
         audit_file=(getattr(args, "audit_file", None)
                     or env_map.get(ENV_AUDIT_FILE) or None),
+        transport=transport,
+        http_host=http_host,
+        http_port=http_port,
+        http_path=http_path,
         env=env_map,
     )

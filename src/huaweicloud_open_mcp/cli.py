@@ -3,17 +3,42 @@
 import argparse
 import logging
 import os
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from common.deployment import ENV_ELICIT, ENV_LOG_LEVEL, ENV_MODE
+from common.deployment import (
+    ENV_ELICIT,
+    ENV_LOG_LEVEL,
+    ENV_MODE,
+    resolve_deployment,
+)
 from common.elicit import parse_elicit_mode
 from common.logconf import configure_logging
+
+if TYPE_CHECKING:
+    from mcp.server.mcpserver import MCPServer
 
 logger = logging.getLogger(__name__)
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 _MODES = ("openapi", "discover", "data")
+
+
+def run_transport(app: "MCPServer", args: argparse.Namespace,
+                  env: dict[str, str] | None = None) -> None:
+    """run 分派（internal seam，测试用记录型 app 替身）：传输 port 就是 SDK 的 run
+    （ADR-0003：不自建 TransportPort——两个真实 adapter 由 SDK 承载，自建过不了删除测试）。
+
+    stdio：与历史行为逐字节一致；http：SDK streamable-http 单进程多会话
+    （json_response/stateless/event_store 有意不暴露——stateless 无会话身份
+    会使 session 档授权无所附着，见 ADR-0003 决策 8）。
+    """
+    dep = resolve_deployment(args, env)
+    if dep.transport == "http":
+        app.run("streamable-http", host=dep.http_host, port=dep.http_port,
+                streamable_http_path=dep.http_path)
+    else:
+        app.run("stdio")
 
 
 def parse_modes(value: str | None, env: str | None = None) -> list[str]:
@@ -33,10 +58,28 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="huaweicloud-open-mcp",
-        description="华为云 Open MCP server（stdio）。openapi 直连华为云 API；discover 发现连接云端 MCP server。")
+        description="华为云 Open MCP server（stdio / Streamable HTTP）。"
+                    "openapi 直连华为云 API；discover 发现连接云端 MCP server。")
     parser.add_argument("--mode", default=None,
                         help="运行模式，可逗号组合混用（openapi/discover/data，"
                              "如 openapi,data；默认 openapi；环境变量 HUAWEICLOUD_MCP_MODE）")
+    parser.add_argument("--transport", default=None,
+                        help="传输层：stdio（缺省，MCP 客户端拉起的本地形态）或 "
+                             "http（Streamable HTTP 单进程多会话：session 档 policy "
+                             "按 MCP 连接会话隔离、会话互不可见；streamable-http "
+                             "别名归一 http；非法值启动即失败；"
+                             "环境变量 HUAWEICLOUD_MCP_TRANSPORT）")
+    parser.add_argument("--http-host", default=None,
+                        help="HTTP 监听地址（默认 127.0.0.1，loopback 自动启用 DNS "
+                             "rebinding 防护；容器部署经镜像层或环境变量置 0.0.0.0。"
+                             "非 loopback 绑定将告警：凭证是部署级 AK/SK，能达端口"
+                             "即能以该身份执行，跨主机部署应置于反代/TLS 之后；"
+                             "环境变量 HUAWEICLOUD_MCP_HTTP_HOST）")
+    parser.add_argument("--http-port", type=int, default=None,
+                        help="HTTP 监听端口（默认 8000；环境变量 HUAWEICLOUD_MCP_HTTP_PORT）")
+    parser.add_argument("--http-path", default=None,
+                        help="HTTP MCP 端点路径（默认 /mcp；须以 / 开头；"
+                             "环境变量 HUAWEICLOUD_MCP_HTTP_PATH）")
     parser.add_argument("--mock", action="store_true", default=None,
                         help="mock 模式：openapi 模式指向 API Explorer mock；discover 模式指向本地 stub")
     parser.add_argument("--mock-base", default=None,
@@ -120,7 +163,7 @@ def main() -> None:
     from huaweicloud_open_mcp.deployment import build_app
     app = build_app(modes, args, log_level=level_name, elicit_mode=elicit_mode)
 
-    app.run("stdio")
+    run_transport(app, args)
 
 
 if __name__ == "__main__":

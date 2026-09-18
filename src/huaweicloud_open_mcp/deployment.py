@@ -22,6 +22,7 @@ from mcp.server.mcpserver import MCPServer
 
 from common.audit import sink_from_path
 from common.deployment import resolve_deployment
+from common.sessions import SessionScopeMiddleware, current_session_key
 from safety.policy_store import PolicyStore
 
 if TYPE_CHECKING:
@@ -33,6 +34,33 @@ if TYPE_CHECKING:
     from mcp_openapi.service import ToolService
 
 logger = logging.getLogger("huaweicloud_open_mcp.deployment")
+
+HEALTHZ_PATH = "/healthz"
+
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+HTTP_TRANSPORT_NOTE = """\
+## 传输与会话边界（Streamable HTTP）
+
+本部署经 HTTP 单进程服务多客户端会话，safety policy 会话语义如下：
+- session 档规则仅对当前 MCP 连接会话生效——每个客户端连接持有独立的会话
+  命名空间，互相不可见；连接断开重连即新会话，原会话内的 session/once 授予
+  不随行（如需跨会话复用请由用户重新确认后再次授予）；
+- once 档规则在同会话内的下一次执行后焚毁；
+- temporary 档在 TTL 内对当前会话生效；
+- permanent 档写入策略文件，跨会话、跨重启生效。
+无 MCP 会话身份的请求（modern 单交换协议）无法授予 session/temporary/once
+档规则（结构化拒绝）；如需持久放行请改用 permanent 档。"""
+
+
+def _register_healthz(server: MCPServer) -> None:
+    """HTTP 档健康检查端点（K8s liveness/readiness 直用；custom_route 随
+    streamable_http_app 进路由表，零自研 HTTP 层）。"""
+    from starlette.responses import JSONResponse
+
+    @server.custom_route(HEALTHZ_PATH, methods=["GET"])
+    async def healthz(request: object) -> JSONResponse:
+        return JSONResponse({"ok": True, "transport": "http"})
 
 
 def merge_instructions(modes: list[str], hints: "Hints | None") -> str:
@@ -94,7 +122,14 @@ def build_app(modes: list[str], args: argparse.Namespace, *,
     - 单模式 instructions 与历史 builder 逐字节一致，混装经 merge_instructions。
     """
     dep = resolve_deployment(args, env)
-    shared_store = PolicyStore(dep.policy_file) if dep.policy_file else None
+    is_http = dep.transport == "http"
+    # 会话键控装配（ADR-0003）：session_fn 注入与 middleware 注册在 build_app
+    # 同一处配对——ambient 机制的知识单点；stdio 下 session_fn 恒 None =
+    # 历史单桶语义（逐字节回归由结构保证）。strict_sessions 仅 HTTP 档置位
+    # （I2 fail-closed：无会话身份的 session/temporary/once 写入结构化拒绝）。
+    shared_store = (PolicyStore(dep.policy_file, session_fn=current_session_key,
+                                strict_sessions=is_http)
+                    if dep.policy_file else None)
     shared_sink = sink_from_path(dep.audit_file)
 
     svc: ToolService | None = openapi_service
@@ -125,9 +160,27 @@ def build_app(modes: list[str], args: argparse.Namespace, *,
     hints = svc.config.hints if svc is not None else None
     instructions = (merge_instructions(modes, hints) if len(modes) > 1
                     else _mode_instructions(modes[0], hints))
+    if is_http:
+        # 传输会话边界说明只随 HTTP 档追加（stdio 文本逐字节不变，I7）
+        instructions = (instructions.rstrip("\n") + "\n\n"
+                        + HTTP_TRANSPORT_NOTE + "\n")
     server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
                        instructions=instructions,
                        log_level=log_level)  # type: ignore[arg-type]
+
+    # 会话身份 middleware 无条件注册（stdio/InMemory 下 pass-through None；
+    # 与上方 session_fn 注入构成单点配对，防装配漂移）
+    server.middleware.append(SessionScopeMiddleware())
+    if is_http:
+        _register_healthz(server)
+        logger.info("server transport: http host=%s port=%d path=%s "
+                    "strict_sessions=true", dep.http_host, dep.http_port,
+                    dep.http_path)
+        if dep.http_host not in _LOOPBACK_HOSTS:
+            logger.warning(
+                "HTTP 绑定非 loopback 地址 %s：明文 HTTP 且无认证，能达端口者"
+                "可以本部署 AK/SK 身份执行；建议置于反代/TLS 之后或保持 127.0.0.1",
+                dep.http_host)
 
     if svc is not None:
         from mcp_openapi.server import register_openapi_tools

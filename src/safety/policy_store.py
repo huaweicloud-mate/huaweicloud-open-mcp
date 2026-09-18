@@ -6,18 +6,30 @@
 - 内存 → 文件：add/remove 先校验、原子落盘（tmp + os.replace）、再刷新内存，
   静止态恒满足 memory == file。
 - 三档 scope + 一次性：permanent（文件真值源，跨重启）/ temporary（内存 overlay
-  + TTL，到期自动剪枝）/ session（内存 overlay，缺省档——本次 code agent 会话，
-  stdio 单进程下等价进程存活期）/ once（内存 overlay，用后即焚——authorize 首次
-  放行即焚毁）。
-  生效规则 = overlay（插入序）++ 文件规则，整体行序 first-match；overlay allow
-  穿透文件具体 deny 与兜底 deny（与落盘插位语义一致），overlay deny 可临时收紧。
-  overlay 仅内存态，重启即失；未配置路径（path=None）全档全拒（红线不变）。
+  + TTL，到期自动剪枝）/ session（内存 overlay，缺省档）/ once（内存 overlay，
+  用后即焚——authorize 首次放行即焚毁）。
+  生效规则 = 会话桶 overlay（插入序）++ 文件规则，整体行序 first-match；
+  overlay allow 穿透文件具体 deny 与兜底 deny（与落盘插位语义一致），
+  overlay deny 可临时收紧。overlay 仅内存态，重启即失；未配置路径（path=None）
+  全档全拒（红线不变）。
+- 会话键控（ADR-0003，HTTP 多会话隔离）：内存 overlay 按会话键分桶
+  （``_overlay``），``None`` 桶 = 历史命名空间（stdio 单会话语义，session_fn
+  缺省 ``lambda: None`` 时行为与单列表时代逐字一致）。互斥桶：任何评估点恰有
+  一个活跃桶（当前会话键的桶），他会话桶不可见（含 list_rules）；
+  once「下一次执行」界定为同会话内下一次 dispatch，焚毁限授予会话桶内；
+  remove 跨层序 = 当前会话桶 → 文件。桶仅写路径创建，读路径零分配。
+  strict_sessions=True（HTTP 装配按传输置位）时无会话键的 session/temporary/
+  once 写入结构化拒绝（I2 fail-closed：同时兜住 modern 协议无身份与 middleware
+  漏配两种 None）。
+- 桶回收（三重惰性 GC）：idle 超时 + 绝对年龄上限 + 桶数 cap（LRU 淘汰），
+  任一持锁操作触发；心跳 = 该会话的任何 store 操作。
 - 插入不变量：新 allow 规则插在首个会遮蔽它的 deny 规则之前
   （典型形态即 `*=deny` 兜底行之前），保证行序 first-match 语义下新增规则真实生效。
 - 运行时降级：运行期文件被写坏/短暂消失时沿用最近合法版本并记 WARNING；
   文件恢复合法后自动重新采纳。启动时急切加载，坏文件快速失败（与既有行为一致）。
 
-依赖边界：仅依赖标准库与本包 policy.py 纯函数，保持 safety 最底层零外部依赖。
+依赖边界：仅依赖标准库与本包 policy.py 纯函数，保持 safety 最底层零外部依赖
+（会话键经构造注入的 Callable 供给——ambient contextvar 的知识留在 common 层）。
 """
 
 import dataclasses
@@ -43,8 +55,24 @@ SCOPES: tuple[str, ...] = ("permanent", "temporary", "session", "once")
 DEFAULT_SCOPE = "session"
 DEFAULT_TTL_SECONDS = 3600
 
+# 会话桶三重 GC（ADR-0003 I6）：idle 无心跳回收 / 绝对年龄上限 / 桶数 cap。
+SESSION_IDLE_SECONDS = 1800
+SESSION_MAX_AGE_SECONDS = 86400
+MAX_SESSION_BUCKETS = 4096
+
+_STRICT_REASON = (
+    "当前请求缺少 MCP 会话身份，无法授予 {scope} 档规则"
+    "（HTTP 多会话部署拒绝无会话键的内存授予以防跨会话泄权）；"
+    "可改用 scope=permanent（落策略文件、跨会话生效），"
+    "或经完整 MCP initialize 握手建立会话后重试")
+
+_REMOVE_MISS_HINT = (
+    "（注意：会话档授予仅对授予会话可见；"
+    "若该规则来自先前会话，重连后的新会话无法移除它）")
+
 StatFn = Callable[[str], Any]
 TimeFn = Callable[[], float]
+SessionFn = Callable[[], str | None]
 
 
 @dataclass(frozen=True)
@@ -124,6 +152,14 @@ class _OverlayEntry:
     expire_at: float | None = None
 
 
+@dataclass
+class _SessionMeta:
+    """会话桶生命周期台账（仅非 None 键）：born 绝对年龄 / last_seen 心跳。"""
+
+    born: float
+    last_seen: float
+
+
 def _overlay_scope(entry: _OverlayEntry) -> str:
     """overlay 条目所属档位：once / temporary / session。"""
     if entry.rule.once:
@@ -133,17 +169,24 @@ def _overlay_scope(entry: _OverlayEntry) -> str:
 
 class PolicyStore:
     def __init__(self, path: str | None, *, stat_fn: StatFn | None = None,
-                 time_fn: TimeFn | None = None):
+                 time_fn: TimeFn | None = None,
+                 session_fn: SessionFn | None = None,
+                 strict_sessions: bool = False):
         self.path = path
         self._lock = threading.RLock()   # 序列化读改写与热重载，杜绝并发丢失更新
         self._stat_fn: StatFn = stat_fn or os.stat
         self._time_fn: TimeFn = time_fn or time.monotonic
+        self._session_fn: SessionFn = session_fn or (lambda: None)
+        self._strict = strict_sessions
         self._entries: list[str] | None = None
         self._is_json = False
         self._rules: tuple[safety_policy.PolicyRule, ...] = ()
         self._stamp: Any = None
         self._missing = False
-        self._overlay: list[_OverlayEntry] = []   # session/temporary 规则（评估时前置）
+        # 会话键 → 内存规则桶；None 桶 = 历史命名空间（stdio 语义）。
+        # 互斥桶：任何评估点恰有一个活跃桶（I1），桶仅写路径创建。
+        self._overlay: dict[str | None, list[_OverlayEntry]] = {None: []}
+        self._sessions: dict[str, _SessionMeta] = {}
         if path is not None:
             entries, is_json = _read_entries(path)          # 缺文件 → FileNotFoundError 快速失败
             rules = tuple(safety_policy.parse_policy(entries))  # 非法规则 → ValueError 快速失败
@@ -187,17 +230,80 @@ class PolicyStore:
         logger.info("safety policy 热重载完成 %s：%d 条规则", self.path, len(rules))
         self._apply(entries, is_json, rules, stamp)
 
+    def _current_key(self) -> str | None:
+        """当前会话键（RLock 内每公共方法求值恰好一次；空串归一 None；永不抛出）。"""
+        try:
+            key = self._session_fn()
+        except Exception:
+            return None
+        return key or None
+
+    def _bucket_entries(self, key: str | None) -> list[_OverlayEntry]:
+        """当前活跃桶（可能为空列表替身；不创建桶——读路径零分配）。"""
+        return self._overlay.get(key, [])
+
+    def _touch(self, key: str | None, now: float) -> None:
+        """会话心跳（仅非 None 键；桶存在才有台账）。"""
+        if key is not None and key in self._sessions:
+            self._sessions[key].last_seen = now
+
+    def _prune_expired(self, bucket: list[_OverlayEntry]) -> None:
+        """惰性剪枝：剔除当前桶内到期的 temporary 规则（取规则/新增前调用）。"""
+        now = self._time_fn()
+        kept = [e for e in bucket
+                if e.expire_at is None or e.expire_at > now]
+        if len(kept) != len(bucket):
+            logger.info("policy overlay 临时规则到期剪枝：%d 条",
+                        len(bucket) - len(kept))
+            bucket[:] = kept
+
+    def _prune_sessions(self) -> None:
+        """会话桶三重 GC（I6）：idle 无心跳 / 绝对年龄 / 桶数 cap（LRU 淘汰）。"""
+        if not self._sessions:
+            return
+        now = self._time_fn()
+        stale = [sid for sid, meta in self._sessions.items()
+                 if now - meta.last_seen > SESSION_IDLE_SECONDS
+                 or now - meta.born > SESSION_MAX_AGE_SECONDS]
+        for sid in stale:
+            reason = ("age" if now - self._sessions[sid].born > SESSION_MAX_AGE_SECONDS
+                      else "idle")
+            self._overlay.pop(sid, None)
+            del self._sessions[sid]
+            logger.info("policy session overlay 回收：会话 %s（%s）", sid, reason)
+        if len(self._sessions) > MAX_SESSION_BUCKETS:
+            self._evict_lru(len(self._sessions) - MAX_SESSION_BUCKETS)
+
+    def _evict_lru(self, count: int) -> None:
+        """LRU 淘汰最久未心跳的会话桶（内存卫生；被淘汰会话的授予失效，可重授）。"""
+        ordered = sorted(self._sessions.items(), key=lambda kv: kv[1].last_seen)
+        for sid, _meta in ordered[:count]:
+            self._overlay.pop(sid, None)
+            del self._sessions[sid]
+        logger.warning("policy session overlay LRU 淘汰 %d 个会话桶", count)
+
+    def _new_session_meta(self, key: str, now: float) -> None:
+        if key not in self._sessions:
+            self._sessions[key] = _SessionMeta(born=now, last_seen=now)
+        else:
+            self._sessions[key].last_seen = now
+
     # ---------- 对外接口 ----------
 
     def rules(self) -> tuple[safety_policy.PolicyRule, ...]:
-        """当前生效规则 = overlay（插入序）++ 文件规则，整体 first-match。
+        """当前生效规则 = 当前会话桶 overlay（插入序）++ 文件规则，整体 first-match。
 
-        触发热重载检查。未配置路径返回空元组（红线：未配置即全拒）。
+        触发热重载检查与三重 GC。未配置路径返回空元组（红线：未配置即全拒）。
         """
         with self._lock:
             self._refresh()
-            self._prune_expired()
-            overlay = tuple(entry.rule for entry in self._overlay)
+            key = self._current_key()
+            bucket = self._overlay.get(key)
+            if bucket is not None:
+                self._prune_expired(bucket)
+                self._touch(key, self._time_fn())
+            self._prune_sessions()
+            overlay = tuple(entry.rule for entry in self._bucket_entries(key))
             return overlay + self._rules
 
     def text(self) -> str:
@@ -211,13 +317,14 @@ class PolicyStore:
 
     def add_rule(self, line: str, *, scope: str | None = None,
                  ttl_seconds: int | None = None) -> MutationResult:
-        """新增一条规则，按 scope 分派：permanent 落盘，session/temporary 入内存 overlay。
+        """新增一条规则，按 scope 分派：permanent 落盘，session/temporary 入会话桶。
 
         scope=None 取缺省档 session（默认解析在本层，调用方零知识透传）。
         temporary 按 ttl_seconds（缺省 3600）到期，取规则时惰性剪枝。
-        幂等：同 scope 层内语义重复时直接成功且不改写状态。
+        幂等：同桶内语义重复时直接成功且不改写状态。
         插入位置保证新规则真实生效：置于首个会遮蔽它的 deny 规则之前
-        （overlay 内与文件内各自维护该不变量）。
+        （桶内与文件内各自维护该不变量）。
+        strict_sessions（HTTP 装配）下无会话键的内存档写入结构化拒绝（I2）。
         整个读-改-写临界区互斥：并发调用（MCP 工具并行派发）不丢更新。
         """
         scope = scope or DEFAULT_SCOPE
@@ -261,8 +368,27 @@ class PolicyStore:
     def _add_overlay(self, line: str, rule: safety_policy.PolicyRule,
                      scope: str, ttl_seconds: int | None) -> MutationResult:
         with self._lock:
-            self._prune_expired()
-            for entry in self._overlay:
+            self._prune_sessions()
+            key = self._current_key()
+            if self._strict and key is None:
+                logger.info("policy add_rule %s scope=%s -> deny（无会话键，strict_sessions）",
+                            line.strip(), scope)
+                return MutationResult(ok=False, scope=scope,
+                                      reason=_STRICT_REASON.format(scope=scope))
+            bucket = self._overlay.get(key)
+            if bucket is None:
+                if key is not None and len(self._sessions) >= MAX_SESSION_BUCKETS:
+                    self._prune_sessions()
+                    excess = len(self._sessions) - MAX_SESSION_BUCKETS + 1
+                    if excess > 0:                 # cap 强约束：为新桶腾位（LRU 淘汰）
+                        self._evict_lru(excess)
+                bucket = []
+                self._overlay[key] = bucket
+                assert key is not None
+                self._new_session_meta(key, self._time_fn())
+            self._prune_expired(bucket)
+            self._touch(key, self._time_fn())
+            for entry in bucket:
                 if _rule_key(entry.rule) == _rule_key(rule):
                     return MutationResult(ok=True, scope=scope, reason="规则已存在")
             expire_at = ((self._time_fn() + (ttl_seconds if ttl_seconds is not None
@@ -270,34 +396,27 @@ class PolicyStore:
                          if scope == "temporary" else None)
             if scope == "once":
                 rule = dataclasses.replace(rule, once=True)
-            pos = self._overlay_insert_position(rule)
-            self._overlay.insert(pos, _OverlayEntry(line=line.strip(), rule=rule,
-                                                    expire_at=expire_at))
+            pos = self._overlay_insert_position(bucket, rule)
+            bucket.insert(pos, _OverlayEntry(line=line.strip(), rule=rule,
+                                             expire_at=expire_at))
             logger.info("policy add_rule %s scope=%s -> ok", line.strip(), scope)
             return MutationResult(ok=True, scope=scope)
 
-    def _prune_expired(self) -> None:
-        """惰性剪枝：剔除到期的 temporary 规则（取规则/新增前调用）。"""
-        now = self._time_fn()
-        kept = [e for e in self._overlay
-                if e.expire_at is None or e.expire_at > now]
-        if len(kept) != len(self._overlay):
-            logger.info("policy overlay 临时规则到期剪枝：%d 条",
-                        len(self._overlay) - len(kept))
-            self._overlay = kept
-
-    def _overlay_insert_position(self, rule: safety_policy.PolicyRule) -> int:
-        """overlay 内插入点：首个「对探测字面量判 false」的 overlay 规则之前；无则末尾。"""
+    def _overlay_insert_position(self, bucket: list[_OverlayEntry],
+                                 rule: safety_policy.PolicyRule) -> int:
+        """桶内插入点：首个「对探测字面量判 false」的 overlay 规则之前；无则末尾。"""
         probe_product, probe_api = _probe_args(rule)
-        for i, entry in enumerate(self._overlay):
+        for i, entry in enumerate(bucket):
             if _shadows(entry.rule, probe_product, probe_api):
                 return i
-        return len(self._overlay)
+        return len(bucket)
 
     def remove_rule(self, line: str) -> MutationResult:
-        """删除首个语义匹配的规则：先内存 overlay 后策略文件；scope 回报删除层。
+        """删除首个语义匹配的规则：先当前会话桶后策略文件；scope 回报删除层。
 
-        与 add_rule 共用同一把锁：并发增删互不覆盖。找不到匹配返回失败且状态不动。
+        与 add_rule 共用同一把锁：并发增删互不覆盖。不触他会话桶（I5）；
+        未命中且当前为 HTTP 会话时附「先前会话」提示（重连后新会话无法移除
+        旧会话授予）。找不到匹配返回失败且状态不动。
         """
         if self.path is None or self._entries is None:
             return MutationResult(ok=False, reason=NOT_CONFIGURED_REASON)
@@ -307,14 +426,21 @@ class PolicyStore:
             return MutationResult(ok=False, reason=f"规则格式非法：{exc}")
         with self._lock:
             self._refresh()
-            self._prune_expired()
+            key = self._current_key()
+            bucket = self._overlay.get(key)
+            if bucket is not None:
+                self._prune_expired(bucket)
+                self._touch(key, self._time_fn())
+            self._prune_sessions()
             target = _rule_key(rule)
-            for i, entry in enumerate(self._overlay):
-                if _rule_key(entry.rule) == target:
-                    scope = _overlay_scope(entry)
-                    del self._overlay[i]
-                    logger.info("policy remove_rule %s scope=%s -> ok", line.strip(), scope)
-                    return MutationResult(ok=True, scope=scope)
+            if bucket is not None:
+                for i, entry in enumerate(bucket):
+                    if _rule_key(entry.rule) == target:
+                        scope = _overlay_scope(entry)
+                        del bucket[i]
+                        logger.info("policy remove_rule %s scope=%s -> ok",
+                                    line.strip(), scope)
+                        return MutationResult(ok=True, scope=scope)
             assert self._entries is not None
             for i in _semantic_positions(self._entries):
                 parsed = safety_policy.parse_policy([self._entries[i]])
@@ -326,19 +452,26 @@ class PolicyStore:
                         return MutationResult(ok=False, reason=error)
                     logger.info("policy remove_rule %s scope=permanent -> ok", line.strip())
                     return MutationResult(ok=True, scope="permanent")
-            return MutationResult(ok=False, reason="未找到匹配的规则")
+            reason = "未找到匹配的规则" + (_REMOVE_MISS_HINT if key is not None else "")
+            return MutationResult(ok=False, reason=reason)
 
     def list_rules(self) -> list[RuleInfo]:
-        """规则的结构化视图（评估序）：overlay（session/temporary）前置，文件规则随后。
+        """规则的结构化视图（评估序）：当前会话桶（session/temporary）前置，文件规则随后。
 
-        temporary 的 expires_in 为剩余秒；其余 None。未配置路径返回空列表。
+        他会话桶不可见（I3 最小知识）。temporary 的 expires_in 为剩余秒；
+        其余 None。未配置路径返回空列表。
         """
         with self._lock:
             self._refresh()
-            self._prune_expired()
+            key = self._current_key()
+            bucket = self._overlay.get(key)
+            if bucket is not None:
+                self._prune_expired(bucket)
+                self._touch(key, self._time_fn())
+            self._prune_sessions()
             now = self._time_fn()
             infos: list[RuleInfo] = []
-            for entry in self._overlay:
+            for entry in self._bucket_entries(key):
                 expires_in = (max(0, int(entry.expire_at - now))
                               if entry.expire_at is not None else None)
                 infos.append(RuleInfo(line=entry.line, scope=_overlay_scope(entry),
@@ -359,19 +492,27 @@ class PolicyStore:
         调用顺序约束：早检 check 先行（廉价拒绝，元数据拉取之前）；本方法须在
         每次 dispatch 尝试前恰好调用一次——check 与 authorize 之间 once 规则
         被并发消费时，本方法落 deny（并发下恰一个请求放行）。
+        评估域 = 当前会话桶 ++ 文件规则（互斥桶，I1）；once 焚毁限当前桶（I4）。
         deny 路径永不焚毁；未配置路径恒 deny（红线）。
         """
         if self.path is None:
             return safety_policy.check(None, product, api)
         with self._lock:
             self._refresh()
-            self._prune_expired()
-            rules = tuple(entry.rule for entry in self._overlay) + self._rules
+            key = self._current_key()
+            bucket = self._overlay.get(key)
+            if bucket is not None:
+                self._prune_expired(bucket)
+                self._touch(key, self._time_fn())
+            self._prune_sessions()
+            rules = (tuple(entry.rule for entry in self._bucket_entries(key))
+                     + self._rules)
             hit = safety_policy.match_first(rules, product, api)
             if hit is None or not hit.allow:
                 return safety_policy.check(rules, product, api)
             if hit.once:
-                self._overlay = [e for e in self._overlay if e.rule is not hit]
+                live = self._bucket_entries(key)
+                live[:] = [e for e in live if e.rule is not hit]
                 logger.info("policy authorize %s:%s once 规则已消费", product, api)
             return None
 
@@ -379,19 +520,27 @@ class PolicyStore:
         """authorize 的 server 规则版（discover call_tool / connect 前调用）。
 
         契约同 authorize：None=放行；str=拒绝原因（复用 check_server 文案）。
-        connect（tool=None）与调用级（tool 非空）once 规则均首次放行即焚毁。
+        connect（tool=None）与调用级（tool 非空）once 规则均首次放行即焚毁
+        （焚毁限当前会话桶，I4）。
         """
         if self.path is None:
             return safety_policy.check_server(None, server, tool)
         with self._lock:
             self._refresh()
-            self._prune_expired()
-            rules = tuple(entry.rule for entry in self._overlay) + self._rules
+            key = self._current_key()
+            bucket = self._overlay.get(key)
+            if bucket is not None:
+                self._prune_expired(bucket)
+                self._touch(key, self._time_fn())
+            self._prune_sessions()
+            rules = (tuple(entry.rule for entry in self._bucket_entries(key))
+                     + self._rules)
             hit = safety_policy.match_server_first(rules, server, tool)
             if hit is None or not hit.allow:
                 return safety_policy.check_server(rules, server, tool)
             if hit.once:
-                self._overlay = [e for e in self._overlay if e.rule is not hit]
+                live = self._bucket_entries(key)
+                live[:] = [e for e in live if e.rule is not hit]
                 logger.info("policy authorize_server %s:%s once 规则已消费",
                             server, tool or "-")
             return None
@@ -453,6 +602,8 @@ def manage_policy_ops(store: PolicyStore | None, action: str,
     （NOT_CONFIGURED_REASON，消灭两模式文案漂移）。规则语法与四档 scope
     知识归 PolicyStore.add_rule/remove_rule，本函数仅承载工具信封语义
     （删除测试：信封语义消失则须在两模式各自重建——47 行 ×2 重复即此）。
+    会话键控完全 ambient（ADR-0003）：store 经构造注入的 session_fn 自取
+    当前会话键，本函数与两模式 service 签名零变化。
     """
     action = (action or "").strip().lower()
     logger.info("manage_policy action=%s line=%s scope=%s ttl=%s",

@@ -1,4 +1,4 @@
-"""审计 NDJSON 写入器（第1层，零内部依赖）。
+"""审计 NDJSON 写入器（第1层，零外部依赖）。
 
 AuditSink 是审计持久化的接缝：生产用 NdjsonAuditSink（每事件一行 JSON、
 best-effort 永不抛出），未配置审计用 NullAuditSink，测试注入内存替身。
@@ -6,6 +6,11 @@ sink 只拥有信封（ts）与持久化语义；事件 payload 的 schema 由
 build_audit_event 定义（对 verifier 的已发布契约：tool/input/ok）。
 audited 装饰器供各模式 service 复用（openapi/discover/data 同构），
 契约：self.config.audit_sink 提供 sink（None=零开销跳过）。
+
+会话归因（ADR-0003，HTTP 多会话）：_audit_write 在写事件单点从 ambient
+contextvar（common.sessions）读会话键——键非 None 时事件顶层附加 ``session``
+字段（多会话部署的「谁授予/谁执行」归因；input 快照纯净性不动）；stdio /
+InMemoryTransport 恒 None 恒不加键（NDJSON 逐字节回归红线）。
 """
 
 import functools
@@ -17,6 +22,8 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
+
+from common.sessions import current_session_key
 
 logger = logging.getLogger("common.audit")
 
@@ -64,11 +71,19 @@ def audited(fn: _F) -> _F:
 
 def _audit_write(host: Any, tool: str, input_args: Mapping[str, Any],
                  result: Any) -> None:
-    """经宿主 config.audit_sink 记一条事件（best-effort，未配置 sink 零开销跳过）。"""
+    """经宿主 config.audit_sink 记一条事件（best-effort，未配置 sink 零开销跳过）。
+
+    会话归因在此单点：键非 None 时事件顶层加 ``session``（写侧 provenance，
+    不进 input 快照、不进 build_audit_event 契约形状）；None 恒省略。
+    """
     sink = getattr(host.config, "audit_sink", None)
     if sink is None:
         return
-    sink.record(build_audit_event(tool, input_args, result))
+    event = build_audit_event(tool, input_args, result)
+    session = current_session_key()
+    if session is not None:
+        event["session"] = session
+    sink.record(event)
 
 
 class AuditSink(Protocol):
