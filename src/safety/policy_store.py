@@ -83,6 +83,25 @@ class MutationResult:
 
 
 @dataclass(frozen=True)
+class BatchMutationResult:
+    """批量变更结果：results 与入参行对齐（逐条 MutationResult）。
+
+    reason 非空 = 整批拒绝（fail-fast / 未配置 / strict / 参数非法），
+    此时 results 为空且状态未动；reason 为空时逐条结果见 results
+    （条目 ok=False = 该行未应用，如 remove 未命中）。
+    ok = 未整批拒绝且全部条目成功。
+    """
+
+    results: tuple[MutationResult, ...]
+    reason: str | None = None
+    scope: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.reason is None and all(r.ok for r in self.results)
+
+
+@dataclass(frozen=True)
 class RuleInfo:
     """规则的结构化视图（评估序）：scope 标明所属档位。"""
 
@@ -365,6 +384,25 @@ class PolicyStore:
             logger.info("policy add_rule %s scope=permanent -> ok", line.strip())
             return MutationResult(ok=True, scope="permanent")
 
+    def _ensure_bucket(self, key: str | None) -> list[_OverlayEntry]:
+        """取当前会话桶，缺失则创建（含桶数 cap 腾位，LRU 淘汰）；返回活跃桶。
+
+        None 桶（stdio 命名空间）构造即存在、永不被 GC，调用时恒命中。
+        """
+        bucket = self._overlay.get(key)
+        if bucket is not None:
+            return bucket
+        if key is not None and len(self._sessions) >= MAX_SESSION_BUCKETS:
+            self._prune_sessions()
+            excess = len(self._sessions) - MAX_SESSION_BUCKETS + 1
+            if excess > 0:                     # cap 强约束：为新桶腾位（LRU 淘汰）
+                self._evict_lru(excess)
+        bucket = []
+        self._overlay[key] = bucket
+        if key is not None:
+            self._new_session_meta(key, self._time_fn())
+        return bucket
+
     def _add_overlay(self, line: str, rule: safety_policy.PolicyRule,
                      scope: str, ttl_seconds: int | None) -> MutationResult:
         with self._lock:
@@ -375,17 +413,7 @@ class PolicyStore:
                             line.strip(), scope)
                 return MutationResult(ok=False, scope=scope,
                                       reason=_STRICT_REASON.format(scope=scope))
-            bucket = self._overlay.get(key)
-            if bucket is None:
-                if key is not None and len(self._sessions) >= MAX_SESSION_BUCKETS:
-                    self._prune_sessions()
-                    excess = len(self._sessions) - MAX_SESSION_BUCKETS + 1
-                    if excess > 0:                 # cap 强约束：为新桶腾位（LRU 淘汰）
-                        self._evict_lru(excess)
-                bucket = []
-                self._overlay[key] = bucket
-                assert key is not None
-                self._new_session_meta(key, self._time_fn())
+            bucket = self._ensure_bucket(key)
             self._prune_expired(bucket)
             self._touch(key, self._time_fn())
             for entry in bucket:
@@ -410,6 +438,109 @@ class PolicyStore:
             if _shadows(entry.rule, probe_product, probe_api):
                 return i
         return len(bucket)
+
+    def add_rules(self, lines: list[str], *, scope: str | None = None,
+                  ttl_seconds: int | None = None) -> BatchMutationResult:
+        """批量新增规则：整批共享一个 scope/ttl_seconds，一次锁内完成。
+
+        fail-fast：任一行非法（空白/格式错误）→ 整批拒绝（reason 指明序号），
+        磁盘与 overlay 一条不应用。批内语义重复行幂等报「规则已存在」。
+        permanent 整批在 working copy 上逐条计算插入位（最终行序 ≡ N 次顺序
+        单条 add）并单次原子落盘；session/temporary/once 整批一次 strict 检查
+        后入当前会话桶。参数校验口径与 add_rule 逐字一致。
+        """
+        scope = scope or DEFAULT_SCOPE
+        if scope not in SCOPES:
+            return BatchMutationResult(
+                results=(), scope=scope,
+                reason=f"未知 scope: {scope}（可选 permanent/temporary/session/once）")
+        if ttl_seconds is not None and scope != "temporary":
+            return BatchMutationResult(
+                results=(), scope=scope, reason="ttl_seconds 仅支持 scope=temporary")
+        if ttl_seconds is not None and ttl_seconds <= 0:
+            return BatchMutationResult(
+                results=(), scope=scope, reason="ttl_seconds 必须为正整数（秒）")
+        if not lines:
+            return BatchMutationResult(results=(), scope=scope,
+                                       reason="批量为空（至少提供一条规则文本）")
+        if self.path is None or self._entries is None:
+            return BatchMutationResult(results=(), scope=scope,
+                                       reason=NOT_CONFIGURED_REASON)
+        texts = [line.strip() for line in lines]
+        rules: list[safety_policy.PolicyRule] = []
+        for i, text in enumerate(texts, 1):
+            if not text:
+                return BatchMutationResult(results=(), scope=scope,
+                                           reason=f"第 {i} 条规则为空")
+            try:
+                parsed = safety_policy.parse_policy([text])
+            except ValueError as exc:
+                return BatchMutationResult(
+                    results=(), scope=scope, reason=f"第 {i} 条规则格式非法：{exc}")
+            if not parsed:                     # 注释行等不可解析为规则的输入
+                return BatchMutationResult(
+                    results=(), scope=scope, reason=f"第 {i} 条规则格式非法：{text!r}")
+            rules.append(parsed[0])
+        if scope == "permanent":
+            return self._add_permanent_batch(texts, rules)
+        return self._add_overlay_batch(texts, rules, scope, ttl_seconds)
+
+    def _add_permanent_batch(self, texts: list[str],
+                             rules: list[safety_policy.PolicyRule]) -> BatchMutationResult:
+        with self._lock:
+            self._refresh()
+            assert self._entries is not None
+            new_entries = list(self._entries)
+            added_keys = {_rule_key(r) for r in self._rules}
+            results: list[MutationResult] = []
+            for text, rule in zip(texts, rules):
+                key = _rule_key(rule)
+                if key in added_keys:
+                    results.append(MutationResult(ok=True, scope="permanent",
+                                                  reason="规则已存在"))
+                    continue
+                pos = self._insert_position(new_entries, rule)
+                new_entries.insert(pos, text)
+                added_keys.add(key)
+                results.append(MutationResult(ok=True, scope="permanent"))
+            error = self._persist(new_entries)
+            if error is not None:
+                return BatchMutationResult(results=(), scope="permanent", reason=error)
+            logger.info("policy add_rules %d 条 scope=permanent -> ok", len(texts))
+            return BatchMutationResult(results=tuple(results), scope="permanent")
+
+    def _add_overlay_batch(self, texts: list[str],
+                           rules: list[safety_policy.PolicyRule],
+                           scope: str, ttl_seconds: int | None) -> BatchMutationResult:
+        with self._lock:
+            self._prune_sessions()
+            key = self._current_key()
+            if self._strict and key is None:
+                logger.info("policy add_rules %d 条 scope=%s -> deny（无会话键，"
+                            "strict_sessions）", len(texts), scope)
+                return BatchMutationResult(
+                    results=(), scope=scope,
+                    reason=_STRICT_REASON.format(scope=scope))
+            bucket = self._ensure_bucket(key)
+            self._prune_expired(bucket)
+            self._touch(key, self._time_fn())
+            expire_at = ((self._time_fn() + (ttl_seconds if ttl_seconds is not None
+                                             else DEFAULT_TTL_SECONDS))
+                         if scope == "temporary" else None)
+            results: list[MutationResult] = []
+            for text, rule in zip(texts, rules):
+                if scope == "once":
+                    rule = dataclasses.replace(rule, once=True)
+                if any(_rule_key(entry.rule) == _rule_key(rule) for entry in bucket):
+                    results.append(MutationResult(ok=True, scope=scope,
+                                                  reason="规则已存在"))
+                    continue
+                pos = self._overlay_insert_position(bucket, rule)
+                bucket.insert(pos, _OverlayEntry(line=text, rule=rule,
+                                                 expire_at=expire_at))
+                results.append(MutationResult(ok=True, scope=scope))
+            logger.info("policy add_rules %d 条 scope=%s -> ok", len(texts), scope)
+            return BatchMutationResult(results=tuple(results), scope=scope)
 
     def remove_rule(self, line: str) -> MutationResult:
         """删除首个语义匹配的规则：先当前会话桶后策略文件；scope 回报删除层。
@@ -454,6 +585,63 @@ class PolicyStore:
                     return MutationResult(ok=True, scope="permanent")
             reason = "未找到匹配的规则" + (_REMOVE_MISS_HINT if key is not None else "")
             return MutationResult(ok=False, reason=reason)
+
+    def remove_rules(self, lines: list[str]) -> BatchMutationResult:
+        """批量删除规则：逐条尽力而为——每行先当前会话桶后文件（与单条跨层序
+        一致），文件层删除合并为单次落盘。
+
+        未命中/格式非法记失败项（ok=False），其余行照常应用；批量内同一目标
+        两行 = 首行命中、次行未命中（顺序语义）。reason 非空仅为整批拒绝
+        （未配置/批量为空）。
+        """
+        if self.path is None or self._entries is None:
+            return BatchMutationResult(results=(), reason=NOT_CONFIGURED_REASON)
+        if not lines:
+            return BatchMutationResult(results=(), reason="批量为空（至少提供一条规则文本）")
+        with self._lock:
+            self._refresh()
+            key = self._current_key()
+            bucket = self._overlay.get(key)
+            if bucket is not None:
+                self._prune_expired(bucket)
+                self._touch(key, self._time_fn())
+            self._prune_sessions()
+            new_entries = list(self._entries)
+            results: list[MutationResult] = []
+            for line in lines:
+                results.append(self._remove_one(
+                    line, key, bucket, new_entries))
+            if new_entries != list(self._entries):
+                error = self._persist(new_entries)
+                if error is not None:
+                    return BatchMutationResult(results=(), reason=error)
+            return BatchMutationResult(results=tuple(results))
+
+    def _remove_one(self, line: str, key: str | None,
+                    bucket: list[_OverlayEntry] | None,
+                    new_entries: list[str]) -> MutationResult:
+        """remove_rules 的单行语义（对 working copy 操作，不独立落盘）。"""
+        try:
+            rule = safety_policy.parse_policy([line])[0]
+        except ValueError as exc:
+            return MutationResult(ok=False, reason=f"规则格式非法：{exc}")
+        target = _rule_key(rule)
+        if bucket is not None:
+            for i, entry in enumerate(bucket):
+                if _rule_key(entry.rule) == target:
+                    scope = _overlay_scope(entry)
+                    del bucket[i]
+                    logger.info("policy remove_rules %s scope=%s -> ok",
+                                line.strip(), scope)
+                    return MutationResult(ok=True, scope=scope)
+        for idx in _semantic_positions(new_entries):
+            parsed = safety_policy.parse_policy([new_entries[idx]])
+            if parsed and _rule_key(parsed[0]) == target:
+                del new_entries[idx]
+                logger.info("policy remove_rules %s scope=permanent -> ok", line.strip())
+                return MutationResult(ok=True, scope="permanent")
+        reason = "未找到匹配的规则" + (_REMOVE_MISS_HINT if key is not None else "")
+        return MutationResult(ok=False, reason=reason)
 
     def list_rules(self) -> list[RuleInfo]:
         """规则的结构化视图（评估序）：当前会话桶（session/temporary）前置，文件规则随后。
@@ -592,22 +780,36 @@ class PolicyStore:
         return None
 
 
+def _result_item(line: str, result: MutationResult) -> dict[str, Any]:
+    """批量信封的单条结果：line 原样快照 + ok + 可选 scope/reason。"""
+    item: dict[str, Any] = {"line": line, "ok": result.ok}
+    if result.scope:
+        item["scope"] = result.scope
+    if result.reason:
+        item["reason"] = result.reason
+    return item
+
+
 def manage_policy_ops(store: PolicyStore | None, action: str,
-                      line: str | None = None, scope: str | None = None,
+                      line: str | list[str] | None = None, scope: str | None = None,
                       ttl_seconds: int | None = None) -> dict[str, Any]:
     """manage_policy 工具信封（openapi/discover 两模式共用单一实现）。
 
-    action 归一、store 分派（list/add/remove）、结果信封
-    （ok/action/scope?/reason?/policy）与日志内聚于此；store=None 时拒绝
-    （NOT_CONFIGURED_REASON，消灭两模式文案漂移）。规则语法与四档 scope
-    知识归 PolicyStore.add_rule/remove_rule，本函数仅承载工具信封语义
-    （删除测试：信封语义消失则须在两模式各自重建——47 行 ×2 重复即此）。
+    action 归一、store 分派（list/add/remove）、结果信封与日志内聚于此；
+    store=None 时拒绝（NOT_CONFIGURED_REASON，消灭两模式文案漂移）。
+    规则语法与四档 scope 知识归 PolicyStore.add_rule/remove_rule（及其批量
+    对应 add_rules/remove_rules），本函数仅承载工具信封语义（删除测试：
+    信封语义消失则须在两模式各自重建——47 行 ×2 重复即此）。
+    入参形状决定信封形状：line 为 str = 单条信封（ok/action/scope?/reason?/policy，
+    历史契约逐字段不变）；line 为 list[str] = 批量信封（附加 results 逐条结果，
+    顶层 ok = 全部条目成功）；空数组/全空串按缺 line 拒绝。
     会话键控完全 ambient（ADR-0003）：store 经构造注入的 session_fn 自取
     当前会话键，本函数与两模式 service 签名零变化。
     """
     action = (action or "").strip().lower()
     logger.info("manage_policy action=%s line=%s scope=%s ttl=%s",
-                action, line or "-", scope or "-", ttl_seconds)
+                action, line if isinstance(line, list) else (line or "-"),
+                scope or "-", ttl_seconds)
     if store is None:
         return {"ok": False, "reason": NOT_CONFIGURED_REASON}
     if action == "list":
@@ -617,7 +819,30 @@ def manage_policy_ops(store: PolicyStore | None, action: str,
                           for r in store.list_rules()]}
     if action not in ("add", "remove"):
         return {"ok": False, "reason": f"未知 action: {action}（可选 list/add/remove）"}
-    rule_text = (line or "").strip()
+    if isinstance(line, list):
+        lines = [str(x) for x in line]
+        if not any(x.strip() for x in lines):
+            return {"ok": False, "action": action, "results": [],
+                    "reason": f"{action} 需要提供 line 参数（规则文本）"}
+        if action == "remove":
+            if scope is not None or ttl_seconds is not None:
+                return {"ok": False, "action": action, "results": [], "reason": (
+                    "remove 不接受 scope/ttl_seconds 参数"
+                    "（跨层匹配：先会话/临时后文件，首个语义命中移除）")}
+            batch = store.remove_rules(lines)
+        else:
+            batch = store.add_rules(lines, scope=scope, ttl_seconds=ttl_seconds)
+        logger.info("manage_policy %s result=%s", action, "ok" if batch.ok else "deny")
+        out: dict[str, Any] = {"ok": batch.ok, "action": action,
+                               "results": [_result_item(ln, r)
+                                           for ln, r in zip(lines, batch.results)]}
+        if batch.scope:
+            out["scope"] = batch.scope
+        if batch.reason:
+            out["reason"] = batch.reason
+        out["policy"] = store.text()
+        return out
+    rule_text = line.strip() if isinstance(line, str) else ""
     if not rule_text:
         return {"ok": False, "reason": f"{action} 需要提供 line 参数（规则文本）"}
     if action == "remove":
@@ -629,7 +854,7 @@ def manage_policy_ops(store: PolicyStore | None, action: str,
     else:
         result = store.add_rule(rule_text, scope=scope, ttl_seconds=ttl_seconds)
     logger.info("manage_policy %s result=%s", action, "ok" if result.ok else "deny")
-    out: dict[str, Any] = {"ok": result.ok, "action": action}
+    out = {"ok": result.ok, "action": action}
     if result.scope:
         out["scope"] = result.scope
     if result.reason:

@@ -123,7 +123,7 @@ class DiscoverService:
             coarse_rule=(safety_policy.grant_server_rule(server, "*")
                          if tool is not None else None))
 
-    def manage_policy(self, action: str, line: str | None = None,
+    def manage_policy(self, action: str, line: str | list[str] | None = None,
                       scope: str | None = None,
                       ttl_seconds: int | None = None) -> dict[str, Any]:
         """管理 safety policy（list/add/remove），改动即时生效无需重启。
@@ -133,6 +133,8 @@ class DiscoverService:
         会话，stdio 单进程下等价进程存活期，重启即失；非远端连接会话，断开/回收
         后授权仍在）/ once（内存，一次性——首次放行即焚毁）。
         remove 跨层先 overlay 后文件并回报 scope；不接受 scope/ttl_seconds。
+        line 支持传字符串数组批量 add/remove（整批共享 scope，add 任一行非法
+        整批不应用；信封附加 results 逐条结果）。
         安全约定：调用方（Agent）应先经交互式问询（如 question 工具）向用户
         确认再 add/remove；审计日志强制记录。
         信封语义委托 safety.policy_store.manage_policy_ops（两模式单一实现）。

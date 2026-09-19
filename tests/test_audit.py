@@ -190,6 +190,18 @@ def test_service_audits_manage_policy_without_store():
                             "ok": False}]
 
 
+def test_service_audits_manage_policy_batch_line_snapshot():
+    """批量 line 数组原样进 input 快照；payload 契约 {tool, input, ok} 不变。"""
+    sink = MemorySink()
+    service = ToolService(config=ServiceConfig(audit_sink=sink))
+    out = service.manage_policy("add", line=["ECS:*=allow", "OBS:GetObject=allow"])
+    assert out["ok"] is False       # 未配置 policy store → 拒绝
+    assert sink.events == [{"tool": "manage_policy",
+                            "input": {"action": "add",
+                                      "line": ["ECS:*=allow", "OBS:GetObject=allow"]},
+                            "ok": False}]
+
+
 def test_service_audits_exception_path():
     class BoomStore(MemoryStore):
         def products(self):

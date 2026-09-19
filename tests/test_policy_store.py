@@ -640,6 +640,225 @@ def test_concurrent_removes_all_applied(tmp_path):
     assert store.rules() and len(store.rules()) == 2   # 仅剩 ECS allow + * deny
 
 
+# ---------- 批量 add（add_rules：整批 fail-fast，单次落盘） ----------
+
+def test_add_rules_defaults_to_session_overlay(tmp_path):
+    """批量缺省 scope=session：整批入 overlay，文件字节不动，重启等价即失。"""
+    p = tmp_path / "policy.txt"
+    before = "*=deny\n"
+    p.write_text(before, encoding="utf-8")
+    store = make_store(p)
+
+    out = store.add_rules(["OBS:GetObject=allow", "ECS:*List*=allow"])
+    assert out.ok is True
+    assert out.scope == "session"
+    assert out.reason is None
+    assert [r.ok for r in out.results] == [True, True]
+    assert all(r.scope == "session" for r in out.results)
+    assert read_disk(p) == before
+    assert policy.evaluate(store.rules(), "OBS", "GetObject") is True
+    assert policy.evaluate(store.rules(), "ECS", "ListImages") is True
+    other = make_store(p)                          # 重启等价：新实例无 overlay
+    assert policy.evaluate(other.rules(), "OBS", "GetObject") is False
+
+
+def test_add_rules_permanent_matches_sequential_singles(tmp_path):
+    """独立真值：批量 permanent 的最终落盘行序 ≡ 同一文件上 N 次顺序单条 add。"""
+    seed = "ECS:*List*=allow\n*=deny\n"
+    p = tmp_path / "policy.txt"
+    p.write_text(seed, encoding="utf-8")
+    twin = tmp_path / "twin.txt"
+    twin.write_text(seed, encoding="utf-8")
+    batch_store = make_store(p)
+    seq_store = make_store(twin)
+
+    lines = ["OBS:PutObject=allow", "ECS:*=deny", "OBS:GetObject=allow", "VPC:*=allow"]
+    out = batch_store.add_rules(lines, scope="permanent")
+    assert out.ok is True
+    for line in lines:
+        assert seq_store.add_rule(line, scope="permanent").ok is True
+
+    assert semantic_lines(p) == semantic_lines(twin)   # 行序逐行一致
+    other = make_store(p)                              # 真值在文件
+    assert policy.evaluate(other.rules(), "OBS", "GetObject") is True
+
+
+def test_add_rules_fail_fast_rejects_whole_batch(tmp_path):
+    """任一行非法 → 整批拒绝（reason 指明序号），磁盘与 overlay 一条不应用。"""
+    p = tmp_path / "policy.txt"
+    before = "*=deny\n"
+    p.write_text(before, encoding="utf-8")
+    store = make_store(p)
+
+    out = store.add_rules(["ECS:GetServer=allow", "not a rule"], scope="permanent")
+    assert out.ok is False
+    assert "第 2 条" in (out.reason or "")
+    assert out.results == ()
+    assert read_disk(p) == before
+    assert policy.evaluate(store.rules(), "ECS", "GetServer") is False
+
+    out2 = store.add_rules(["ECS:GetServer=allow", "  "])   # 空白行同样整批拒绝
+    assert out2.ok is False and "第 2 条" in (out2.reason or "")
+    assert policy.evaluate(store.rules(), "ECS", "GetServer") is False
+
+
+def test_add_rules_in_batch_duplicate_idempotent(tmp_path):
+    """批内语义重复：第二条报「规则已存在」仍 ok，overlay 仅入一条。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+
+    out = store.add_rules(["ECS:GetServer=allow", "ecs:getserver=allow"])
+    assert out.ok is True
+    assert [r.reason for r in out.results] == [None, "规则已存在"]
+    assert len(store.rules()) == 2   # 文件 1 + overlay 1
+
+
+def test_add_rules_overlay_insert_invariant_with_in_batch_deny(tmp_path):
+    """批内 deny+allow 相互依赖：两种提交顺序下 allow 均不被 deny 遮蔽。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    assert store.add_rules(["ECS:*=deny", "ECS:ListServers=allow"]).ok is True
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is True
+    assert policy.evaluate(store.rules(), "ECS", "DeleteServer") is False
+
+    p2 = tmp_path / "p2.txt"
+    p2.write_text("*=deny\n", encoding="utf-8")
+    store2 = make_store(p2)
+    assert store2.add_rules(["ECS:ListServers=allow", "ECS:*=deny"]).ok is True
+    assert policy.evaluate(store2.rules(), "ECS", "ListServers") is True
+    assert policy.evaluate(store2.rules(), "ECS", "DeleteServer") is False
+
+
+def test_add_rules_permanent_in_batch_deny_invariant(tmp_path):
+    """permanent 批内不变量：后提交的 allow 落在批内 deny 之前、批内 deny 在兜底之前。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = store.add_rules(["ECS:*=deny", "ECS:ListServers=allow"], scope="permanent")
+    assert out.ok is True
+    lines = semantic_lines(p)
+    assert lines.index("ECS:ListServers=allow") < lines.index("ECS:*=deny")
+    assert lines.index("ECS:*=deny") < lines.index("*=deny")
+
+
+def test_add_rules_temporary_batch_shared_ttl(tmp_path):
+    """temporary 批量共享 ttl：整批同时到期剪枝。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    now = {"t": 0.0}
+    store = PolicyStore(str(p), stat_fn=make_stat_fn(), time_fn=lambda: now["t"])
+
+    out = store.add_rules(["ECS:ListServers=allow", "OBS:GetObject=allow"],
+                          scope="temporary", ttl_seconds=60)
+    assert out.ok is True and all(r.scope == "temporary" for r in out.results)
+    now["t"] += 61
+    assert policy.evaluate(store.rules(), "ECS", "ListServers") is False
+    assert policy.evaluate(store.rules(), "OBS", "GetObject") is False
+
+
+def test_add_rules_once_batch_burns_independently(tmp_path):
+    """once 批量：每条独立用后即焚。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = store.add_rules(["OBS:GetObject=allow", "ECS:ListServers=allow"], scope="once")
+    assert out.ok is True and all(r.scope == "once" for r in out.results)
+    assert store.authorize("OBS", "GetObject") is None
+    assert store.authorize("OBS", "GetObject") is not None      # 该条已焚
+    assert store.authorize("ECS", "ListServers") is None        # 另一条仍在
+    assert store.authorize("ECS", "ListServers") is not None
+
+
+def test_add_rules_scope_and_ttl_validation(tmp_path):
+    """整批参数校验与单条同口径：未知 scope / ttl 误用 → 整批拒绝。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = store.add_rules(["ECS:*=allow"], scope="forever")
+    assert out.ok is False and "scope" in (out.reason or "")
+    out = store.add_rules(["ECS:*=allow"], scope="session", ttl_seconds=60)
+    assert out.ok is False
+    out = store.add_rules(["ECS:*=allow"], scope="temporary", ttl_seconds=0)
+    assert out.ok is False
+
+
+def test_add_rules_unconfigured_rejected():
+    """红线：未配置 policy 文件，批量 add 整批拒绝。"""
+    store = PolicyStore(None)
+    out = store.add_rules(["ECS:*=allow"])
+    assert out.ok is False
+    assert out.reason == NOT_CONFIGURED_REASON
+
+
+def test_add_rules_empty_rejected(tmp_path):
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = store.add_rules([])
+    assert out.ok is False and out.results == ()
+
+
+# ---------- 批量 remove（remove_rules：逐条尽力而为，文件层单次落盘） ----------
+
+def test_remove_rules_mixed_layers_with_miss(tmp_path):
+    """逐条先会话桶后文件；未命中记失败项；文件层删除合并落盘。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("OBS:GetObject=allow\nECS:*List*=allow\n*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("ECS:GetServer=allow")           # session overlay
+
+    out = store.remove_rules(["ECS:GetServer=allow", "OBS:GetObject=allow",
+                              "VPC:ShowSubnet=allow"])
+    assert out.reason is None
+    assert [r.ok for r in out.results] == [True, True, False]
+    assert out.results[0].scope == "session"
+    assert out.results[1].scope == "permanent"
+    assert "未找到" in (out.results[2].reason or "")
+    assert semantic_lines(p) == ["ECS:*List*=allow", "*=deny"]
+    assert policy.evaluate(store.rules(), "ECS", "GetServer") is False
+
+
+def test_remove_rules_same_target_twice_second_misses(tmp_path):
+    """批量内同一目标两行：首行命中移除，次行未命中（顺序语义）。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:GetServer=allow\n*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = store.remove_rules(["ECS:GetServer=allow", "ECS:GetServer=allow"])
+    assert [r.ok for r in out.results] == [True, False]
+    assert semantic_lines(p) == ["*=deny"]
+
+
+def test_remove_rules_invalid_line_per_item_failure(tmp_path):
+    """remove 逐条尽力而为：格式非法行记失败项，其余照常应用。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:GetServer=allow\n*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = store.remove_rules(["garbage", "ECS:GetServer=allow"])
+    assert [r.ok for r in out.results] == [False, True]
+    assert "格式" in (out.results[0].reason or "")
+    assert semantic_lines(p) == ["*=deny"]
+
+
+def test_remove_rules_all_miss_disk_untouched(tmp_path):
+    p = tmp_path / "policy.txt"
+    before = "ECS:GetServer=allow\n*=deny\n"
+    p.write_text(before, encoding="utf-8")
+    store = make_store(p)
+    out = store.remove_rules(["VPC:A=allow", "VPC:B=allow"])
+    assert out.ok is False
+    assert out.reason is None
+    assert [r.ok for r in out.results] == [False, False]
+    assert read_disk(p) == before
+
+
+def test_remove_rules_unconfigured_rejected():
+    store = PolicyStore(None)
+    out = store.remove_rules(["ECS:*=allow"])
+    assert out.ok is False and out.reason == NOT_CONFIGURED_REASON
+
+
 # ---------- manage_policy_ops：两模式 manage_policy 工具共用的运维信封 ----------
 
 def test_manage_policy_ops_unconfigured():
@@ -733,3 +952,88 @@ def test_manage_policy_ops_add_rule_error_passthrough(tmp_path):
     assert out["ok"] is False and "scope" in (out.get("reason") or "")
     out = manage_policy_ops(store, "add", "not a rule")
     assert out["ok"] is False and out.get("reason")
+
+
+# ---------- manage_policy_ops 批量信封（list 入参） ----------
+
+def test_manage_policy_ops_batch_add_envelope(tmp_path):
+    """list 入参 → 批量信封：results 逐条 + scope + policy。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "add", ["ECS:*=allow", "OBS:GetObject=allow"])
+    assert out["ok"] is True
+    assert out["action"] == "add"
+    assert out["scope"] == "session"
+    assert out["results"] == [
+        {"line": "ECS:*=allow", "ok": True, "scope": "session"},
+        {"line": "OBS:GetObject=allow", "ok": True, "scope": "session"}]
+    assert out["policy"] == store.text()
+
+
+def test_manage_policy_ops_batch_fail_fast_envelope(tmp_path):
+    """整批拒绝：ok=False + reason 指明坏行 + results=[]；磁盘未动。"""
+    p = tmp_path / "policy.txt"
+    before = "*=deny\n"
+    p.write_text(before, encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "add", ["ECS:*=allow", "nope"], scope="permanent")
+    assert out["ok"] is False
+    assert "第 2 条" in (out["reason"] or "")
+    assert out["results"] == []
+    assert out["scope"] == "permanent"
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_manage_policy_ops_batch_remove_envelope(tmp_path):
+    """批量 remove：混层逐条结果 + 文件层合并落盘；顶层 ok=全部成功。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("ECS:GetServer=allow\n*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("OBS:GetObject=allow")          # session overlay
+    out = manage_policy_ops(store, "remove",
+                            ["OBS:GetObject=allow", "ECS:GetServer=allow", "VPC:A=allow"])
+    assert out["ok"] is False                       # 有未命中项
+    assert [r["ok"] for r in out["results"]] == [True, True, False]
+    assert out["results"][0]["scope"] == "session"
+    assert out["results"][1]["scope"] == "permanent"
+    assert "未找到" in (out["results"][2]["reason"] or "")
+    disk = p.read_text(encoding="utf-8")
+    assert "OBS:GetObject=allow" not in disk
+    assert "ECS:GetServer=allow" not in disk
+
+
+def test_manage_policy_ops_batch_empty_rejected(tmp_path):
+    """空数组 / 全空串按缺 line 拒绝（与单条同一文案）。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "add", [])
+    assert out["ok"] is False and "需要提供 line" in (out["reason"] or "")
+    out = manage_policy_ops(store, "add", ["  "])
+    assert out["ok"] is False and "需要提供 line" in (out["reason"] or "")
+
+
+def test_manage_policy_ops_batch_remove_rejects_scope(tmp_path):
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "remove", ["ECS:*=allow"], scope="session")
+    assert out["ok"] is False
+    assert "remove 不接受 scope/ttl_seconds" in (out["reason"] or "")
+
+
+def test_manage_policy_ops_single_line_envelope_unchanged(tmp_path):
+    """回归红线：str 入参信封形状与批量改造前逐字段一致（无 results 键）。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    out = manage_policy_ops(store, "add", "ECS:*=allow")
+    assert set(out.keys()) == {"ok", "action", "scope", "policy"}
+    assert out["scope"] == "session"
+    out = manage_policy_ops(store, "add", "bad rule")
+    assert set(out.keys()) == {"ok", "action", "scope", "reason", "policy"}
+    out = manage_policy_ops(store, "remove", "ECS:*=allow")
+    assert set(out.keys()) == {"ok", "action", "scope", "policy"}
+    out = manage_policy_ops(store, "grant", line="ECS:*=allow")
+    assert set(out.keys()) == {"ok", "reason"}

@@ -664,3 +664,113 @@ def test_ctx_elicit_fn_normalizes_readonly_choice():
 
     out = run(ctx_elicit_fn(FakeCtx([AcceptedReadonlyChoice()]))("m", GrantChoiceConfirm))
     assert out == ElicitOutcome(action="accept", choice="readonly")
+
+
+# ---------- 批量变更门（line: list[str]） ----------
+
+def test_change_message_batch_lists_all_lines_and_count():
+    from common.elicit import change_message
+
+    msg = change_message("add", ["OBS:GetObject=allow", "ECS:*List*=allow"])
+    assert "2 条" in msg
+    assert "OBS:GetObject=allow" in msg and "ECS:*List*=allow" in msg
+    assert "会话" in msg and "permanent" in msg          # 与单条文案同口径的 scope 指引
+    rm = change_message("remove", ["A=allow", "B=allow"])
+    assert "移除" in rm and "A=allow" in rm and "B=allow" in rm
+
+
+def test_change_message_single_form_unchanged():
+    from common.elicit import change_message
+
+    msg = change_message("add", "OBS:GetObject=allow")
+    assert "会话" in msg and "permanent" in msg and "策略文件" in msg
+
+
+def test_gate_change_batch_confirmed_proceeds():
+    elicit = make_elicit(ACCEPT)
+    consent = PolicyConsent("auto", elicit)
+    assert run(consent.gate_change("add", ["A=allow", "B=allow"])) is None
+    msg, _schema = elicit.calls[0]  # type: ignore[attr-defined]
+    assert "A=allow" in msg and "B=allow" in msg
+    assert len(elicit.calls) == 1  # type: ignore[attr-defined]   # 整批一次确认
+
+
+def test_gate_change_batch_declined_blocks():
+    elicit = make_elicit(DECLINE)
+    consent = PolicyConsent("auto", elicit)
+    blocked = run(consent.gate_change("remove", ["A=allow", "B=allow"]))
+    assert blocked is not None
+    assert "未确认" in blocked and "A=allow" in blocked
+
+
+def test_gate_change_batch_off_proceeds_without_elicit():
+    elicit = make_elicit(DECLINE)
+    consent = PolicyConsent("off", elicit)
+    assert run(consent.gate_change("add", ["A=allow"])) is None
+    assert elicit.calls == []  # type: ignore[attr-defined]
+
+
+def _make_manage():
+    """记录型 manage 替身：模拟 svc.manage_policy(action, line=, scope=, ttl_seconds=)。"""
+    calls: list[tuple] = []
+
+    def manage(action, line=None, scope=None, ttl_seconds=None):
+        calls.append((action, line, scope, ttl_seconds))
+        return {"ok": True, "action": action}
+
+    manage.calls = calls  # type: ignore[attr-defined]
+    return manage
+
+
+def test_gated_manage_policy_batch_gate_then_passthrough():
+    from common.elicit import gated_manage_policy
+
+    manage = _make_manage()
+    consent = PolicyConsent("auto", make_elicit(ACCEPT), minimal_scope="once")
+    out = run(gated_manage_policy(consent, manage, "add",
+                                  line=["A=allow", "B=allow"], scope="session"))
+    assert out["ok"] is True
+    assert manage.calls == [("add", ["A=allow", "B=allow"], "session", None)]  # line 原形透传
+
+
+def test_gated_manage_policy_batch_declined_blocks_manage():
+    from common.elicit import gated_manage_policy
+
+    manage = _make_manage()
+    consent = PolicyConsent("auto", make_elicit(DECLINE))
+    out = run(gated_manage_policy(consent, manage, "add", line=["A=allow"]))
+    assert out == {"ok": False, "action": "add", "reason": out["reason"]}
+    assert "未确认" in out["reason"]
+    assert manage.calls == []  # type: ignore[attr-defined]
+
+
+def test_gated_manage_policy_batch_off_skips_gate():
+    from common.elicit import gated_manage_policy
+
+    manage = _make_manage()
+    consent = PolicyConsent("off", make_elicit(DECLINE))
+    out = run(gated_manage_policy(consent, manage, "add", line=["A=allow"]))
+    assert out["ok"] is True
+    assert manage.calls[0][1] == ["A=allow"]  # type: ignore[attr-defined]
+
+
+def test_gated_manage_policy_batch_all_blank_skips_gate():
+    """全空串数组：门跳过（无可确认内容），交由 ops 层按缺 line 拒绝。"""
+    from common.elicit import gated_manage_policy
+
+    manage = _make_manage()
+    consent = PolicyConsent("auto", make_elicit(ACCEPT))
+    run(gated_manage_policy(consent, manage, "add", line=["  ", ""]))
+    assert manage.calls != []  # type: ignore[attr-defined]   # 未弹窗直接透传
+    assert elicit_calls_empty(consent)
+
+
+def elicit_calls_empty(consent):
+    return consent._elicit.calls == []  # type: ignore[attr-defined]
+
+
+def test_fallback_hint_mentions_batch_capability():
+    hint = fallback_hint(OFFER)
+    assert "数组" in hint
+    hint_coarse = fallback_hint(COARSE_OFFER)
+    assert "数组" in hint_coarse

@@ -256,7 +256,7 @@ Embedding (ASGI): `build_app(...).streamable_http_app()` returns a Starlette app
 | `get_api` | One API's full documentation (parameters, required fields, enums, constraints) — read before executing. Oversized docs (>200k chars) spill the full envelope to disk and stub the heaviest fields in the response |
 | `get_api_examples` | Official request examples for one API |
 | `execute_api` | Execute one API: path/query params flattened, request body under `body`; errors come back structured, 429 retried with backoff. Oversized responses (>200k chars) are spilled to disk automatically: the result carries a `spill` envelope (`path`/`format`/`bytes`/`note`) and `body` keeps a truncated preview; `_spill=false` opts out per call |
-| `manage_policy` | Read/add/remove safety-policy rules at runtime (hot effect, no restart) |
+| `manage_policy` | Read/add/remove safety-policy rules at runtime (hot effect, no restart); `line` accepts a single rule or an array for batch add/remove |
 
 ## Tools (data mode)
 
@@ -284,6 +284,7 @@ A policy file is a JSON array (or plain text) of rules, evaluated top-down, firs
 - Rule format `product:apiPattern=allow|deny` — fnmatch-style wildcards, case-insensitive product/API, `#` lines are comments.
 - No `--policy` configured → every execution denied.
 - Grant scopes (via `manage_policy` add): `once` (single execution, burned after use) · `session` (default; this agent session only) · `temporary` (TTL) · `permanent` (written to the policy file).
+- Batch grants: `line` also accepts an array of rules — the whole batch shares one scope; batch `add` is all-or-nothing (any invalid line rejects the entire batch, nothing applied); batch `remove` is per-rule best-effort (misses are reported per item). The batch envelope carries per-rule `results`; top-level `ok` = all succeeded.
 - Hot everywhere: external edits to the file apply immediately; add/remove via `manage_policy` too. Grant minimal rules first (`once`/`session`), product-wide only when justified.
 - Denials return an actionable reason; with `--elicitation auto|required` the server proposes a grant over MCP elicitation (five choices: `api` = minimal rule, one-shot / `api_session` = minimal rule, session-scoped / `product` = product-wide, session-scoped / `readonly` = product read-only rule set (`*List*/*Show*/*Get*/*Query*`, session-scoped — preferred for browsing tasks) / `none`). Default is `off` for predictable cross-client behavior.
 

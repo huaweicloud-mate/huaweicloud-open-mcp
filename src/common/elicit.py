@@ -104,8 +104,18 @@ def parse_elicit_mode(raw: str | None) -> ElicitMode:
     return "off"
 
 
-def change_message(action: str, line: str) -> str:
-    """manage_policy add/remove 确认弹窗文案。"""
+def change_message(action: str, line: str | list[str]) -> str:
+    """manage_policy add/remove 确认弹窗文案（line 为数组时整批一次确认）。"""
+    if isinstance(line, list):
+        lines = [str(x) for x in line if str(x).strip()]
+        joined = "、".join(f"'{x}'" for x in lines)
+        if action == "add":
+            return (f"确认新增 {len(lines)} 条 safety policy 规则：{joined}？"
+                    "整批共享同一 scope，缺省仅在当前会话内生效（重启即失，无需回收）；"
+                    '需跨重启持久时显式传 scope="permanent"（写入策略文件）。')
+        if action == "remove":
+            return f"确认移除 {len(lines)} 条 safety policy 规则：{joined}？"
+        return f"确认对 safety policy 执行 {action}（{len(lines)} 条）：{joined}？"
     if action == "add":
         return (f"确认新增 safety policy 规则 '{line}'？"
                 "缺省仅在当前会话内生效（重启即失，无需回收）；"
@@ -155,7 +165,7 @@ def fallback_hint(offer: DenialOffer) -> str:
     不提及协议级 elicitation。
     """
     base = ("；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认后，"
-            "调用 manage_policy 授予：")
+            "调用 manage_policy 授予（line 支持传数组一次批量授予）：")
     if offer.coarse_rule:
         readonly = ""
         if offer.readonly_rules:
@@ -315,8 +325,10 @@ class PolicyConsent:
             logger.warning("grant offer: unknown choice %r, keeping denial", choice)
         return None
 
-    async def gate_change(self, action: str, line: str) -> str | None:
-        """manage_policy add/remove 确认门。返回 None 放行，返回字符串为拒绝 reason。"""
+    async def gate_change(self, action: str,
+                          line: str | list[str]) -> str | None:
+        """manage_policy add/remove 确认门（line 为数组时整批一次确认）。
+        返回 None 放行，返回字符串为拒绝 reason。"""
         if self.mode == "off":
             return None
         outcome = await self._ask(change_message(action, line))
@@ -330,6 +342,9 @@ class PolicyConsent:
         if outcome.action == "accept" and outcome.confirm:
             return None
         logger.warning("manage_policy blocked: user did not confirm (%s)", action)
+        if isinstance(line, list):
+            label = "、".join(str(x) for x in line if str(x).strip()) or "-"
+            return f"用户未确认该 safety policy 变更（{action}: {label}）"
         return f"用户未确认该 safety policy 变更（{action}: {line}）"
 
     async def _ask(self, message: str,
@@ -369,20 +384,30 @@ def ctx_elicit_fn(ctx: ElicitContext) -> ElicitFn:
     return elicit
 
 
+def _gate_line(line: str | list[str] | None) -> str | list[str] | None:
+    """门条件归一：存在非空规则行时返回原形 line（供弹窗渲染），否则 None。"""
+    if isinstance(line, list):
+        return line if any(str(x).strip() for x in line) else None
+    return line.strip() if isinstance(line, str) and line.strip() else None
+
+
 async def gated_manage_policy(
         consent: "PolicyConsent", manage: Callable[..., Any],
-        action: str, line: str | None = None,
+        action: str, line: str | list[str] | None = None,
         scope: str | None = None,
         ttl_seconds: int | None = None) -> dict[str, Any]:
     """manage_policy 工具体（openapi/discover 两模式共享）：add/remove 先过确认门。
 
     consent 为调用方按各自 service 构造的 PolicyConsent；manage 为其
     svc.manage_policy / ds.manage_policy 可调用。其余行为（热更新、scope
-    语义）内聚 PolicyStore，由 manage 委派。
+    语义）内聚 PolicyStore，由 manage 委派。line 为数组时整批一次确认
+    （弹窗列出全部规则行），确认后 line 原形透传（信封形状由
+    manage_policy_ops 按入参形状决定）。
     """
-    if ((action or "").strip().lower() in ("add", "remove")
-            and (line or "").strip()):
-        blocked = await consent.gate_change(action, line or "")
+    gate_line = (_gate_line(line) if (action or "").strip().lower() in ("add", "remove")
+                 else None)
+    if gate_line is not None:
+        blocked = await consent.gate_change(action, gate_line)
         if blocked:
             return {"ok": False, "action": action, "reason": blocked}
     result: dict[str, Any] = manage(action, line=line, scope=scope,

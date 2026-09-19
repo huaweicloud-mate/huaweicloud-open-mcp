@@ -238,7 +238,7 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
 
     if include_manage_policy:
         @server.tool()
-        async def manage_policy(action: str, line: str | None = None,
+        async def manage_policy(action: str, line: str | list[str] | None = None,
                                 scope: str | None = None,
                                 ttl_seconds: int | None = None,
                                 ctx: Context | None = None) -> dict[str, Any]:
@@ -254,8 +254,12 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
             action=add 新增规则（自动插到会遮蔽它的 deny 规则之前，如
             "server:@huaweicloud/ecs=allow"）；action=remove 按语义移除首个匹配规则
             （跨层：先会话/临时后文件；不接受 scope/ttl_seconds）。
-            安全约定：先经交互式问询（如 question 工具）向用户确认再 add/remove；开启
-            elicitation 时由服务端弹窗确认，未开启/客户端不支持时由调用方自行完成问询确认。
+            line 支持传字符串数组批量 add/remove：整批共享同一 scope/ttl_seconds；
+            add 任一行非法则整批不应用（fail-fast）；批量信封附加 results 逐条结果，
+            顶层 ok=全部成功。批量授权只读规则集示例：readonly 口径四条通配可一次传入。
+            安全约定：先经交互式问询（如 question 工具）向用户确认再 add/remove
+            （数组批量整批一次确认）；开启 elicitation 时由服务端弹窗确认，未开启/
+            客户端不支持时由调用方自行完成问询确认。
             未配置 policy 文件时本工具拒绝执行（不创建文件）。
             """
             return await gated_manage_policy(

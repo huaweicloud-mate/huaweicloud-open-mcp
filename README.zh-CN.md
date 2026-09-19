@@ -257,7 +257,7 @@ HTTP 档改变的——会话语义：
 | `get_api` | 单 API 完整文档（参数、必填、枚举、约束）—— 执行前必读。超大文档（超 200k 字符）完整信封落盘，响应中重字段以占位替换 |
 | `get_api_examples` | 单 API 官方请求示例 |
 | `execute_api` | 执行一个 API：路径/query 参数平铺、请求体放 `body`；错误结构化返回、429 自动退避重试。超大响应（超 200k 字符）自动落盘：结果携带 `spill` 信封（`path`/`format`/`bytes`/`note`），`body` 保留截断预览；`_spill=false` 可按次退出 |
-| `manage_policy` | 运行期增删查 safety policy 规则（热生效、无需重启） |
+| `manage_policy` | 运行期增删查 safety policy 规则（热生效、无需重启）；`line` 支持传单条规则或规则数组批量增删 |
 
 ## 工具（data 模式）
 
@@ -285,6 +285,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 - 规则格式 `product:apiPattern=allow|deny` —— fnmatch 风格通配、product/API 大小写不敏感、`#` 行为注释。
 - 未配置 `--policy` → 全部执行被拒。
 - `manage_policy` add 的授予档位：`once`（一次性，用后即焚）· `session`（缺省；仅本次 Agent 会话）· `temporary`（TTL 自动过期）· `permanent`（写入 policy 文件）。
+- 批量授予：`line` 亦支持传规则数组——整批共享同一 scope；批量 add 为全有或全无（任一行非法则整批不应用）；批量 remove 逐条尽力而为（未命中逐条回报）。批量信封附加逐条 `results`，顶层 `ok` = 全部成功。
 - 一切热生效：外部编辑文件即时生效；经 `manage_policy` 增删亦然。优先授予最小规则（`once`/`session`），产品级仅在确有必要时使用。
 - 拒绝结果附可操作原因；开启 `--elicitation auto|required` 后，server 会经 MCP elicitation 提议授予（五选一：api=最小规则（一次性）/ api_session=最小规则（会话内）/ product=产品级规则（会话内）/ readonly=产品级只读规则集（`*List*/*Show*/*Get*/*Query*` 四条，会话内，浏览类任务首选）/ none=不授予）。默认 `off`，保证跨客户端行为可预期。
 

@@ -65,6 +65,39 @@ def test_unconfigured_store_rejected():
     assert out["ok"] is False and "--policy" in out["reason"]
 
 
+# ---------- 批量 line（str | list[str]） ----------
+
+def test_batch_add_and_remove(tmp_path):
+    """line 传数组：批量 add 会话内放行 + 批量 remove 回收；str 单条信封不变。"""
+    svc, p = make_service(tmp_path, ["*=deny"])
+    before = p.read_text(encoding="utf-8")
+
+    out = svc.manage_policy("add", ["server:@huaweicloud/ecs=allow",
+                                    "server:@huaweicloud/oss=allow"])
+    assert out["ok"] is True and out["scope"] == "session"
+    assert [r["ok"] for r in out["results"]] == [True, True]
+    assert svc._check_policy("@huaweicloud/ecs") is None
+    assert p.read_text(encoding="utf-8") == before              # 会话内不落盘
+
+    out = svc.manage_policy("remove", ["server:@huaweicloud/ecs=allow",
+                                       "server:@huaweicloud/oss=allow",
+                                       "server:@huaweicloud/vpc=allow"])
+    assert out["ok"] is False
+    assert [r["ok"] for r in out["results"]] == [True, True, False]
+    assert svc._check_policy("@huaweicloud/ecs") is not None    # 已回收
+
+
+def test_batch_add_permanent_persists(tmp_path):
+    svc, p = make_service(tmp_path, ["*=deny"])
+    out = svc.manage_policy("add", ["server:@huaweicloud/ecs=allow",
+                                    "server:@huaweicloud/oss=allow"],
+                            scope="permanent")
+    assert out["ok"] is True and out["scope"] == "permanent"
+    text = p.read_text(encoding="utf-8")
+    assert "server:@huaweicloud/ecs=allow" in text
+    assert "server:@huaweicloud/oss=allow" in text
+
+
 # ---------- policy_denial_offer（E1 discover 服务层） ----------
 
 def test_policy_denial_offer_server_constructed(tmp_path):

@@ -462,6 +462,31 @@ def test_manage_policy_list_and_errors(tmp_path):
     assert listed["ok"] is True and "ECS:*List*=allow" in listed["policy"]
     assert listed["rules"] == [{"line": "ECS:*List*=allow",
                                 "scope": "permanent", "expires_in": None}]
+
+
+def test_manage_policy_batch_add_and_remove(tmp_path, monkeypatch):
+    """line 传数组：批量 add 会话内放行（信封带 results）→ 批量 remove 回收。"""
+    from safety.policy_store import PolicyStore
+
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(store=_prep_store(products=False, apis=False), config=ServiceConfig(
+        mock=True, policy_store=PolicyStore(str(p)),
+        mock_client_factory=lambda: StubMockClient()))
+    before = p.read_text(encoding="utf-8")
+
+    out = svc.manage_policy("add", ["ECS:*=allow", "OBS:GetObject=allow"])
+    assert out["ok"] is True and out["scope"] == "session"
+    assert [r["ok"] for r in out["results"]] == [True, True]
+    assert svc.execute_api("ECS", "ListServersDetails",
+                           params={"_status_code": 200})["ok"] is True
+
+    out = svc.manage_policy("remove", ["ECS:*=allow", "OBS:GetObject=allow",
+                                       "VPC:A=allow"])
+    assert out["ok"] is False
+    assert [r["ok"] for r in out["results"]] == [True, True, False]
+    assert svc.execute_api("ECS", "ListServersDetails")["ok"] is False
+    assert p.read_text(encoding="utf-8") == before   # 会话档全程不落盘
     assert svc.manage_policy("grant", line="ECS:*=allow")["ok"] is False   # 未知 action
     assert svc.manage_policy("add")["ok"] is False                         # 缺 line
 

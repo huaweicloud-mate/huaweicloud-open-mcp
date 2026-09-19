@@ -303,3 +303,75 @@ def test_manage_policy_ops_session_scoped(tmp_path):
     out = manage_policy_ops(store, "list")
     assert all(r["scope"] == "permanent" for r in out["rules"])
     assert "ECS" not in out["policy"]   # text() 恒文件全文
+
+
+# ---------- 批量 add/remove 的会话键控（I1/I2 加性扩展） ----------
+
+def test_batch_add_lands_in_granting_session_bucket(tmp_path):
+    path = _write_policy(tmp_path, [LINE_DENY_ALL])
+    sessions, clock = _Sessions(), _Clock()
+    store = PolicyStore(path, session_fn=sessions, time_fn=clock)
+
+    sessions.key = "A"
+    out = store.add_rules([LINE_A, LINE_B], scope="session")
+    assert out.ok and all(r.scope == "session" for r in out.results)
+    assert store.authorize("ECS", "ListServers") is None
+    assert store.authorize("VPC", "ShowSubnet") is None
+    sessions.key = "B"
+    assert all(r.product not in ("ECS", "VPC") for r in store.rules())  # 互斥桶
+    sessions.key = "A"
+    out = store.remove_rules([LINE_A, LINE_B])
+    assert [r.ok for r in out.results] == [True, True]
+    assert [r.scope for r in out.results] == ["session", "session"]
+
+
+def test_batch_strict_rejects_memory_scope_without_identity(tmp_path):
+    path = _write_policy(tmp_path, [LINE_DENY_ALL])
+    sessions = _Sessions()
+    store = PolicyStore(path, session_fn=sessions, strict_sessions=True)
+
+    sessions.key = None
+    out = store.add_rules([LINE_A, LINE_B], scope="session")
+    assert out.ok is False
+    assert "会话身份" in (out.reason or "")
+    assert out.results == ()                      # 整批拒绝，无部分应用
+    sessions.key = "A"
+    assert all(r.scope == "permanent" for r in store.list_rules())  # None 桶未污染
+
+
+def test_batch_strict_allows_permanent_without_identity(tmp_path):
+    path = _write_policy(tmp_path, [LINE_DENY_ALL])
+    store = PolicyStore(path, session_fn=_Sessions(), strict_sessions=True)
+    out = store.add_rules([LINE_A, LINE_B], scope="permanent")
+    assert out.ok
+    disk = json.loads(open(path, encoding="utf-8").read())
+    assert disk == [LINE_A, LINE_B, LINE_DENY_ALL]
+
+
+def test_batch_remove_miss_hint_for_new_session(tmp_path):
+    path = _write_policy(tmp_path, [LINE_DENY_ALL])
+    sessions = _Sessions()
+    store = PolicyStore(path, session_fn=sessions)
+
+    sessions.key = "A"
+    store.add_rule(LINE_A, scope="session")
+    sessions.key = "B"                            # 重连等价：新会话
+    out = store.remove_rules([LINE_A])
+    assert out.results[0].ok is False
+    assert "先前会话" in (out.results[0].reason or "")
+
+
+def test_manage_policy_ops_batch_session_scoped(tmp_path):
+    from safety.policy_store import manage_policy_ops
+
+    path = _write_policy(tmp_path, [LINE_DENY_ALL])
+    sessions = _Sessions()
+    store = PolicyStore(path, session_fn=sessions)
+
+    sessions.key = "A"
+    out = manage_policy_ops(store, "add", line=[LINE_A, LINE_B])
+    assert out["ok"] and out["scope"] == "session"
+    assert all(r["ok"] for r in out["results"])
+    sessions.key = "B"
+    out = manage_policy_ops(store, "list")
+    assert all(r["scope"] == "permanent" for r in out["rules"])

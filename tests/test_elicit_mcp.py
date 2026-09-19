@@ -684,3 +684,65 @@ def test_openapi_execute_denied_readonly_choice_grants_four_session_rules(
     assert deleted["ok"] is False                           # Delete 不匹配只读集
     assert "safety policy 拒绝执行" in deleted["reason"]
     assert len(seen) == 2                                   # 授予一次 + Delete 拒绝提议一次（decline）
+
+
+# ---------- manage_policy 批量 line（InMemoryTransport 往返） ----------
+
+def test_manage_policy_batch_roundtrip_off_mode(tmp_path, monkeypatch):
+    """批量 line 数组经 MCP 工具面往返：results 信封；off 档整批直通不弹窗。"""
+    app, p = make_openapi(tmp_path, "off")
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
+    seen: list = []
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w, elicitation_callback=script_client([], seen)) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool(
+                    "manage_policy",
+                    {"action": "add", "line": ["ECS:*List*=allow", "ECS:*Get*=allow"]}))
+
+    out = run(_run())
+    assert out["ok"] is True and out["scope"] == "session"
+    assert [r["ok"] for r in out["results"]] == [True, True]
+    assert seen == []                                       # off 恒不弹窗
+
+
+def test_manage_policy_batch_roundtrip_single_confirm(tmp_path, monkeypatch):
+    """auto 档：数组批量整批一次确认弹窗（列出全部规则行），confirm 后整批生效。"""
+    app, p = make_openapi(tmp_path, "auto")
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
+    seen: list = []
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w,
+                                     elicitation_callback=script_client([ACCEPT], seen)) as s:
+                await s.initialize()
+                return result_dict(await s.call_tool(
+                    "manage_policy",
+                    {"action": "add", "line": ["ECS:*List*=allow", "ECS:*Get*=allow"]}))
+
+    out = run(_run())
+    assert out["ok"] is True
+    assert len(seen) == 1                                   # 整批一次确认
+    assert "ECS:*List*=allow" in seen[0] and "ECS:*Get*=allow" in seen[0]
+    assert "2 条" in seen[0]
+
+
+def test_manage_policy_tool_schema_accepts_array(tmp_path):
+    """工具 schema：line 为 anyOf[string, array[string], null]（union 参数可发现）。"""
+    app, _ = make_openapi(tmp_path, "off")
+
+    async def _run():
+        async with InMemoryTransport(app) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                tools = await s.list_tools()
+                return {t.name: t for t in tools.tools}
+
+    tools = run(_run())
+    schema = tools["manage_policy"].input_schema
+    line_schema = schema["properties"]["line"]
+    types = {opt.get("type") for opt in line_schema["anyOf"]}
+    assert types == {"string", "array", "null"}
