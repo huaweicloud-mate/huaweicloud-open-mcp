@@ -157,6 +157,13 @@ class ProductListResult(TypedDict):
     products: list[ProductItem]
 
 
+class SopIndexEntry(TypedDict):
+    """产品级 SOP 索引条目（发现面轻量暴露；description 未配置时省略）。"""
+
+    name: str
+    description: NotRequired[str]
+
+
 class ProductResult(TypedDict):
     ok: Literal[True]
     product: str
@@ -166,7 +173,8 @@ class ProductResult(TypedDict):
     link: str | None
     api_count: int
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
-    sops: NotRequired[str]  # 部署侧产品级 SOP（Hints sops 配置命中时附加，渲染文本）
+    sops_index: NotRequired[list[SopIndexEntry]]  # 产品级 SOP 索引（name+description，恒轻量）
+    sops: NotRequired[str]  # 部署侧产品级 SOP 全文（include_sops=true 且配置命中时附加，渲染文本）
 
 
 class ApiListResult(TypedDict):
@@ -178,7 +186,8 @@ class ApiListResult(TypedDict):
     apis: list[ApiItem]
     tag_groups: list[TagGroup]
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
-    sops: NotRequired[str]  # 部署侧产品级 SOP（仅顶层；条目级不注入）
+    sops_index: NotRequired[list[SopIndexEntry]]  # 产品级 SOP 索引（仅顶层；条目级不注入）
+    sops: NotRequired[str]  # 部署侧产品级 SOP 全文（仅顶层；include_sops opt-in）
 
 
 # 函数式语法：允许非标识符键（x-constraint）

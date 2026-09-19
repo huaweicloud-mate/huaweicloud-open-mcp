@@ -138,6 +138,8 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 ## 其它
 
 - 产品 `is_global` 为 true 的全局级服务（如 IAM）与地域级服务认证模型不同。
+- 部署配置了产品级 SOP 时：get_product/list_apis 顶层 `sops_index` 恒为轻量索引
+  （SOP 名称+描述）；需要完整步骤时传 `include_sops=true` 附加 `sops` 全文。
 - OBS 对象上传/下载（PutObject/GetObject/AppendObject/UploadPart）恒走预签发 URL
   单口径：execute_api 直接返回 presign 信封（url/method/expires_in +
   signed_content_type + headers 照抄清单），客户端凭 URL 直连 OBS 收发字节，
@@ -327,20 +329,27 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         return svc.list_products(category=category, keyword=keyword)
 
     @server.tool()
-    def get_product(product: str) -> ProductResult | ToolError:
+    def get_product(product: str, include_sops: bool = False) -> ProductResult | ToolError:
         """确认单个产品详情（分类/是否全局级服务）。全局级服务（is_global=true）认证模型不同。
+
+        sops_index 恒为 SOP 轻量索引（名称+描述）；include_sops=true 且部署配置了
+        SOP 时附加 sops 全文（渲染文本，含步骤）。
         """
-        return svc.get_product(product)
+        return svc.get_product(product, include_sops=include_sops)
 
     @server.tool()
     def list_apis(product: str, tag: str | None = None, search: str | None = None,
-                  limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
+                  limit: int = 20, offset: int = 0,
+                  include_sops: bool = False) -> ApiListResult | ToolError:
         """第二步：列出产品的 API 目录。
 
         结果含 tag_groups（产品全量 tag 概览，不受过滤影响）：先用 tag 收窄目录，
         接口较多时用 search/limit/offset 分页浏览。选定候选接口后用 get_api 读文档。
+        sops_index 恒为 SOP 轻量索引（名称+描述）；include_sops=true 且部署配置了
+        SOP 时每页附加 sops 全文（渲染文本，含步骤）。
         """
-        return svc.list_apis(product, tag=tag, search=search, limit=limit, offset=offset)
+        return svc.list_apis(product, tag=tag, search=search, limit=limit,
+                             offset=offset, include_sops=include_sops)
 
     @server.tool()
     def get_api(product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:

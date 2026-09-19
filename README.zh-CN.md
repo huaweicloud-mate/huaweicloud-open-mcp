@@ -293,7 +293,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 
 ## 自定义提示注入（可选）
 
-hints 配置文件允许部署方向发现链注入自有指引：全局 `instructions` 追加到 server instructions 末尾，产品级 `notes` 与 API 级文案附加到发现结果（`list_products` / `get_product` / `list_apis` / `get_api`）；产品级 SOP（`sops`）以独立 `sops` 字段附加到 `get_product` / `list_apis` 顶层。
+hints 配置文件允许部署方向发现链注入自有指引：全局 `instructions` 追加到 server instructions 末尾，产品级 `notes` 与 API 级文案附加到发现结果（`list_products` / `get_product` / `list_apis` / `get_api`）；产品级 SOP 挂在 `get_product` / `list_apis` 顶层——`sops_index` 恒为轻量索引（仅任务名+描述），完整渲染全文 `sops`（含步骤）仅在调用方传 `include_sops=true` 时附加。
 
 ```json
 {
@@ -303,7 +303,10 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
       "notes": "查询云服务器列表优先用 ListServersDetails。",
       "sops": {
         "创建云服务器": ["ListFlavors 查规格", "CreateServers 创建", "ShowServer 轮询 status=ACTIVE"],
-        "变更规格": "ShowServer 确认 → ResizeServer → ConfirmResize"
+        "变更规格": {
+          "description": "在线变更规格流程（发现面仅暴露名称+描述，步骤经 include_sops 拉取）",
+          "steps": ["ShowServer 确认", "ResizeServer 提交", "ConfirmResize 收尾"]
+        }
       },
       "apis": {
         "ResizeServer": "变更规格前先用 ListFlavors 确认售罄情况。"
@@ -315,7 +318,7 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 ```
 
 - 官方元数据永不被替换 —— 提示以独立 `hints` 字段伴随返回（产品级 + API 级合并，产品在前）。
-- 产品级 SOP（`sops`，可选）：mapping-only（任务必须命名），任务值为字符串（原文）或字符串数组（自动编号 `1. x`，空步骤丢弃且编号压实）；渲染为按序文本（`任务名：\n内容`，任务间空行），以独立 `sops` 字段伴随 `get_product` / `list_apis` 顶层返回——与 `hints` 并列（notes 为一句话口径、SOP 为流程指引），条目级与 `get_api` / `get_api_examples` / `execute_api` 恒不注入。
+- 产品级 SOP（`sops`，可选）：mapping-only（任务必须命名），任务值为字符串（原文）、字符串数组（自动编号 `1. x`，空步骤丢弃且编号压实）或 dict `{"description"?: str, "steps"?: string | array[string]}`（键白名单 `{description, steps}`，未知键快速失败；缺 `steps` 即纯描述任务）。发现信封（`get_product` / `list_apis` 顶层）恒携带 `sops_index`——轻量 `[{name, description?}]` 列表（不含步骤）；完整渲染文本（`任务名：\n内容`，description 并入正文首行，任务间空行）仅在工具调用传 `include_sops=true` 时以独立 `sops` 字符串字段附加（缺省 `false`；产品无 SOP 配置时恒 no-op 不加字段）。条目级与 `get_api` / `get_api_examples` / `execute_api` 恒不注入。
 - 仅注入成功发现结果，拒绝路径（policy 拒绝）永不注入；`get_api_examples` 与 `execute_api` 恒不注入。
 - 产品键与 `apis` 键均大小写不敏感；产品值可以是纯字符串（仅产品提示）或含 `notes` / `apis` / `sops` 的对象。
 - 可选顶层布尔键 `api_notes_in_list_apis`（缺省 `true`）：为 `false` 时 `list_apis` 条目不携带 API 级提示（顶层产品级与 `get_api` 合并提示不受影响）——帮助中心补全生成文件显式置 `false`，使 `get_api` 成为唯一增强面。

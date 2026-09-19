@@ -250,19 +250,25 @@ class ToolService:
 
     # ---------- 提示注入（Hints：配置驱动塑形，copy-on-write） ----------
 
-    def _with_product_hints(self, out: Any, product: str, hints: Hints) -> Any:
+    def _with_product_hints(self, out: Any, product: str, hints: Hints,
+                            include_sops: bool = False) -> Any:
         """顶层附加产品级提示与 SOP（未配置时不加字段）。hints 由调用方单次快照下传。
 
+        sops_index 恒为轻量索引（name + 可选 description，不含步骤）；sops 全文
+        （渲染文本）仅 include_sops=True 且配置存在时附加——发现面瘦身，按需拉取。
         sops 与 hints 并列独立字段（notes 为一句话口径、SOP 为流程，粒度不同源）；
-        两者皆未配置时原对象返回（未配置路径与现状逐字节一致）。
+        全部未配置时原对象返回（未配置路径与现状逐字节一致）。
         """
         notes = hints.product_notes(product)
-        sops = hints.product_sops(product)
-        if not notes and not sops:
+        sops_index = hints.product_sops_index(product)
+        sops = hints.product_sops(product) if include_sops else None
+        if not notes and not sops_index and not sops:
             return out
         patched = dict(out)
         if notes:
             patched["hints"] = notes
+        if sops_index:
+            patched["sops_index"] = sops_index
         if sops:
             patched["sops"] = sops
         return patched
@@ -297,13 +303,14 @@ class ToolService:
             decorated.append(a)
         return {**out, "apis": decorated} if changed else out
 
-    def _annotate_list_apis(self, out: Any, product: str, hints: Hints) -> Any:
-        """list_apis：顶层产品级提示 + 当前页条目级 API 级提示。
+    def _annotate_list_apis(self, out: Any, product: str, hints: Hints,
+                            include_sops: bool = False) -> Any:
+        """list_apis：顶层产品级提示与 SOP 索引 + 当前页条目级 API 级提示。
 
         api_notes_in_list_apis=False 时条目级被抑制（S13f），顶层保留。
         hints 为调用方单次快照（S23：顶层与条目级同一口径，杜绝撕裂）。
         """
-        new_out = self._with_product_hints(out, product, hints)
+        new_out = self._with_product_hints(out, product, hints, include_sops)
         if not hints.api_notes_in_list_apis:
             return new_out
         items = new_out.get("apis") or []
@@ -379,8 +386,13 @@ class ToolService:
 
     @_audited
     @_guarded
-    def get_product(self, product: str) -> ProductResult | ToolError:
-        logger.info("get_product product=%s", product)
+    def get_product(self, product: str, include_sops: bool = False) -> ProductResult | ToolError:
+        """确认单个产品详情（分类/是否全局级服务）。全局级服务（is_global=true）认证模型不同。
+
+        sops_index 恒为轻量索引（SOP 名称+描述）；include_sops=true 且部署配置了
+        SOP 时附加 sops 全文（渲染文本，含步骤）。
+        """
+        logger.info("get_product product=%s include_sops=%s", product, include_sops)
         groups = catalog.get_products(self.store)
         if groups is None:
             logger.warning("get_product product=%s metadata=missing", product)
@@ -389,14 +401,22 @@ class ToolService:
         if out is None:
             logger.warning("get_product product=%s result=not_found", product)
             return {"ok": False, "reason": f"产品 {product} 未找到"}
-        return cast(ProductResult, self._with_product_hints(out, product, self._hints()))
+        return cast(ProductResult,
+                    self._with_product_hints(out, product, self._hints(), include_sops))
 
     @_audited
     @_guarded
     def list_apis(self, product: str, tag: str | None = None, search: str | None = None,
-                  limit: int = 20, offset: int = 0) -> ApiListResult | ToolError:
-        logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d",
-                    product, tag or "-", search or "-", limit, offset)
+                  limit: int = 20, offset: int = 0,
+                  include_sops: bool = False) -> ApiListResult | ToolError:
+        """第二步：列出产品的 API 目录（顶层含产品级提示与 SOP 索引；include_sops opt-in 全文）。
+
+        结果含 tag_groups（产品全量 tag 概览，不受过滤影响）：先用 tag 收窄目录，
+        接口较多时用 search/limit/offset 分页浏览。选定候选接口后用 get_api 读文档。
+        """
+        logger.info("list_apis product=%s tag=%s search=%s limit=%d offset=%d "
+                    "include_sops=%s", product, tag or "-", search or "-", limit,
+                    offset, include_sops)
         apis = catalog.get_apis(self.store, product)
         if apis is None:
             logger.warning("list_apis product=%s metadata=missing", product)
@@ -411,7 +431,8 @@ class ToolService:
                                                if mode == "hide" else None))
         if mode == "annotate":
             out = self._annotate_deprecated(out, product, index)
-        return cast(ApiListResult, self._annotate_list_apis(out, product, hints))
+        return cast(ApiListResult,
+                    self._annotate_list_apis(out, product, hints, include_sops))
 
     @_audited
     @_guarded

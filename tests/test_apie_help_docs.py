@@ -565,6 +565,24 @@ def test_apply_curation_to_hints_sops_passthrough_and_roundtrip():
     assert parsed.api_notes("ECS", "ResizeServer").startswith("变更规格前")
 
 
+CURATION_SOPS_DESC = {"products": {"ECS": {
+    "sops": {"变更规格": {"description": "在线变更规格流程",
+                          "steps": ["ShowServer 确认", "ResizeServer 提交"]}}}}}
+
+
+def test_apply_curation_to_hints_sops_dict_form_passthrough_and_roundtrip():
+    """dict 形态（description+steps）curated 整块透传不感知：round-trip 后双视图可用。"""
+    from apie import build_help_hints
+    merged = build_help_hints.apply_curation_to_hints(build_hints([]), CURATION_SOPS_DESC)
+    assert merged["products"]["ECS"]["sops"] == \
+        CURATION_SOPS_DESC["products"]["ECS"]["sops"]
+    parsed = parse_hints(merged)
+    assert parsed.product_sops_index("ECS") == [
+        {"name": "变更规格", "description": "在线变更规格流程"}]
+    assert parsed.product_sops("ECS") == \
+        "变更规格：\n在线变更规格流程\n1. ShowServer 确认\n2. ResizeServer 提交"
+
+
 def test_apply_curation_to_hints_sops_survives_regeneration_merge():
     """生成面（build_hints）永不产 sops 键：curated sops 在再生合并中幸存。"""
     from apie import build_help_hints

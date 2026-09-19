@@ -292,7 +292,7 @@ A richer example ships with the package: `configs/safety-policy.example.json`.
 
 ## Custom hints (optional)
 
-A hints file lets a deployment inject its own guidance into the discovery chain: a global `instructions` block appended to the server instructions, plus per-product `notes` and per-API texts attached to discovery results (`list_products` / `get_product` / `list_apis` / `get_api`); a product-level SOP (`sops`) rides as an extra `sops` field on the `get_product` / `list_apis` top-level envelopes.
+A hints file lets a deployment inject its own guidance into the discovery chain: a global `instructions` block appended to the server instructions, plus per-product `notes` and per-API texts attached to discovery results (`list_products` / `get_product` / `list_apis` / `get_api`); a product-level SOP rides on the `get_product` / `list_apis` top-level envelopes as `sops_index` — a lightweight index (task name + description only) — while the full rendered `sops` text (with steps) is attached only when the caller passes `include_sops=true`.
 
 ```json
 {
@@ -302,7 +302,10 @@ A hints file lets a deployment inject its own guidance into the discovery chain:
       "notes": "Prefer ListServersDetails for listing servers.",
       "sops": {
         "Create a server": ["ListFlavors to check availability", "CreateServers to provision", "ShowServer to poll status=ACTIVE"],
-        "Resize a server": "ShowServer to confirm → ResizeServer → ConfirmResize"
+        "Resize a server": {
+          "description": "Online resize procedure (discovery exposes name + description only; steps via include_sops)",
+          "steps": ["ShowServer to confirm", "ResizeServer to submit", "ConfirmResize to finalize"]
+        }
       },
       "apis": {
         "ResizeServer": "Check flavor availability with ListFlavors first."
@@ -314,7 +317,7 @@ A hints file lets a deployment inject its own guidance into the discovery chain:
 ```
 
 - Official metadata is never replaced — hints ride along in an extra `hints` field (product + API notes are merged, product first).
-- Product-level SOP (`sops`, optional): mapping-only (tasks must be named); a task value is a string (verbatim) or an array of strings (auto-numbered `1. x`, blank steps dropped and numbering compacted); rendered as ordered text (`Task:\ncontent`, blank line between tasks) and returned as an extra `sops` field on `get_product` / `list_apis` top-level envelopes — alongside `hints` (notes are one-line pointers, SOPs are procedure guides); list items and `get_api` / `get_api_examples` / `execute_api` are never annotated.
+- Product-level SOP (`sops`, optional): mapping-only (tasks must be named); a task value is a string (verbatim), an array of strings (auto-numbered `1. x`, blank steps dropped and numbering compacted), or a dict `{"description"?: str, "steps"?: string | array[string]}` (key whitelist `{description, steps}`, unknown keys fail fast; a task without `steps` is description-only). Discovery envelopes (`get_product` / `list_apis` top-level) always carry `sops_index` — a lightweight `[{name, description?}]` list (no steps); the full rendered text (`Task:\ncontent`, description first, blank line between tasks) rides as the extra `sops` string field only when the tool is called with `include_sops=true` (default `false`; no-op when the product has no SOP configured). List items and `get_api` / `get_api_examples` / `execute_api` are never annotated.
 - Injected only on successful discovery results, never on denials (policy rejections stay untouched); `get_api_examples` and `execute_api` are never annotated.
 - Product keys and `apis` keys are case-insensitive; a product value may be a plain string (product note only) or an object with `notes` / `apis` / `sops`.
 - Optional top-level boolean `api_notes_in_list_apis` (default `true`): when `false`, `list_apis` items carry no API-level notes (top-level product notes and `get_api` merged notes are unaffected) — the generated help-center completion file sets this to `false` so `get_api` stays the only enriched surface.

@@ -159,10 +159,107 @@ def test_parse_sops_invalid_raises():
         parse_hints({"products": {"ECS": {"sops": {"任务": 1}}}})
     with pytest.raises(ValueError):   # 步骤非字符串
         parse_hints({"products": {"ECS": {"sops": {"任务": ["a", 2]}}}})
-    with pytest.raises(ValueError):   # 任务值嵌套 dict
+    with pytest.raises(ValueError):   # 任务值 dict 含未知键（白名单外 fail-fast）
         parse_hints({"products": {"ECS": {"sops": {"任务": {"嵌套": "dict"}}}}})
     with pytest.raises(ValueError):   # 未知键仍 fail-fast（单数拼写 typo）
         parse_hints({"products": {"ECS": {"sop": {"任务": "步骤"}}}})
+
+
+# ---------- S10a 扩展 2：SOP 描述与索引视图（dict 形态，发现面瘦身） ----------
+
+def test_parse_sops_dict_form_description_and_steps():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "变更规格": {"description": "在线变更云服务器规格",
+                     "steps": ["ShowServer 确认", "ResizeServer 提交"]}}}}})
+    assert h.product_sops("ECS") == (
+        "变更规格：\n在线变更云服务器规格\n1. ShowServer 确认\n2. ResizeServer 提交")
+
+
+def test_parse_sops_dict_form_steps_string():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "变更规格": {"description": "说明", "steps": "ShowServer → ResizeServer"}}}}})
+    assert h.product_sops("ECS") == "变更规格：\n说明\nShowServer → ResizeServer"
+
+
+def test_parse_sops_dict_form_description_only():
+    """steps 缺失 = 仅描述任务（合法）：全文为任务名 + 描述。"""
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "询价": {"description": "购买前询价流程"}}}}})
+    assert h.product_sops("ECS") == "询价：\n购买前询价流程"
+
+
+def test_parse_sops_dict_form_blank_description_is_absent():
+    """空 description 按 _clean 纪律视为未配置：全文与索引均不含描述。"""
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "任务": {"description": "  ", "steps": "步骤"}}}}})
+    assert h.product_sops("ECS") == "任务：\n步骤"
+    assert h.product_sops_index("ECS") == [{"name": "任务"}]
+
+
+def test_parse_sops_dict_form_empty_task_dropped():
+    """description 与 steps 均缺/全空 → 任务丢弃（全空任务则 sops 不存在）。"""
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "空任务": {}, "正常任务": {"steps": "步骤"}}}}})
+    assert h.product_sops("ECS") == "正常任务：\n步骤"
+    h2 = parse_hints({"products": {"ECS": {"sops": {"空任务": {"steps": ["  ", ""]}}}}})
+    assert h2.product_sops("ECS") is None
+
+
+def test_parse_sops_mixed_forms_full_text_golden():
+    """新旧形态混用全文字节级金标（含空步骤压实、description 并入正文首行）。"""
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "旧任务": ["步骤一", "  ", "步骤二"],
+        "新任务": {"description": "描述", "steps": ["s1", "", "s2"]},
+        "纯描述": {"description": "只有描述"}}}}})
+    assert h.product_sops("ECS") == (
+        "旧任务：\n1. 步骤一\n2. 步骤二\n\n"
+        "新任务：\n描述\n1. s1\n2. s2\n\n"
+        "纯描述：\n只有描述")
+
+
+def test_product_sops_index_dict_form_with_description():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "变更规格": {"description": "在线变更规格", "steps": "ShowServer"}}}}})
+    assert h.product_sops_index("ECS") == [
+        {"name": "变更规格", "description": "在线变更规格"}]
+
+
+def test_product_sops_index_old_form_name_only():
+    """旧形态（string/array）派生索引仅 name（无 description 键）。"""
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "变更规格": ["ShowServer", "ResizeServer"],
+        "旧串": "步骤"}}}})
+    assert h.product_sops_index("ECS") == [
+        {"name": "变更规格"}, {"name": "旧串"}]
+
+
+def test_product_sops_index_mixed_forms_order_and_blank_dropped():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "空任务": {}, "有描述": {"description": "d", "steps": "s"},
+        "无描述": {"steps": "s"}}}}})
+    assert h.product_sops_index("ECS") == [
+        {"name": "有描述", "description": "d"}, {"name": "无描述"}]
+
+
+def test_product_sops_index_case_insensitive_and_absent():
+    h = parse_hints({"products": {"ECS": {"sops": {"任务": {"steps": "s"}}}}})
+    assert h.product_sops_index("ecs") == [{"name": "任务"}]
+    assert h.product_sops_index("OBS") is None
+
+
+def test_product_sops_index_empty_hints_is_noop():
+    assert Hints.empty().product_sops_index("ECS") is None
+
+
+def test_parse_sops_dict_form_invalid_raises():
+    with pytest.raises(ValueError):   # description 非字符串
+        parse_hints({"products": {"ECS": {"sops": {"任务": {"description": 1}}}}})
+    with pytest.raises(ValueError):   # steps 非法标量
+        parse_hints({"products": {"ECS": {"sops": {"任务": {"steps": 1}}}}})
+    with pytest.raises(ValueError):   # steps 数组含非字符串
+        parse_hints({"products": {"ECS": {"sops": {"任务": {"steps": ["a", 2]}}}}})
+    with pytest.raises(ValueError):   # 未知键 fail-fast
+        parse_hints({"products": {"ECS": {"sops": {"任务": {"未知": "x"}}}}})
 
 
 # ---------- S13f：api_notes_in_list_apis 开关（缺省 true = 现状） ----------
