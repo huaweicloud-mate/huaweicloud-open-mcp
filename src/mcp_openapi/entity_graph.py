@@ -346,9 +346,14 @@ def _merge_rows(
 
 # ---------- parse / load ----------
 
-def parse_entity_index(raw: Any) -> EntityGraph:
+def parse_entity_index(raw: Any, engine_kwargs: dict[str, Any] | None = None) -> EntityGraph:
     """把 entity-index 产物解析为 EntityGraph。严格校验：非法结构抛
-    ValueError；解析成功即在 RAM 构建 BM25 索引（纯内存，进程存活期）。"""
+    ValueError；解析成功即在 RAM 构建 BM25 索引（纯内存，进程存活期）。
+
+    engine_kwargs：引擎装配参数显式快照（S23 热刷新——后台重建线程复用装配
+    期快照，不重读模块全局，杜绝重建产物与初始引擎配置漂移）；None 时读取
+    模块级 _ENGINE_KWARGS（既有调用方语义不变）。
+    """
     if not isinstance(raw, dict):
         raise ValueError("entity-index 必须是 mapping")
     unknown = set(raw) - {"version", "generated_at", "products", "apis",
@@ -453,7 +458,7 @@ def parse_entity_index(raw: Any) -> EntityGraph:
         tag_products[tag.strip()] = count
 
     frozen_apis = {ps: tuple(nodes) for ps, nodes in apis_by_product.items()}
-    engine = _build_engine(frozen_apis)
+    engine = _build_engine(frozen_apis, engine_kwargs)
     return EntityGraph(version=version, products=products,
                        apis_by_product=frozen_apis,
                        tag_products=tag_products, engine=engine)
@@ -463,13 +468,21 @@ def parse_entity_index(raw: Any) -> EntityGraph:
 _ENGINE_KWARGS: dict[str, Any] = {}
 
 
+def snapshot_engine_kwargs() -> dict[str, Any]:
+    """_ENGINE_KWARGS 装配期快照（S23）：HotFile 后台重建线程复用快照，
+    不重读模块全局——重建产物与初始引擎配置恒一致。"""
+    return dict(_ENGINE_KWARGS)
+
+
 def _build_engine(apis_by_product: dict[str, tuple[_ApiNode, ...]],
+                  engine_kwargs: dict[str, Any] | None = None,
                   ) -> TantivyEngine | None:
     """RAM 索引装配：无 API 语料时跳过（纯身份信号仍可达）。"""
     docs = [IndexedApi(product=ps, name=n.name, method=n.method,
                        summary=n.summary, tags=n.tags, keywords=n.keywords)
             for ps, nodes in apis_by_product.items() for n in nodes]
-    return TantivyEngine.build(docs, **_ENGINE_KWARGS) if docs else None
+    kwargs = _ENGINE_KWARGS if engine_kwargs is None else engine_kwargs
+    return TantivyEngine.build(docs, **kwargs) if docs else None
 
 
 def load_entity_index(value: str | None) -> EntityGraph:

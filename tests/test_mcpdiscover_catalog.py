@@ -109,13 +109,41 @@ class TestLocalCatalogSource:
         assert len(entries) == 3
 
     def test_cache_hit_no_reread(self, tmp_path):
+        """S23 语义：stamp 未变 → 零重读、不触后台重载（文件未动时）。"""
         f = tmp_path / "catalog.json"
         f.write_text(json.dumps(SAMPLE_ENTRIES, ensure_ascii=False), encoding="utf-8")
         src = catalog.LocalCatalogSource(str(f))
         src.fetch()
+        for _ in range(2):
+            entries = src.fetch()
+            assert len(entries) == 3
+        assert src._thread is None  # 从未触发后台重载
+
+    def test_content_change_reloads_stale_until_ready(self, tmp_path):
+        """S23：内容变更 → 触发后台重载，触发请求拿旧缓存，下一次见新目录。"""
+        f = tmp_path / "catalog.json"
+        f.write_text(json.dumps(SAMPLE_ENTRIES, ensure_ascii=False), encoding="utf-8")
+        src = catalog.LocalCatalogSource(str(f))
+        assert len(src.fetch()) == 3
         f.write_text("[]", encoding="utf-8")
-        entries = src.fetch()
-        assert len(entries) == 3  # cached, not re-read from empty file
+        stale = src.fetch()          # 触发后台重载
+        assert len(stale) == 3
+        src._join_pending()
+        assert src.fetch() == []     # 新内容生效
+
+    def test_reload_failure_keeps_last_good(self, tmp_path):
+        f = tmp_path / "catalog.json"
+        f.write_text(json.dumps(SAMPLE_ENTRIES, ensure_ascii=False), encoding="utf-8")
+        src = catalog.LocalCatalogSource(str(f))
+        src.fetch()
+        f.write_text("{broken", encoding="utf-8")
+        src.fetch()
+        src._join_pending()
+        assert len(src.fetch()) == 3  # 坏文件沿用最近合法目录
+        f.write_text("[]", encoding="utf-8")
+        src.fetch()
+        src._join_pending()
+        assert src.fetch() == []      # 恢复后自动采纳
 
     def test_clear_flushes_cache(self, tmp_path):
         f = tmp_path / "catalog.json"

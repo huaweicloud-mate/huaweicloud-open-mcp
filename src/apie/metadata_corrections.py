@@ -14,6 +14,9 @@ StartupInstance 的 x-constraint 残留「该接口仅支持PostgreSQL引擎」�
 「缓存 doc 恒不改写」由构造保证（纠偏发生在缓存写入之前）。service 不再
 持有纠偏入口（correct_doc_cow/correct_api_result 已删除——对已纠偏 doc 恒
 no-op 的假想 seam）。
+S23 热刷新（ADR-0004）：corrections 可为 HotFile provider（fetch 时点现读），
+配置换值经 on_reload → MemoryStore.clear_api_details() 定向失效详情缓存，
+缓存 doc 语义从「启动期固化」改为「按写入时点纠偏世代」。
 红线：逐 API 精确键，禁止通用模式删除（「数据库代理(PostgreSQL)」等 tag 的
 「仅支持PostgreSQL」是真约束，泛化会误杀）；drop/replace 语义幂等，上游修复
 后自动 no-op，条目可退场。
@@ -39,13 +42,26 @@ drop（布尔 true，删叶键——与 op 级行级子串列表形区分，语�
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from common.optconf import load_opt_file
 
 logger = logging.getLogger("apie.metadata_corrections")
 
 DEFAULT_CORRECTIONS_FILE = "metadata-corrections.json"
+
+
+@runtime_checkable
+class CorrectionsProvider(Protocol):
+    """corrections 现读源协议（S23）：``HotFile[MetadataCorrections]`` 结构性满足。
+
+    find_api_doc / LiveFallback 的 corrections 参数接受值对象（启动快照路径）
+    或 provider（热刷新路径）——provider 在远端拉取返回后、compose 前现读
+    （fetch 时点），把纠偏口径漂移窗口从「秒级远端往返」收窄到「compose+落缓存
+    的亚毫秒」；残余窗口（现读后、落缓存前完成 reload）文档化为可接受。
+    """
+
+    def get(self) -> "MetadataCorrections": ...
 
 # 字段白名单 v1：纠偏可触及的 op/信封级元数据字段（扩展即加白名单）
 ALLOWED_FIELDS = frozenset({"x-constraint"})

@@ -5,6 +5,11 @@
 不再持有纠偏入口——correct_doc_cow（运行时 COW）与 correct_api_result
 （信封级）对已纠偏 doc 恒 no-op，属假想 seam，已删除；「缓存 doc 恒不改写」
 由构造保证（纠偏发生在缓存写入之前，非消费方机制）。
+
+S23 起 corrections 支持热刷新：缓存 doc 按**写入时点的纠偏世代**纠偏——
+配置文件换值后经 on_reload → MemoryStore.clear_api_details() 定向失效，
+下一次缓存未命中以新口径重 compose；残余窗口（compose+落缓存的亚毫秒内
+完成 reload）文档化为可接受（ADR-0004）。
 """
 
 from typing import Any

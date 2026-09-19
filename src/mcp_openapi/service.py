@@ -17,11 +17,12 @@ from apie import mock as apie_mock
 from apie.api_location import ApiLocation
 from apie.convert_openapi2 import AuthDemotePolicy
 from apie.memory_store import MemoryStore
-from apie.metadata_corrections import MetadataCorrections
+from apie.metadata_corrections import CorrectionsProvider, MetadataCorrections
 from common.audit import AuditSink
 from common.audit import audited as _audited
 from common.auth.credentials import Credentials
 from common.elicit import DenialOffer
+from common.hotconf import HotFile
 from common.types import (
     ApiDetailResult,
     ApiListResult,
@@ -96,6 +97,13 @@ class ServiceConfig:
     corrections: MetadataCorrections = MetadataCorrections.empty()
     audit_sink: AuditSink | None = None
     spill: SpillConfig | None = field(default_factory=SpillConfig.default)
+    # 热刷新 holder（S23，加性字段——policy_store/policy_rules 先例）：
+    # 注入时运行期跟随配置文件（stale-until-ready），缺省 None 走上方启动
+    # 快照字段（既有测试与行为逐字节不变）。装配点 build_openapi_config。
+    hints_live: HotFile[Hints] | None = None
+    deprecated_live: HotFile[DeprecatedIndex] | None = None
+    corrections_live: HotFile[MetadataCorrections] | None = None
+    entity_live: HotFile[EntityGraph] | None = None
 
 
 class ToolService:
@@ -104,6 +112,12 @@ class ToolService:
         self.config = config or ServiceConfig()
         self.store = store or MemoryStore()
         self._mock_client: apie_mock.MockApiClient | None = None
+        # S23 corrections 热刷新联动：配置文件换值后定向失效详情缓存
+        #（products/apis 列表与纠偏口径无关，保持缓存）。装配期一次性接线，
+        # 有流量后不再改写（on_reload 在 HotFile 持锁状态执行）。
+        live = self.config.corrections_live
+        if live is not None:
+            live.on_reload = lambda _value: self.store.clear_api_details()
 
     def _make_http_client(self) -> execute.SignedClient:
         if self.config.http_client_factory is not None:
@@ -126,19 +140,54 @@ class ToolService:
                      ) -> ApiLocation | None:
         """查找接口 OpenAPI 文档（内存缓存或远端拉取），返回 (doc, path, method, op) 或 None。
 
-        返回的 doc 必已纠偏（纠偏在生产时点落位——live_fallback/doc_compose，
-        ADR-0001）；corrections/auth_demote 均启动期常量随转换固化进缓存。
+        返回的 doc 按写入时点的纠偏世代纠偏（生产时点落位——live_fallback/
+        doc_compose，ADR-0001）；corrections 走现读源（S23：注入 holder 时
+        传 provider，LiveFallback 在 fetch 时点现读；否则用启动快照值对象），
+        热刷新经 on_reload → MemoryStore.clear_api_details() 定向失效。
+        auth_demote 为启动期常量随转换固化进缓存。
         """
         return catalog.find_api_doc(self.store, product, api_name,
                                     region or self.config.region,
                                     auth_demote=self.config.auth_demote,
-                                    corrections=self.config.corrections)
+                                    corrections=self._corrections_source())
+
+    def _corrections_source(self) -> "MetadataCorrections | CorrectionsProvider":
+        """corrections 现读源（S23）：注入 holder 时传 provider（fetch 时点
+        现读，竞态窗口从秒级收窄到亚毫秒），否则用启动快照值对象。"""
+        live = self.config.corrections_live
+        if live is not None:
+            return live
+        return self.config.corrections
 
     def _effective_policy_rules(self) -> Sequence[safety_policy.PolicyRule] | None:
         """当前生效规则：注入 PolicyStore 时实时热加载，否则用启动快照。"""
         if self.config.policy_store is not None:
             return self.config.policy_store.rules()
         return self.config.policy_rules
+
+    def _hints(self) -> Hints:
+        """当前生效提示（S23）：注入 hints_live 时实时热加载，否则用启动快照。
+
+        每次工具调用恰读一次（方法开头取快照下传），同一响应内提示口径一致。
+        """
+        live = self.config.hints_live
+        if live is not None:
+            return live.get()
+        return self.config.hints
+
+    def _deprecated_index(self) -> DeprecatedIndex:
+        """当前生效废弃索引（S23）：注入 deprecated_live 时实时热加载，否则用启动快照。"""
+        live = self.config.deprecated_live
+        if live is not None:
+            return live.get()
+        return self.config.deprecated_index
+
+    def _entity_graph(self) -> EntityGraph:
+        """当前生效实体图谱（S23）：注入 entity_live 时实时热加载，否则用启动快照。"""
+        live = self.config.entity_live
+        if live is not None:
+            return live.get()
+        return self.config.entity_graph
 
     def _check_policy(self, product: str, api: str) -> str | None:
         """检查 safety policy，返回错误描述或 None（放行）。"""
@@ -201,19 +250,18 @@ class ToolService:
 
     # ---------- 提示注入（Hints：配置驱动塑形，copy-on-write） ----------
 
-    def _with_product_hints(self, out: Any, product: str) -> Any:
-        """顶层附加产品级提示（未配置时不加字段）。"""
-        notes = self.config.hints.product_notes(product)
+    def _with_product_hints(self, out: Any, product: str, hints: Hints) -> Any:
+        """顶层附加产品级提示（未配置时不加字段）。hints 由调用方单次快照下传。"""
+        notes = hints.product_notes(product)
         return {**out, "hints": notes} if notes else out
 
-    def _with_combined_hints(self, out: Any, product: str, api: str) -> Any:
+    def _with_combined_hints(self, out: Any, product: str, api: str, hints: Hints) -> Any:
         """get_api 顶层附加合并提示（产品在前、API 在后；合并策略内聚 Hints）。"""
-        notes = self.config.hints.combined_notes(product, api)
+        notes = hints.combined_notes(product, api)
         return {**out, "hints": notes} if notes else out
 
-    def _annotate_product_items(self, out: Any) -> Any:
+    def _annotate_product_items(self, out: Any, hints: Hints) -> Any:
         """list_products 条目级：配置了 notes 的产品条目附加 hints。"""
-        hints = self.config.hints
         items = out.get("products") or []
         annotated = [(p, hints.product_notes(p.get("product", ""))) for p in items]
         if not any(notes for _, notes in annotated):
@@ -221,9 +269,9 @@ class ToolService:
         return {**out, "products": [
             {**p, "hints": notes} if notes else p for p, notes in annotated]}
 
-    def _annotate_deprecated(self, out: Any, product: str) -> Any:
+    def _annotate_deprecated(self, out: Any, product: str,
+                             index: DeprecatedIndex) -> Any:
         """annotate 模式：条目级结构化标注 deprecated + replacement（S14）。"""
-        index = self.config.deprecated_index
         items = out.get("apis") or []
         decorated: list[Any] = []
         changed = False
@@ -237,13 +285,13 @@ class ToolService:
             decorated.append(a)
         return {**out, "apis": decorated} if changed else out
 
-    def _annotate_list_apis(self, out: Any, product: str) -> Any:
+    def _annotate_list_apis(self, out: Any, product: str, hints: Hints) -> Any:
         """list_apis：顶层产品级提示 + 当前页条目级 API 级提示。
 
         api_notes_in_list_apis=False 时条目级被抑制（S13f），顶层保留。
+        hints 为调用方单次快照（S23：顶层与条目级同一口径，杜绝撕裂）。
         """
-        hints = self.config.hints
-        new_out = self._with_product_hints(out, product)
+        new_out = self._with_product_hints(out, product, hints)
         if not hints.api_notes_in_list_apis:
             return new_out
         items = new_out.get("apis") or []
@@ -262,7 +310,7 @@ class ToolService:
         """第 0 步：实体图谱跨产品检索（构建期快照，非实时）。"""
         logger.info("search_apis query=%r limit=%s category=%s",
                     query, limit, category or "-")
-        graph = self.config.entity_graph
+        graph = self._entity_graph()
         if graph.version == 0:
             logger.warning("search_apis entity_index=missing")
             return {"ok": False,
@@ -270,21 +318,21 @@ class ToolService:
                               "请改用 list_products 定位产品"}
         # 废弃治理（S15 扩展）：与 list_apis 同索引同模式——
         # hide 排名前排除（机制参数，模块索引无关）；annotate service 层塑形
+        mode = self.config.deprecated_mode
         exclude = None
-        if self.config.deprecated_mode == "hide":
-            idx = self.config.deprecated_index
+        if mode == "hide":
+            idx = self._deprecated_index()
             exclude = {ps.lower(): idx.names(ps) for ps in graph.products}
         out = graph.search_apis(query, limit=limit, category=category,
                                 exclude_apis=exclude)
-        if self.config.deprecated_mode == "annotate":
-            out = self._annotate_search_deprecated(out)
+        if mode == "annotate":
+            out = self._annotate_search_deprecated(out, self._deprecated_index())
         return cast(SearchApisResult, out)
 
-    def _annotate_search_deprecated(self, out: Any) -> Any:
+    def _annotate_search_deprecated(self, out: Any, index: DeprecatedIndex) -> Any:
         """search_apis annotate：条目级结构化标注 deprecated + replacement
         （S14 同 idiom，copy-on-write 仅变更时重建）。已知边界：twin 归并行
         内孪生成员 api 按主产品索引查询，可能欠标注（hide 路径无此问题）。"""
-        idx = self.config.deprecated_index
         decorated_rows: list[Any] = []
         changed = False
         for row in out.get("products") or []:
@@ -292,7 +340,7 @@ class ToolService:
             decorated_apis: list[Any] = []
             row_changed = False
             for a in row.get("apis") or []:
-                entry = idx.entry(product, a.get("name", ""))
+                entry = index.entry(product, a.get("name", ""))
                 if entry is not None:
                     row_changed = True
                     a = {**a, "deprecated": True}
@@ -315,7 +363,7 @@ class ToolService:
             logger.warning("list_products metadata=missing")
             return {"ok": False, "reason": "产品列表不可用（远端拉取失败）"}
         out = metadata.list_products(groups, category=category, keyword=keyword)
-        return cast(ProductListResult, self._annotate_product_items(out))
+        return cast(ProductListResult, self._annotate_product_items(out, self._hints()))
 
     @_audited
     @_guarded
@@ -329,7 +377,7 @@ class ToolService:
         if out is None:
             logger.warning("get_product product=%s result=not_found", product)
             return {"ok": False, "reason": f"产品 {product} 未找到"}
-        return cast(ProductResult, self._with_product_hints(out, product))
+        return cast(ProductResult, self._with_product_hints(out, product, self._hints()))
 
     @_audited
     @_guarded
@@ -341,14 +389,17 @@ class ToolService:
         if apis is None:
             logger.warning("list_apis product=%s metadata=missing", product)
             return {"ok": False, "reason": "接口索引不可用（远端拉取失败）"}
+        # S23 单快照：hints / 废弃索引各读一次，同一响应内口径一致（防撕裂）
+        hints = self._hints()
+        index = self._deprecated_index()
+        mode = self.config.deprecated_mode
         out = metadata.list_apis(apis, product, tag=tag, search=search,
                                  limit=limit, offset=offset,
-                                 exclude_apis=(self.config.deprecated_index.names(product)
-                                               if self.config.deprecated_mode == "hide"
-                                               else None))
-        if self.config.deprecated_mode == "annotate":
-            out = self._annotate_deprecated(out, product)
-        return cast(ApiListResult, self._annotate_list_apis(out, product))
+                                 exclude_apis=(index.names(product)
+                                               if mode == "hide" else None))
+        if mode == "annotate":
+            out = self._annotate_deprecated(out, product, index)
+        return cast(ApiListResult, self._annotate_list_apis(out, product, hints))
 
     @_audited
     @_guarded
@@ -360,7 +411,8 @@ class ToolService:
             logger.warning("get_api %s:%s region=%s result=not_found", product, api, region)
             return {"ok": False, "reason": f"接口 {api} 未找到（产品 {product}）"}
         out: Any = metadata.format_api_detail(hit, product)
-        return cast(ApiDetailResult, self._with_combined_hints(out, product, api))
+        return cast(ApiDetailResult,
+                    self._with_combined_hints(out, product, api, self._hints()))
 
     @_audited
     @_guarded

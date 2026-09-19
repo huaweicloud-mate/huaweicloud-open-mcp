@@ -12,7 +12,7 @@ from . import explorer
 from .convert_openapi2 import AuthDemotePolicy
 from .live_fallback import LiveFallback
 from .memory_store import ApiHit, MemoryStore
-from .metadata_corrections import MetadataCorrections
+from .metadata_corrections import CorrectionsProvider, MetadataCorrections
 
 logger = logging.getLogger("apie.catalog")
 
@@ -48,13 +48,16 @@ def get_apis(store: MemoryStore, product: str) -> list[dict[str, Any]] | None:
 def find_api_doc(store: MemoryStore, product: str, api: str,
                  region: str,
                  auth_demote: AuthDemotePolicy | None = None,
-                 corrections: "MetadataCorrections | None" = None) -> ApiHit | None:
+                 corrections: "MetadataCorrections | CorrectionsProvider | None" = None
+                 ) -> ApiHit | None:
     """查找接口 OpenAPI 文档。内存缓存命中直接返回；
     未命中时远端拉取并缓存；失败返回 None。
     返回 (doc, path, method, op) 或 None。
-    auth_demote / corrections 均为启动期常量（doc 随首次转换固化进缓存，
-    同进程内策略变更不回溯生效——见 live_fallback/doc_compose）；
-    corrections 使缓存 doc 必已纠偏（生产时点落位，ADR-0001）。
+    auth_demote 为启动期常量（doc 随首次转换固化进缓存，同进程内策略变更
+    不回溯生效——见 live_fallback/doc_compose）；corrections 接受值对象或
+    热刷新 provider（S23，fetch 时点现读，纠偏口径跟随当前配置文件），
+    热刷新联动 MemoryStore.clear_api_details() 定向失效详情缓存；
+    corrections 使缓存 doc 按写入时点纠偏（生产时点落位，ADR-0001）。
     """
     hit = store.find_api(product, api, region)
     if hit is not None:

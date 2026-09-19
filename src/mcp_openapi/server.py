@@ -9,7 +9,11 @@ from mcp.server.mcpserver.context import Context
 
 from apie import mock as apie_mock
 from apie.convert_openapi2 import AuthDemotePolicy
-from apie.metadata_corrections import load_metadata_corrections
+from apie.metadata_corrections import (
+    DEFAULT_CORRECTIONS_FILE,
+    MetadataCorrections,
+    parse_metadata_corrections,
+)
 from common.audit import AuditSink, sink_from_path
 from common.auth import credentials as cred_mod
 from common.deployment import (
@@ -26,6 +30,8 @@ from common.deployment import (
     resolve_deployment,
 )
 from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
+from common.hotconf import HotFile
+from common.optconf import watch_opt_file
 from common.types import (
     ApiDetailResult,
     ApiListResult,
@@ -38,11 +44,24 @@ from common.types import (
 )
 from safety.policy_store import PolicyStore
 
-from .deprecated import load_deprecated_index
-from .entity_graph import load_entity_index
-from .hints import Hints, load_hints_file
+from .deprecated import DeprecatedIndex, parse_deprecated_index
+from .entity_graph import DEFAULT_INDEX, EntityGraph, parse_entity_index, snapshot_engine_kwargs
+from .hints import DEFAULT_HINTS_FILE, Hints, parse_hints
 from .service import ServiceConfig, ToolService
 from .spill import parse_spill_config
+
+
+def _watch_opt_config(arg: str | None, *, parse: Any, off: Any,
+                      default_name: str | None = None) -> tuple[Any, HotFile[Any] | None]:
+    """watch_opt_file 装配拆分：热分支 (初始值快照, holder)，静态分支 (off, None)。
+
+    快照字段在 holder 注入时仅作兜底（service 归一访问器优先 holder.get()），
+    取 holder 初始值保证两条路径可见状态一致。
+    """
+    result = watch_opt_file(arg, parse=parse, off=off, default_name=default_name)
+    if isinstance(result, HotFile):
+        return result.get(), result
+    return result, None
 
 INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模式）
 
@@ -203,7 +222,11 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
     if deprecated_mode not in (None, "annotate", "hide", "off"):
         raise ValueError(f"无效的 deprecated-mode: {deprecated_mode}"
                          "（可选 annotate/hide/off）")
-    deprecated_index = load_deprecated_index(deprecated_file or None)
+    deprecated_snapshot, deprecated_live = _watch_opt_config(
+        deprecated_file, parse=parse_deprecated_index, off=DeprecatedIndex.empty())
+    hints_snapshot, hints_live = _watch_opt_config(
+        hints_file, parse=parse_hints,
+        off=Hints.empty(), default_name=DEFAULT_HINTS_FILE)
     entity_index_file = (getattr(args, "entity_index", None)
                          or env.get(ENV_ENTITY_INDEX))
     if policy_store is None:
@@ -217,6 +240,19 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
                        or env.get(ENV_AUTH_DEMOTE_PASS))
     corrections_raw = (getattr(args, "metadata_corrections", None)
                        or env.get(ENV_METADATA_CORRECTIONS))
+    # entity：引擎参数装配期快照（S23）——HotFile 后台重建线程复用闭包快照，
+    # 不重读模块全局，重建产物与初始引擎配置恒一致
+    engine_kwargs = snapshot_engine_kwargs()
+
+    def _parse_entity(raw: dict) -> EntityGraph:
+        return parse_entity_index(raw, engine_kwargs=engine_kwargs)
+
+    entity_snapshot, entity_live = _watch_opt_config(
+        entity_index_file, parse=_parse_entity,
+        off=EntityGraph.empty(), default_name=DEFAULT_INDEX)
+    corrections_snapshot, corrections_live = _watch_opt_config(
+        corrections_raw, parse=parse_metadata_corrections,
+        off=MetadataCorrections.empty(), default_name=DEFAULT_CORRECTIONS_FILE)
     return ServiceConfig(
         region=region or "cn-north-4",
         mock=dep.mock,
@@ -225,12 +261,16 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
         credentials=None if dep.mock else cred_mod.get_credentials(),
         mock_base=dep.mock_base or apie_mock.MOCK_BASE,
         mock_passthrough=dep.mock_passthrough,
-        hints=load_hints_file(hints_file),
-        deprecated_index=deprecated_index,
+        hints=hints_snapshot,
+        hints_live=hints_live,
+        deprecated_index=deprecated_snapshot,
+        deprecated_live=deprecated_live,
         deprecated_mode=deprecated_mode or ("annotate" if deprecated_file else "off"),
-        entity_graph=load_entity_index(entity_index_file),
+        entity_graph=entity_snapshot,
+        entity_live=entity_live,
         auth_demote=parse_auth_demote_policy(demote_raw, demote_pass_raw),
-        corrections=load_metadata_corrections(corrections_raw),
+        corrections=corrections_snapshot,
+        corrections_live=corrections_live,
         audit_sink=audit_sink if audit_sink is not None else sink_from_path(dep.audit_file),
         spill=parse_spill_config(spill_raw, data_enabled=data_enabled),
     )

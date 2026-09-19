@@ -8,7 +8,8 @@ import json
 
 import pytest
 
-from common.optconf import is_off, load_opt_file
+from common.hotconf import HotFile
+from common.optconf import is_off, load_opt_file, watch_opt_file
 
 # ---------- is_off：off 哨兵判定单点（大小写不敏感） ----------
 
@@ -91,3 +92,56 @@ def test_load_opt_file_parse_receives_raw_dict(sealed_configs):
     seen: list = []
     load_opt_file("x.json", parse=seen.append, off=None)
     assert seen == [{"k": [1, 2]}]
+
+
+# ---------- watch_opt_file：热刷新孪生（S23） ----------
+
+
+def test_watch_opt_file_none_without_default_returns_off():
+    off = {"off": True}
+    assert watch_opt_file(None, parse=_parse, off=off) is off
+
+
+def test_watch_opt_file_none_default_missing_silent_off(sealed_configs):
+    off = {"off": True}
+    out = watch_opt_file(None, parse=_parse, off=off, default_name="nope.json")
+    assert out is off  # 启动缺失 → 静态 off，不追踪后出现的文件
+
+
+def test_watch_opt_file_off_sentinel_static(sealed_configs):
+    off = {"off": True}
+    for raw in ("off", "OFF", ""):
+        assert watch_opt_file(raw, parse=_parse, off=off) is off
+
+
+def test_watch_opt_file_none_default_present_returns_hot_file(sealed_configs):
+    (sealed_configs / "configs").mkdir()
+    (sealed_configs / "configs" / "defaults.json").write_text(
+        json.dumps({"v": 1}), encoding="utf-8")
+    out = watch_opt_file(None, parse=_parse, off=None, default_name="defaults.json")
+    assert isinstance(out, HotFile)
+    assert out.get() == {"seen": {"v": 1}}
+
+
+def test_watch_opt_file_hot_branch_follows_changes(sealed_configs):
+    p = sealed_configs / "mine.json"
+    p.write_text(json.dumps({"v": 1}), encoding="utf-8")
+    out = watch_opt_file(str(p), parse=_parse, off=None)
+    assert isinstance(out, HotFile)
+    assert out.get() == {"seen": {"v": 1}}
+    p.write_text(json.dumps({"v": 2}), encoding="utf-8")
+    out.get()
+    out._join_pending()
+    assert out.get() == {"seen": {"v": 2}}  # 运行期跟随文件
+
+
+def test_watch_opt_file_explicit_missing_fail_fast(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        watch_opt_file(str(tmp_path / "absent.json"), parse=_parse, off=None)
+
+
+def test_watch_opt_file_hot_branch_eager_fail_fast(sealed_configs):
+    (sealed_configs / "configs").mkdir()
+    (sealed_configs / "configs" / "bad.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        watch_opt_file("bad.json", parse=_parse, off=None)
