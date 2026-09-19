@@ -3,6 +3,10 @@
   "products": {
     "ECS": {
       "notes": "查询云服务器列表优先用 ListServersDetails（分页更全），不要用 ListCloudServers。",
+      "sops": {
+        "创建云服务器": ["ListFlavors 查规格（确认目标 AZ 有货）", "CreateServers 创建", "ShowServer 轮询 status=ACTIVE"],
+        "变更规格": ["ShowServer 确认当前规格", "ResizeServer 提交变更", "ConfirmResize 确认（手动确认模式）"]
+      },
       "apis": {
         "ResizeServer": "变更规格前先用 ListFlavors 确认目标规格在目标 AZ 售罄情况。"
       }

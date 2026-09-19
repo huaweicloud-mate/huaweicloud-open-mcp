@@ -292,7 +292,7 @@ A richer example ships with the package: `configs/safety-policy.example.json`.
 
 ## Custom hints (optional)
 
-A hints file lets a deployment inject its own guidance into the discovery chain: a global `instructions` block appended to the server instructions, plus per-product `notes` and per-API texts attached to discovery results (`list_products` / `get_product` / `list_apis` / `get_api`).
+A hints file lets a deployment inject its own guidance into the discovery chain: a global `instructions` block appended to the server instructions, plus per-product `notes` and per-API texts attached to discovery results (`list_products` / `get_product` / `list_apis` / `get_api`); a product-level SOP (`sops`) rides as an extra `sops` field on the `get_product` / `list_apis` top-level envelopes.
 
 ```json
 {
@@ -300,6 +300,10 @@ A hints file lets a deployment inject its own guidance into the discovery chain:
   "products": {
     "ECS": {
       "notes": "Prefer ListServersDetails for listing servers.",
+      "sops": {
+        "Create a server": ["ListFlavors to check availability", "CreateServers to provision", "ShowServer to poll status=ACTIVE"],
+        "Resize a server": "ShowServer to confirm → ResizeServer → ConfirmResize"
+      },
       "apis": {
         "ResizeServer": "Check flavor availability with ListFlavors first."
       }
@@ -310,12 +314,14 @@ A hints file lets a deployment inject its own guidance into the discovery chain:
 ```
 
 - Official metadata is never replaced — hints ride along in an extra `hints` field (product + API notes are merged, product first).
+- Product-level SOP (`sops`, optional): mapping-only (tasks must be named); a task value is a string (verbatim) or an array of strings (auto-numbered `1. x`, blank steps dropped and numbering compacted); rendered as ordered text (`Task:\ncontent`, blank line between tasks) and returned as an extra `sops` field on `get_product` / `list_apis` top-level envelopes — alongside `hints` (notes are one-line pointers, SOPs are procedure guides); list items and `get_api` / `get_api_examples` / `execute_api` are never annotated.
 - Injected only on successful discovery results, never on denials (policy rejections stay untouched); `get_api_examples` and `execute_api` are never annotated.
-- Product keys and `apis` keys are case-insensitive; a product value may be a plain string (product note only) or an object with `notes` / `apis`.
+- Product keys and `apis` keys are case-insensitive; a product value may be a plain string (product note only) or an object with `notes` / `apis` / `sops`.
 - Optional top-level boolean `api_notes_in_list_apis` (default `true`): when `false`, `list_apis` items carry no API-level notes (top-level product notes and `get_api` merged notes are unaffected) — the generated help-center completion file sets this to `false` so `get_api` stays the only enriched surface.
-- Loaded at startup (no hot reload); invalid configs fail fast at startup.
+- Loaded at startup and hot-reloaded from the config file at runtime (no restart needed); invalid configs fail fast at startup.
 - Default file: with no `--hints` and no `HUAWEICLOUD_MCP_OPENAPI_HINTS`, `configs/help-docs-hints.json` (repo-root copy first, then the one bundled in the installed package) is loaded automatically; if absent it is skipped silently. Pass `--hints off` (or an empty env value) to disable explicitly. Explicit paths/bare names keep fail-fast semantics on a missing file.
 - The file path supports a bare filename: an existing explicit path (absolute or cwd-relative) is used as-is; otherwise it resolves as `configs/<name>` (repo-root `configs/` first, then the copy bundled in the installed package — handy for `uvx`/`pip` installs).
+- Curated seed: product entries in `configs/help-docs-hints-curation.json` may carry `sops` (passed through as a raw mapping); curated entries survive `api-refresh helphints` regeneration.
 
 Example: `configs/openapi-hints.example.json` (loadable as `--hints openapi-hints.example.json`).
 

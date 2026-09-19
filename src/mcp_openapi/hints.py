@@ -4,10 +4,12 @@
 工具结果信封附加提示字段、server instructions 追加全局段。未配置
 （empty()）时行为与现状完全一致。
 
-粒度：全局 instructions + 产品级 notes + API 级 apis。产品键归一化 upper
-（productshort 惯例）；API 键归一化 lower（大小写不敏感，对齐
-apie.live_fallback 匹配语义）。合并策略内聚于 combined_notes：产品在前、
-空段跳过、换行连接。
+粒度：全局 instructions + 产品级 notes + 产品级 SOP（sops）+ API 级 apis。
+产品键归一化 upper（productshort 惯例）；API 键归一化 lower（大小写不敏感，
+对齐 apie.live_fallback 匹配语义）。合并策略内聚于 combined_notes：产品在前、
+空段跳过、换行连接。sops 为 mapping-only（任务名 → string | array[string]），
+parse 期一次渲染为文本（任务名行 + 编号步骤，任务间空行），product_sops()
+为纯 dict 查找。
 """
 
 from dataclasses import dataclass, field
@@ -25,9 +27,43 @@ def _clean(text: Any, where: str) -> str | None:
     return text if text.strip() else None
 
 
+def _render_sops(raw: Any, where: str) -> str | None:
+    """产品级 SOP 值 → 渲染文本（mapping-only：任务名 → string | array[string]）。
+
+    每任务渲染为 ``任务名：\\n内容``（string 原文 / array 自动编号 ``1. x``），
+    任务按配置顺序、任务间空行；空任务名/空内容按 _clean 纪律丢弃
+    （空步骤丢弃且编号压实）；全空返回 None（视为未配置）。
+    """
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where} sops 必须是 mapping")
+    tasks: list[str] = []
+    for tname, tval in raw.items():
+        if not isinstance(tname, str) or not tname.strip():
+            raise ValueError(f"{where} sops 任务名必须是非空字符串")
+        label = tname.strip()
+        if isinstance(tval, str):
+            body = _clean(tval, f"{where} sops 任务 {label}")
+            if body is None:
+                continue
+        elif isinstance(tval, list):
+            steps = []
+            for i, step in enumerate(tval):
+                text = _clean(step, f"{where} sops 任务 {label} 步骤 {i + 1}")
+                if text is not None:
+                    steps.append(text)
+            if not steps:
+                continue
+            body = "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))
+        else:
+            raise ValueError(f"{where} sops 任务 {label} 必须是字符串或字符串数组")
+        tasks.append(f"{label}：\n{body}")
+    return "\n\n".join(tasks) if tasks else None
+
+
 @dataclass(frozen=True)
 class Hints:
-    """提示注入值对象。products: {PRODUCT_UPPER: (notes, {API_LOWER: text})}。
+    """提示注入值对象。products: {PRODUCT_UPPER: (notes, {API_LOWER: text})}；
+    sops: {PRODUCT_UPPER: 渲染文本}（产品级 SOP，mapping-only 配置 parse 期渲染）。
 
     api_notes_in_list_apis（缺省 True = 现状）：False 时 list_apis 条目级
     API 提示被抑制（顶层产品级与 get_api 合并提示不受影响）。
@@ -35,12 +71,17 @@ class Hints:
 
     instructions: str | None = None
     products: dict[str, tuple[str | None, dict[str, str]]] = field(default_factory=dict)
+    sops: dict[str, str] = field(default_factory=dict)
     api_notes_in_list_apis: bool = True
 
     def product_notes(self, product: str) -> str | None:
         """产品级提示（未配置返回 None）。"""
         entry = self.products.get((product or "").upper())
         return entry[0] if entry else None
+
+    def product_sops(self, product: str) -> str | None:
+        """产品级 SOP 渲染文本（未配置返回 None）。"""
+        return self.sops.get((product or "").upper())
 
     def api_notes(self, product: str, api: str) -> str | None:
         """仅 API 级提示（不含产品级；未配置返回 None）。"""
@@ -75,6 +116,7 @@ def parse_hints(raw: Any) -> Hints:
     if not isinstance(flag, bool):
         raise ValueError("hints api_notes_in_list_apis 必须是布尔值")
     products: dict[str, tuple[str | None, dict[str, str]]] = {}
+    sops: dict[str, str] = {}
     raw_products = raw.get("products") or {}
     if not isinstance(raw_products, dict):
         raise ValueError("hints products 必须 mapping")
@@ -84,10 +126,11 @@ def parse_hints(raw: Any) -> Hints:
         where = f"hints 产品 {key}"
         notes: str | None
         apis: dict[str, str] = {}
+        sop_text: str | None = None
         if isinstance(val, str):
             notes = _clean(val, where)
         elif isinstance(val, dict):
-            extra = set(val) - {"notes", "apis"}
+            extra = set(val) - {"notes", "apis", "sops"}
             if extra:
                 raise ValueError(f"{where} 含未知键: {sorted(extra)}")
             notes = _clean(val.get("notes"), f"{where} notes")
@@ -100,10 +143,13 @@ def parse_hints(raw: Any) -> Hints:
                 text = _clean(aval, f"{where} API {akey}")
                 if text is not None:
                     apis[akey.strip().lower()] = text
+            sop_text = _render_sops(val["sops"], where) if "sops" in val else None
         else:
             raise ValueError(f"{where} 必须是字符串或 mapping")
         products[key.strip().upper()] = (notes, apis)
-    return Hints(instructions=instructions, products=products,
+        if sop_text is not None:
+            sops[key.strip().upper()] = sop_text
+    return Hints(instructions=instructions, products=products, sops=sops,
                  api_notes_in_list_apis=flag)
 
 

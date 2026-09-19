@@ -251,9 +251,21 @@ class ToolService:
     # ---------- 提示注入（Hints：配置驱动塑形，copy-on-write） ----------
 
     def _with_product_hints(self, out: Any, product: str, hints: Hints) -> Any:
-        """顶层附加产品级提示（未配置时不加字段）。hints 由调用方单次快照下传。"""
+        """顶层附加产品级提示与 SOP（未配置时不加字段）。hints 由调用方单次快照下传。
+
+        sops 与 hints 并列独立字段（notes 为一句话口径、SOP 为流程，粒度不同源）；
+        两者皆未配置时原对象返回（未配置路径与现状逐字节一致）。
+        """
         notes = hints.product_notes(product)
-        return {**out, "hints": notes} if notes else out
+        sops = hints.product_sops(product)
+        if not notes and not sops:
+            return out
+        patched = dict(out)
+        if notes:
+            patched["hints"] = notes
+        if sops:
+            patched["sops"] = sops
+        return patched
 
     def _with_combined_hints(self, out: Any, product: str, api: str, hints: Hints) -> Any:
         """get_api 顶层附加合并提示（产品在前、API 在后；合并策略内聚 Hints）。"""

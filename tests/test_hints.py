@@ -85,6 +85,86 @@ def test_parse_minimal_form_is_noop():
     assert h.product_notes("ECS") is None
 
 
+# ---------- S10a 扩展：产品级 SOP（sops，mapping-only，parse 期渲染） ----------
+
+def test_parse_sops_mapping_with_string_value():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "变更规格": "ShowServer → ResizeServer → ConfirmResize"}}}})
+    assert h.product_sops("ECS") == \
+        "变更规格：\nShowServer → ResizeServer → ConfirmResize"
+
+
+def test_parse_sops_mapping_with_array_value_auto_numbering():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "创建云服务器": ["ListFlavors 查规格", "CreateServers 创建",
+                         "ShowServer 轮询 ACTIVE"]}}}})
+    assert h.product_sops("ECS") == (
+        "创建云服务器：\n1. ListFlavors 查规格\n2. CreateServers 创建"
+        "\n3. ShowServer 轮询 ACTIVE")
+
+
+def test_parse_sops_multi_task_config_order_and_blank_line():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "创建云服务器": "1) ListFlavors → 2) CreateServers",
+        "变更规格": ["ShowServer 确认", "ResizeServer 提交"]}}}})
+    assert h.product_sops("ECS") == (
+        "创建云服务器：\n1) ListFlavors → 2) CreateServers\n\n"
+        "变更规格：\n1. ShowServer 确认\n2. ResizeServer 提交")
+
+
+def test_parse_sops_blank_steps_dropped_and_numbering_compacted():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "任务": ["步骤一", "  ", "步骤二"]}}}})
+    assert h.product_sops("ECS") == "任务：\n1. 步骤一\n2. 步骤二"
+
+
+def test_parse_sops_blank_task_dropped_all_blank_is_absent():
+    h = parse_hints({"products": {"ECS": {"sops": {
+        "空任务": "  ", "正常任务": "步骤"}}}})
+    assert h.product_sops("ECS") == "正常任务：\n步骤"
+    h2 = parse_hints({"products": {"ECS": {"sops": {"空任务": "  "}}}})
+    assert h2.product_sops("ECS") is None
+
+
+def test_product_sops_product_key_case_insensitive():
+    h = parse_hints({"products": {"ECS": {"sops": {"任务": "步骤"}}}})
+    assert h.product_sops("ecs") == "任务：\n步骤"
+    assert h.product_sops("OBS") is None
+
+
+def test_product_sops_empty_hints_is_noop():
+    assert Hints.empty().product_sops("ECS") is None
+
+
+def test_parse_sops_string_shorthand_has_no_sops():
+    h = parse_hints({"products": {"OBS": "产品级提示"}})
+    assert h.product_sops("OBS") is None
+
+
+def test_parse_sops_and_notes_coexist():
+    h = parse_hints({"products": {"ECS": {
+        "notes": "产品提示", "sops": {"任务": "步骤"}}}})
+    assert h.product_notes("ECS") == "产品提示"
+    assert h.product_sops("ECS") == "任务：\n步骤"
+
+
+def test_parse_sops_invalid_raises():
+    with pytest.raises(ValueError):   # sops 非 mapping（string 简写不收录）
+        parse_hints({"products": {"ECS": {"sops": "文本"}}})
+    with pytest.raises(ValueError):   # sops 非 mapping（标量）
+        parse_hints({"products": {"ECS": {"sops": 1}}})
+    with pytest.raises(ValueError):   # 任务名空串
+        parse_hints({"products": {"ECS": {"sops": {"": "x"}}}})
+    with pytest.raises(ValueError):   # 任务值非法标量
+        parse_hints({"products": {"ECS": {"sops": {"任务": 1}}}})
+    with pytest.raises(ValueError):   # 步骤非字符串
+        parse_hints({"products": {"ECS": {"sops": {"任务": ["a", 2]}}}})
+    with pytest.raises(ValueError):   # 任务值嵌套 dict
+        parse_hints({"products": {"ECS": {"sops": {"任务": {"嵌套": "dict"}}}}})
+    with pytest.raises(ValueError):   # 未知键仍 fail-fast（单数拼写 typo）
+        parse_hints({"products": {"ECS": {"sop": {"任务": "步骤"}}}})
+
+
 # ---------- S13f：api_notes_in_list_apis 开关（缺省 true = 现状） ----------
 
 def test_parse_flag_default_true():

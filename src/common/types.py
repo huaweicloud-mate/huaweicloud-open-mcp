@@ -166,6 +166,7 @@ class ProductResult(TypedDict):
     link: str | None
     api_count: int
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
+    sops: NotRequired[str]  # 部署侧产品级 SOP（Hints sops 配置命中时附加，渲染文本）
 
 
 class ApiListResult(TypedDict):
@@ -177,6 +178,7 @@ class ApiListResult(TypedDict):
     apis: list[ApiItem]
     tag_groups: list[TagGroup]
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中产品时附加）
+    sops: NotRequired[str]  # 部署侧产品级 SOP（仅顶层；条目级不注入）
 
 
 # 函数式语法：允许非标识符键（x-constraint）

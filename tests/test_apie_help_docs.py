@@ -544,3 +544,57 @@ def test_build_completions_applies_curation(tmp_path):
     assert hints["products"]["FUNCTIONGRAPH"]["apis"]["showfunctioncode"].startswith(
         "实际响应仅含 func_code.link")
     parse_hints(hints)  # 产物 round-trip
+
+
+# ---------- S13c 扩展：curation sops 整块透传（产品级 SOP，再生不丢） ----------
+
+CURATION_SOPS = {"products": {"ECS": {
+    "apis": {"ResizeServer": "变更规格前先确认目标 AZ 售罄情况。"},
+    "sops": {"创建云服务器": ["ListFlavors 查规格", "CreateServer 创建"]}}}}
+
+
+def test_apply_curation_to_hints_sops_passthrough_and_roundtrip():
+    from apie import build_help_hints
+    merged = build_help_hints.apply_curation_to_hints(build_hints([]), CURATION_SOPS)
+    entry = merged["products"]["ECS"]
+    assert entry["sops"] == {"创建云服务器": ["ListFlavors 查规格", "CreateServer 创建"]}
+    assert entry["apis"]["resizeserver"].startswith("变更规格前")
+    parsed = parse_hints(merged)   # round-trip：透传块可被运行时解析渲染
+    assert parsed.product_sops("ECS") == \
+        "创建云服务器：\n1. ListFlavors 查规格\n2. CreateServer 创建"
+    assert parsed.api_notes("ECS", "ResizeServer").startswith("变更规格前")
+
+
+def test_apply_curation_to_hints_sops_survives_regeneration_merge():
+    """生成面（build_hints）永不产 sops 键：curated sops 在再生合并中幸存。"""
+    from apie import build_help_hints
+    generated = build_hints([
+        {"product": "ECS", "api": "CreateBucket", "url": "https://u/3",
+         "detail_desc": "", "matched_by": "summary", "help_intro": "创建桶。"}])
+    merged = build_help_hints.apply_curation_to_hints(generated, CURATION_SOPS)
+    assert merged["products"]["ECS"]["sops"] == \
+        {"创建云服务器": ["ListFlavors 查规格", "CreateServer 创建"]}
+    parse_hints(merged)
+
+
+def test_apply_curation_to_hints_without_sops_adds_no_sops_keys():
+    """红线：curation 无 sops / hints 无 sops 时，合并产物不出现 sops 键。"""
+    from apie import build_help_hints
+    hints_raw = build_hints([
+        {"product": "OBS", "api": "CreateBucket", "url": "https://u/3",
+         "detail_desc": "", "matched_by": "summary", "help_intro": "创建桶。"}])
+    curation = {"products": {"FunctionGraph": {"apis": {
+        "ShowFunctionCode": "实际响应仅含 func_code.link。"}}}}
+    merged = build_help_hints.apply_curation_to_hints(hints_raw, curation)
+    assert all("sops" not in entry for entry in merged["products"].values())
+    parse_hints(merged)
+
+
+def test_apply_curation_to_hints_sops_copy_on_write():
+    import copy
+
+    from apie import build_help_hints
+    hints_raw = build_hints([])
+    original = copy.deepcopy(hints_raw)
+    build_help_hints.apply_curation_to_hints(hints_raw, CURATION_SOPS)
+    assert hints_raw == original    # 入参恒不改写（sops 路径同纪律）

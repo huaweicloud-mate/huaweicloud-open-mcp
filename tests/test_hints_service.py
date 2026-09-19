@@ -216,6 +216,92 @@ def test_get_api_not_found_no_hints():
     assert "hints" not in out
 
 
+# ---------- S10b 扩展：产品级 SOP 注入（get_product / list_apis 顶层，sops 字段） ----------
+
+HINTS_SOPS = parse_hints({
+    "products": {
+        "ECS": {"notes": "ECS 产品提示",
+                "sops": {"创建云服务器": ["ListFlavors 查规格", "CreateServer 创建"]}},
+        "RabbitMQ": {"sops": {"发消息": "创建队列 → 发送消息"}},
+    },
+})
+
+
+def test_get_product_top_level_sops_with_notes():
+    out = _svc(_prep_store(detail=False), hints=HINTS_SOPS).get_product("ECS")
+    assert out["ok"] is True
+    assert out["hints"] == "ECS 产品提示"
+    assert out["sops"] == "创建云服务器：\n1. ListFlavors 查规格\n2. CreateServer 创建"
+
+
+def test_get_product_sops_only_no_hints_field():
+    out = _svc(_prep_store(detail=False), hints=HINTS_SOPS).get_product("RabbitMQ")
+    assert out["ok"] is True
+    assert "hints" not in out
+    assert out["sops"] == "发消息：\n创建队列 → 发送消息"
+
+
+def test_get_product_not_found_no_sops():
+    out = _svc(_prep_store(detail=False), hints=HINTS_SOPS).get_product("OBS")
+    assert out["ok"] is False
+    assert "sops" not in out
+
+
+def test_list_apis_top_level_sops_and_items_never():
+    out = _svc(_prep_store(detail=False), hints=HINTS_SOPS).list_apis("ECS")
+    assert out["ok"] is True
+    assert out["sops"] == "创建云服务器：\n1. ListFlavors 查规格\n2. CreateServer 创建"
+    assert all("sops" not in a for a in out["apis"])
+
+
+def test_list_apis_sops_carried_on_every_page():
+    svc = _svc(_prep_store(detail=False), hints=HINTS_SOPS)
+    first = svc.list_apis("ECS", limit=1)
+    second = svc.list_apis("ECS", limit=1, offset=1)
+    assert "sops" in first
+    assert "sops" in second
+
+
+def test_list_products_items_never_sops():
+    out = _svc(_prep_store(detail=False), hints=HINTS_SOPS).list_products()
+    assert all("sops" not in p for p in out["products"])
+
+
+def test_get_api_never_sops():
+    out = _svc(_prep_store(), hints=HINTS_SOPS).get_api("ECS", "ListServersDetails")
+    assert out["ok"] is True
+    assert "sops" not in out
+
+
+def test_get_api_examples_never_sops():
+    out = _svc(_prep_store(),
+               hints=HINTS_SOPS).get_api_examples("ECS", "ListServersDetails")
+    assert out["ok"] is True
+    assert "sops" not in out
+
+
+def test_sops_empty_hints_is_status_quo():
+    svc = _svc(_prep_store(detail=False), hints=Hints.empty())
+    assert "sops" not in svc.get_product("ECS")
+    assert "sops" not in svc.list_apis("ECS")
+
+
+def test_sops_notes_only_config_no_sops_field():
+    """红线：有 notes 无 sops 的配置下信封与现状逐字段一致（无 sops 键）。"""
+    svc = _svc(_prep_store(detail=False), hints=HINTS)
+    assert "sops" not in svc.get_product("ECS")
+    assert "sops" not in svc.list_apis("ECS")
+
+
+def test_list_apis_flag_off_top_level_sops_kept():
+    """S13f 交互：api_notes_in_list_apis=false 抑制条目级 API notes，顶层 sops 保留。"""
+    hints = parse_hints({"api_notes_in_list_apis": False,
+                         "products": {"ECS": {"sops": {"任务": "步骤"}}}})
+    out = _svc(_prep_store(detail=False), hints=hints).list_apis("ECS")
+    assert out["sops"] == "任务：\n步骤"
+    assert all("hints" not in a for a in out["apis"])
+
+
 # ---------- get_api_examples：恒不注入 ----------
 
 def test_get_api_examples_never_annotated():

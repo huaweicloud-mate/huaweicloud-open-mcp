@@ -41,9 +41,11 @@ def apply_curation_to_hints(hints: dict[str, Any],
     """curated 提示合并进 hints（内缝，S13c 扩展）。
 
     curation schema 镜像 hints 的 products→apis 段：
-    ``{"products": {PRODUCT: {"apis": {api_lower: note}}}}``；curated 条目恒在
-    （再生不丢）、同键 curated 优先；curation 为 None/空恒返回原对象
-    （零行为变化）；copy-on-write 不改写入参。
+    ``{"products": {PRODUCT: {"apis": {api_lower: note}, "sops": {任务名: 步骤}}}}``；
+    curated 条目恒在（再生不丢）、同键 curated 优先；sops 为产品级 SOP 配置的
+    整块透传（raw mapping 原样，渲染归 mcp_openapi.hints 运行时 parse）——生成面
+    （build_hints）永不产 sops 键，curated 永不覆盖自动成立。curation 为 None/空
+    恒返回原对象（零行为变化）；copy-on-write 不改写入参。
     """
     if not curation or not (curation.get("products") or {}):
         return hints
@@ -55,6 +57,8 @@ def apply_curation_to_hints(hints: dict[str, Any],
         for api, note in (spec.get("apis") or {}).items():
             apis[(api or "").lower()] = note
         entry["apis"] = apis
+        if spec.get("sops"):
+            entry["sops"] = spec["sops"]
         products[(product or "").upper()] = entry
     out["products"] = products
     return out
