@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 
 import pytest
 
@@ -130,6 +131,11 @@ def test_watch_opt_file_hot_branch_follows_changes(sealed_configs):
     assert isinstance(out, HotFile)
     assert out.get() == {"seen": {"v": 1}}
     p.write_text(json.dumps({"v": 2}), encoding="utf-8")
+    # Windows NTFS 粗粒度 mtime tick（~15.6ms）下等长重写可能拿到相同
+    # st_mtime_ns → stamp 三元组逐项相等 → 探测漏检（hotconf 已知边界）；
+    # 显式推 mtime +1s 保证探测确定性，覆盖 NTFS/ext4/APFS/HFS+ 各档粒度。
+    st = p.stat()
+    os.utime(p, ns=(st.st_mtime_ns + 1_000_000_000,) * 2)
     out.get()
     out._join_pending()
     assert out.get() == {"seen": {"v": 2}}  # 运行期跟随文件
