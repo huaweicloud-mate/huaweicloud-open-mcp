@@ -117,6 +117,20 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
   部署混装 data 模式时可用 query_data/transform_data 直接分析该文件
   （json 数组可直接作表）；纯 openapi 部署用文件读取工具或 shell 查看。
 
+## body JSONPath 投影（execute_api）
+
+- `execute_api` 可传 `params["_jsonpath"]` 从响应 body 投影抽取，避免大响应
+  挤占上下文：支持完整 JSONPath（`$.servers[0].id`、`$[*]` 通配、`$..id`
+  递归、`[?(@.status=='ACTIVE')]` 过滤、`["x-constraint"]` 引号键）；
+- 值形态：str 单路径（结果=值本身，多命中为 list）或 dict 别名映射
+  （如 `{"id": "$.servers[0].id", "count": "$.count"}`，多值一次抽取）；
+- 全命中：`body` 替换为投影值 + `truncated=true`（原始响应超限时已按 spill
+  口径落盘，`extract.note` 明示）；未命中/部分命中：body 保持原样供自纠，
+  `extract.misses` 逐条说明；语法错误在执行前结构化拒绝（不消耗 once 授权）；
+- 二进制/文本 body 与预签发信封不适用投影（extract.note 说明）；
+- 重筛选/聚合/多表关联建议改道 `_spill` 落盘 + `query_data`（DataFusion SQL），
+  投影适合「取嵌套字段/取一列值」的轻量抽取。
+
 ## Region 与多区域
 
 - 接受 region 参数的工具：`get_api` / `get_api_examples` / `execute_api`
@@ -404,6 +418,15 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         spill 信封（path/format/bytes/note 消费指引，部署混装 data 模式时指引
         query_data 直读该文件）；params["_spill"]=false 按次退出（控制键不进入
         请求）。未配置落盘目录时保持纯截断行为。
+
+        body JSONPath 投影：params["_jsonpath"] 支持完整 JSONPath 语法
+        （jsonpath-ng：$.a.b[0]、[*] 通配、$..递归、[?(@.x=='y')] 过滤、
+        ["key"] 引号键）；值为 str（单路径）或 dict 别名映射（{"id": "$.servers[0].id"}）。
+        全命中时 body 替换为投影值 + truncated=true（上下文瘦身），原始大响应
+        已落盘时 spill 信封指原始体；未命中/部分命中 body 保持原样（extract.misses
+        描述供自纠）；二进制/文本 body 与预签发信封不适用（note 说明）。
+        语法错误在执行前结构化拒绝（不消耗 once 授权）。重筛选/聚合建议改道
+        _spill 落盘 + query_data。
         """
         result = svc.execute_api(product, api, region=region, params=params)
         if isinstance(result, dict) and result.get("ok") is False:

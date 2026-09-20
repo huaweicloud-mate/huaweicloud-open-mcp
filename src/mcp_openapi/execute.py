@@ -13,8 +13,9 @@ import jsonschema
 
 from apie.api_location import ApiLocation
 from common.auth.credentials import Credentials
-from common.types import ClientResponse, ExecuteResult, SpillInfo
+from common.types import ClientResponse, ExecuteResult, ExtractInfo, SpillInfo
 
+from .extract import ExtractSpec, apply_extract
 from .spill import MAX_RESPONSE_CHARS, SpillConfig, spill_body
 
 logger = logging.getLogger("mcp_openapi.execute")
@@ -336,8 +337,16 @@ def _render_body(raw: Any, spill: SpillConfig | None = None,
     return raw, False, None
 
 
+def _wire_len(raw: Any) -> int:
+    """_render_body 同口径的体积度量（str 原长；dict/list 走 json.dumps）。"""
+    if isinstance(raw, str):
+        return len(raw)
+    return len(json.dumps(raw, ensure_ascii=False, default=str))
+
+
 def normalize_response(resp: ClientResponse, spill: SpillConfig | None = None,
-                       stem: str = "response") -> ExecuteResult:
+                       stem: str = "response", *,
+                       extract: ExtractSpec | None = None) -> ExecuteResult:
     """把客户端响应规范化为结构化输出。
 
     2xx：body 恒透出（超限截断；配置 spill 时完整原始体先落盘并在结果附
@@ -345,16 +354,59 @@ def normalize_response(resp: ClientResponse, spill: SpillConfig | None = None,
     disk == wire）。非 2xx：error_code/error_msg 为尽力规范化字段（多形态兼容
     抽取，不命中保持 null）；body 恒透出原始体（真值源兜底），bytes 走
     占位 + 短 hex 描述。
-    未配置 spill 时与既有行为逐字段一致（回归红线，bytes 占位除外）。
+    extract（_jsonpath 投影，S24）：在截断/spill 之前的 raw body 上求值。
+    全命中 → body 替换为投影值 + truncated=True（body 非完整原始响应体）；
+    真值双轨——原始体超限且投影可收进预算时先按层级 1 口径落盘原始体
+    （spill 信封指原始体），投影自身超限时 spill 落盘投影、原始体未保留
+    （note 明示）。未命中/部分命中 → body 保持 _render_body 现状（自纠面），
+    extract 信封附 misses；载体（None/str/bytes）不适用 → no-op + note。
+    未传 extract 时与既有行为逐字节一致（回归红线）。
     """
     status = resp.get("status", 0)
-    body, truncated, info = _render_body(resp.get("body"), spill, stem,
+    raw = resp.get("body")
+    extract_info: ExtractInfo | None = None
+    pre_spill: SpillInfo | None = None
+    full_hit = False
+    body: Any = raw
+    if extract is not None:
+        outcome = apply_extract(raw, extract)
+        if outcome.note is not None:
+            extract_info = {"note": outcome.note}
+        elif outcome.full_hit:
+            full_hit = True
+            if (spill is not None
+                    and _wire_len(raw) > MAX_RESPONSE_CHARS
+                    and _wire_len(outcome.extracted) <= MAX_RESPONSE_CHARS):
+                pre_spill = spill_body(raw, cfg=spill, stem=stem)
+            body = outcome.extracted
+        else:
+            miss_info: ExtractInfo = {}
+            if outcome.extracted is not None:
+                miss_info["extracted"] = outcome.extracted
+            if outcome.misses:
+                miss_info["misses"] = list(outcome.misses)
+            extract_info = miss_info or None
+    body, truncated, info = _render_body(body, spill, stem,
                                          content_type=_content_type(resp.get("headers")))
     out: ExecuteResult = {"status": status, "body": body}
-    if truncated:
+    if truncated or full_hit:
         out["truncated"] = True
     if info is not None:
         out["spill"] = info
+    elif pre_spill is not None:
+        out["spill"] = pre_spill
+    if full_hit:
+        if info is not None:
+            note = ("响应 body 已按 _jsonpath 投影替换且投影结果超限，"
+                    "完整投影已落盘（见 spill 信封）；原始响应未保留")
+        elif pre_spill is not None:
+            note = "响应 body 已按 _jsonpath 投影替换；完整原始响应已落盘（见 spill 信封）"
+        else:
+            note = ("响应 body 已按 _jsonpath 投影替换，未选部分未保留"
+                    "（如需完整原始响应，不传 _jsonpath 重新执行）")
+        extract_info = {"note": note}
+    if extract_info is not None:
+        out["extract"] = extract_info
     if 200 <= status < 300:
         return out
     raw = resp.get("body")
@@ -434,18 +486,21 @@ def _extract_error_fields(raw: Any) -> tuple[str | None, str | None]:
 def execute_api(location: ApiLocation, product: str, api_name: str,
                 region: str, params: dict[str, Any], *,
                 executor: ApiExecutor,
-                spill: SpillConfig | None = None) -> ExecuteResult:
+                spill: SpillConfig | None = None,
+                extract: ExtractSpec | None = None) -> ExecuteResult:
     """经执行接缝发出操作：executor adapter 请求 → 响应规范化 → 信封包装。
 
     safety 已由 ToolService 完成；lane 决策（mock/obs/real）在 service 单点
     完成（C6），本函数只面向 executor——审计命名的 mode 归 adapter 所有。
     RequestRefusal（真实 lane 的路径参数/host 拒绝）转 {ok: false, reason}。
     spill 配置透传响应规范化：超限 body 完整落盘（S12 层级 1）。
+    extract（_jsonpath 投影）透传响应规范化：全命中替换 body，未命中保 body（自纠面）。
     """
     try:
         resp = executor.request(location, product, api_name, region, params)
     except RequestRefusal as exc:
         return {"ok": False, "reason": str(exc)}
-    out = normalize_response(resp, spill, stem=f"{product}-{api_name}")
+    out = normalize_response(resp, spill, stem=f"{product}-{api_name}",
+                             extract=extract)
     out.update({"ok": True, "product": product, "api": api_name})
     return out

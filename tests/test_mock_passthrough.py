@@ -45,6 +45,7 @@ def test_split_strips_control_keys():
     query, body = split_passthrough_params({
         "_status_code": 400, "_number": 2, "_presign": True,
         "_presign_expires": 300, "_presign_content_type": "text/plain",
+        "_jsonpath": "$.total", "_spill": False,
         "limit": 5,
     })
     assert body is None
@@ -135,7 +136,8 @@ def test_mock_request_passthrough_get_query_hits_local_stub():
     with CaptureServer() as stub:
         client = MockApiClient(base_url=stub.base_url)
         resp = client.mock_request("ECS", "ListServersDetails", "cn-north-4",
-                                   params={"limit": 5, "dry_run": True, "_number": 2})
+                                   params={"limit": 5, "dry_run": True, "_number": 2,
+                                           "_jsonpath": "$.total"})
     assert resp["status"] == 200
     assert len(stub.captures) == 1
     cap = stub.captures[0]
@@ -147,6 +149,7 @@ def test_mock_request_passthrough_get_query_hits_local_stub():
     assert cap["query"]["limit"] == "5"
     assert cap["query"]["dry_run"] == "true"
     assert "_number" not in cap["query"]
+    assert "_jsonpath" not in cap["query"]   # 控制键不进 wire（第二道防线）
 
 
 def test_mock_request_passthrough_post_body_hits_local_stub():

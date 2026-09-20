@@ -255,7 +255,7 @@ Embedding (ASGI): `build_app(...).streamable_http_app()` returns a Starlette app
 | `list_apis` | A product's API directory with `tag_groups` overview; `tag`/`search`/`limit`/`offset` to narrow |
 | `get_api` | One API's full documentation (parameters, required fields, enums, constraints) — read before executing. Oversized docs (>200k chars) spill the full envelope to disk and stub the heaviest fields in the response |
 | `get_api_examples` | Official request examples for one API |
-| `execute_api` | Execute one API: path/query params flattened, request body under `body`; errors come back structured, 429 retried with backoff. Oversized responses (>200k chars) are spilled to disk automatically: the result carries a `spill` envelope (`path`/`format`/`bytes`/`note`) and `body` keeps a truncated preview; `_spill=false` opts out per call |
+| `execute_api` | Execute one API: path/query params flattened, request body under `body`; errors come back structured, 429 retried with backoff. Oversized responses (>200k chars) are spilled to disk automatically: the result carries a `spill` envelope (`path`/`format`/`bytes`/`note`) and `body` keeps a truncated preview; `_spill=false` opts out per call. `_jsonpath` projects the response body via JSONPath (e.g. `$.servers[*].id` or `{"id": "$.servers[0].id"}`): on full hit `body` is replaced with the projected value, on miss the original body is kept plus `extract.misses` hints |
 | `manage_policy` | Read/add/remove safety-policy rules at runtime (hot effect, no restart); `line` accepts a single rule or an array for batch add/remove |
 
 ## Tools (data mode)

@@ -577,3 +577,154 @@ def test_validate_params_body_absent():
                        "schema": {"type": "object"}})
     err = execute.validate_params({}, "/x", op_required, {}, None)
     assert err is not None and "缺少必填 body" in err
+
+
+# ---------- normalize_response：_jsonpath 投影（extract 接缝） ----------
+
+def _extract(spec):
+    from mcp_openapi.extract import parse_extract
+    out = parse_extract(spec)
+    assert not isinstance(out, str)
+    return out
+
+
+def test_normalize_response_extract_single_hit_replaces_body():
+    body = {"servers": [{"id": "s1"}, {"id": "s2"}], "total": 2}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": body},
+                                     extract=_extract("$.servers[0].id"))
+    assert out["body"] == "s1"
+    assert out["truncated"] is True            # body 非完整原始响应体
+    assert "未保留" in out["extract"]["note"]
+    assert "spill" not in out
+
+
+def test_normalize_response_extract_wildcard_list():
+    body = {"servers": [{"id": "s1"}, {"id": "s2"}]}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": body},
+                                     extract=_extract("$.servers[*].id"))
+    assert out["body"] == ["s1", "s2"]
+
+
+def test_normalize_response_extract_zero_miss_keeps_body():
+    body = {"servers": [{"id": "s1"}], "total": 1}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": body},
+                                     extract=_extract("$.nope.deep"))
+    assert out["body"] == body                 # 未命中：body 保持现状（自纠面）
+    assert "truncated" not in out
+    assert out["extract"]["misses"] == ["$.nope.deep: 无命中"]
+    assert "extracted" not in out["extract"]
+
+
+def test_normalize_response_extract_mapping_all_hit_replaces_body():
+    body = {"servers": [{"id": "s1"}], "total": 1}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": body},
+                                     extract=_extract({"id": "$.servers[0].id",
+                                                       "n": "$.total"}))
+    assert out["body"] == {"id": "s1", "n": 1}
+    assert out["truncated"] is True
+
+
+def test_normalize_response_extract_mapping_partial_keeps_body():
+    body = {"servers": [{"id": "s1"}], "total": 1}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": body},
+                                     extract=_extract({"id": "$.servers[0].id",
+                                                       "x": "$.nope"}))
+    assert out["body"] == body
+    assert out["extract"]["extracted"] == {"id": "s1", "x": None}
+    assert out["extract"]["misses"] == ["x: 无命中（$.nope）"]
+
+
+def test_normalize_response_extract_oversized_original_spills_truth(tmp_path):
+    """真值双轨：原始体超限且投影不超限 → spill 落盘原始体（disk == wire）。"""
+    from mcp_openapi.spill import SpillConfig
+    big = {"servers": [{"id": "s1"}], "fill": "x" * 250_000}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": big},
+                                     spill=SpillConfig(dir=tmp_path), stem="ECS-L",
+                                     extract=_extract("$.servers[0].id"))
+    assert out["body"] == "s1"
+    assert out["truncated"] is True
+    with open(out["spill"]["path"], encoding="utf-8") as f:
+        assert json.load(f) == big
+    assert "spill" in out["extract"]["note"]
+
+
+def test_normalize_response_extract_oversized_without_spill_notes_loss():
+    big = {"servers": [{"id": "s1"}], "fill": "x" * 250_000}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": big},
+                                     extract=_extract("$.servers[0].id"))
+    assert out["body"] == "s1"
+    assert "spill" not in out
+    assert "未保留" in out["extract"]["note"]
+
+
+def test_normalize_response_extract_oversized_projection_spills_projection(tmp_path):
+    """投影自身超限 → spill 落盘投影（信封 body 的真值），原始响应未保留。"""
+    from mcp_openapi.spill import SpillConfig
+    big = {"rows": [{"data": "y" * 300_000}, {"data": "y" * 300_000}]}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": big},
+                                     spill=SpillConfig(dir=tmp_path), stem="x",
+                                     extract=_extract("$.rows[*].data"))
+    assert out["truncated"] is True
+    assert out["body"]["truncated"] is True
+    with open(out["spill"]["path"], encoding="utf-8") as f:
+        assert json.load(f) == ["y" * 300_000, "y" * 300_000]
+    assert "投影" in out["extract"]["note"]
+
+
+def test_normalize_response_extract_bytes_body_noop(tmp_path):
+    from mcp_openapi.spill import SpillConfig
+    raw = _png_like()
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": raw},
+                                     spill=SpillConfig(dir=tmp_path), stem="x",
+                                     extract=_extract("$.a"))
+    assert out["body"]["binary"] is True       # 占位现状不变
+    with open(out["spill"]["path"], "rb") as f:
+        assert f.read() == raw
+    assert "二进制" in out["extract"]["note"]
+
+
+def test_normalize_response_extract_str_body_noop():
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": "<xml/>"},
+                                     extract=_extract("$.a"))
+    assert out["body"] == "<xml/>"
+    assert "文本" in out["extract"]["note"]
+    assert "truncated" not in out
+
+
+def test_normalize_response_extract_none_body_noop():
+    out = execute.normalize_response({"status": 204, "headers": {}, "body": None},
+                                     extract=_extract("$.a"))
+    assert out["body"] is None
+    assert "无 body" in out["extract"]["note"]
+
+
+def test_normalize_response_extract_error_body_json():
+    """非 2xx 抽取合法：error_code/error_msg 归一仍取自原始体。"""
+    body = {"error": {"code": "E.1", "message": "boom"}}
+    out = execute.normalize_response({"status": 400, "headers": {}, "body": body},
+                                     extract=_extract("$.error.message"))
+    assert out["body"] == "boom"
+    assert out["error_code"] == "E.1"
+    assert out["error_msg"] == "boom"
+
+
+def test_normalize_response_without_extract_unchanged():
+    """回归红线：未传 extract 的信封与既有行为逐字段一致（无 extract 字段）。"""
+    body = {"servers": [{"id": "s1"}]}
+    out = execute.normalize_response({"status": 200, "headers": {}, "body": body})
+    assert out == {"status": 200, "body": body}
+    big = {"fill": "x" * 250_000}
+    out2 = execute.normalize_response({"status": 200, "headers": {}, "body": big})
+    assert out2["truncated"] is True
+    assert "extract" not in out2
+
+
+def test_execute_api_passes_extract(mini_detail):
+    loc = _get_op(mini_detail)
+    client = StubClient([{"status": 200, "headers": {},
+                          "body": {"servers": [{"id": "s1"}], "total": 1}}])
+    out = execute.execute_api(loc, "ECS", "ListServers", "cn-north-4", {},
+                              executor=execute.RealApiExecutor(client, CRED),
+                              extract=_extract("$.total"))
+    assert out["ok"] is True
+    assert out["body"] == 1

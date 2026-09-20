@@ -38,6 +38,7 @@ class ExecuteResult(TypedDict, total=False):
     headers: dict[str, str] | None
     presign: "PresignInfo | None"
     spill: "SpillInfo | None"  # 超限响应/信封完整落盘（S12）
+    extract: "ExtractInfo | None"  # _jsonpath 投影抽取信封（命中/未命中/降级说明）
     granted_rule: str | None  # policy 拒绝经用户 elicitation 确认后授予的规则（最小或产品级）
 
 
@@ -51,6 +52,18 @@ class SpillInfo(TypedDict):
     path: str
     format: str   # "json" | "text" | "bin"
     bytes: int
+    note: str
+
+
+class ExtractInfo(TypedDict, total=False):
+    """_jsonpath 投影抽取信封：body 即投影值（全命中），本信封补未命中与降级说明。
+
+    extracted 仅部分命中（映射形）时出现——键集完整、未命中键 null；
+    misses 为未命中路径的自纠描述；note 为投影替换/载体不适用说明。
+    """
+
+    extracted: Any
+    misses: list[str]
     note: str
 
 

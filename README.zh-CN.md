@@ -256,7 +256,7 @@ HTTP 档改变的——会话语义：
 | `list_apis` | 产品 API 目录，含 `tag_groups` 全量 tag 概览；`tag`/`search`/`limit`/`offset` 收窄 |
 | `get_api` | 单 API 完整文档（参数、必填、枚举、约束）—— 执行前必读。超大文档（超 200k 字符）完整信封落盘，响应中重字段以占位替换 |
 | `get_api_examples` | 单 API 官方请求示例 |
-| `execute_api` | 执行一个 API：路径/query 参数平铺、请求体放 `body`；错误结构化返回、429 自动退避重试。超大响应（超 200k 字符）自动落盘：结果携带 `spill` 信封（`path`/`format`/`bytes`/`note`），`body` 保留截断预览；`_spill=false` 可按次退出 |
+| `execute_api` | 执行一个 API：路径/query 参数平铺、请求体放 `body`；错误结构化返回、429 自动退避重试。超大响应（超 200k 字符）自动落盘：结果携带 `spill` 信封（`path`/`format`/`bytes`/`note`），`body` 保留截断预览；`_spill=false` 可按次退出。`_jsonpath` 支持 body JSONPath 投影（如 `$.servers[*].id` 或 `{"id": "$.servers[0].id"}`）：全命中时 `body` 替换为投影值，未命中保留原 body + `extract.misses` 自纠描述 |
 | `manage_policy` | 运行期增删查 safety policy 规则（热生效、无需重启）；`line` 支持传单条规则或规则数组批量增删 |
 
 ## 工具（data 模式）

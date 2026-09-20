@@ -1033,3 +1033,111 @@ def test_execute_spill_false_str_body_no_file(tmp_path):
     assert "spill" not in out
     assert out["truncated"] is True
     assert os.listdir(tmp_path) == []
+
+
+# ---------- _jsonpath 投影抽取（service 预检 + 剥离 + presign 拒绝） ----------
+
+def test_execute_jsonpath_stripped_not_in_query(tmp_path):
+    """`_jsonpath` 控制键 dispatch 前剥离，不落入真实请求 query。"""
+    store = _prep_store(products=False, apis=False)
+    client = _FixedHttpClient({"status": 200, "headers": {},
+                               "body": {"servers": [{"id": "s1"}], "total": 1}})
+    service = _real_service(store, tmp_path, client)
+    out = service.execute_api("ECS", "ListServersDetails",
+                              params={"limit": 1, "_jsonpath": "$.total"})
+    assert out["ok"] is True
+    assert out["body"] == 1
+    assert client.calls[0][3] == {"limit": 1}   # 控制键不进 query
+
+
+def test_execute_jsonpath_syntax_reject_no_dispatch_no_burn(tmp_path, monkeypatch):
+    """语法错误 dispatch 前 fail-closed：不触网、不烧 once 授权。"""
+    from safety.policy_store import PolicyStore
+
+    monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)  # 封死元数据网络
+    p = _policy_file(tmp_path, ["*=deny"])
+    http_client = _FixedHttpClient({"status": 200, "headers": {}, "body": {}})
+    svc = ToolService(store=_prep_store(products=False, apis=False), config=ServiceConfig(
+        policy_store=PolicyStore(str(p)),
+        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"),
+        http_client_factory=lambda: http_client))
+    assert svc.manage_policy("add", "ECS:*=allow", scope="once")["ok"] is True
+
+    out = svc.execute_api("ECS", "ListServersDetails", params={"_jsonpath": "$.["})
+    assert out["ok"] is False
+    assert "表达式非法" in (out.get("reason") or "")
+    assert http_client.calls == []
+    good = svc.execute_api("ECS", "ListServersDetails", params={"limit": 1})
+    assert good["ok"] is True                    # once 未被语法拒绝焚毁
+    assert len(http_client.calls) == 1
+
+
+def test_execute_mock_lane_jsonpath():
+    """mock lane 共享同一投影语义（normalize_response 咽喉点）。"""
+    store = _prep_store(products=False, apis=False)
+
+    class _Mock:
+        def mock_request(self, product, api_name, region, status_code=200, number=1):
+            return {"status": 200, "headers": {},
+                    "body": {"servers": [{"id": "s1"}], "total": 1}}
+
+    service = ToolService(store=store, config=ServiceConfig(
+        mock=True, policy_rules=_policy("ECS:*=allow"),
+        mock_client_factory=lambda: _Mock()))
+    out = service.execute_api("ECS", "ListServersDetails", params={"_jsonpath": "$.total"})
+    assert out["ok"] is True
+    assert out["body"] == 1
+
+
+def test_execute_jsonpath_with_explicit_presign_refused():
+    """显式 _presign + _jsonpath 并传 → 结构化拒绝（预签发信封无 body 可投影）。"""
+    obs_client = StubObsClient()
+    svc = ToolService(store=_object_data_store("GetObject", "get"),
+                      config=ServiceConfig(
+                          policy_rules=_policy("OBS:*=allow"),
+                          credentials=Credentials(ak="DATA-AK", sk="SK-DATA"),
+                          obs_client_factory=lambda: obs_client))
+    out = svc.execute_api("OBS", "GetObject",
+                          params={"bucket_name": "bkt", "object_key": "k.bin",
+                                  "_jsonpath": "$.a", "_presign": True})
+    assert out["ok"] is False
+    assert "_jsonpath" in (out.get("reason") or "")
+    assert obs_client.calls == []                # 拒绝发生在预检/签发之前
+
+
+def test_execute_jsonpath_object_data_auto_presign_refused():
+    """对象数据面强制 presign：_jsonpath 同样结构化拒绝，先于授权门。"""
+    obs_client = StubObsClient()
+    svc = ToolService(store=_object_data_store("PutObject", "put"),
+                      config=ServiceConfig(
+                          policy_rules=_policy("OBS:*=allow"),
+                          credentials=Credentials(ak="DATA-AK", sk="SK-DATA"),
+                          obs_client_factory=lambda: obs_client))
+    out = svc.execute_api("OBS", "PutObject",
+                          params={"bucket_name": "bkt", "object_key": "k.bin",
+                                  "_jsonpath": "$.a"})
+    assert out["ok"] is False
+    assert "预签发" in (out.get("reason") or "")
+    assert obs_client.calls == []
+
+
+def test_execute_audit_snapshot_contains_jsonpath(tmp_path):
+    """审计 input 快照为 pop 前的显式入参：_jsonpath 原样在案（_spill 同形）。"""
+    store = _prep_store(products=False, apis=False)
+    sink_calls: list[dict] = []
+
+    class _Sink:
+        def record(self, event):
+            sink_calls.append(event)
+
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": {"total": 1}})
+    service = ToolService(store=store, config=ServiceConfig(
+        policy_rules=_policy("ECS:*=allow"),
+        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"),
+        http_client_factory=lambda: client,
+        spill=SpillConfig(dir=tmp_path),
+        audit_sink=_Sink()))
+    out = service.execute_api("ECS", "ListServersDetails",
+                              params={"limit": 1, "_jsonpath": "$.total"})
+    assert out["ok"] is True
+    assert sink_calls[0]["input"]["params"]["_jsonpath"] == "$.total"

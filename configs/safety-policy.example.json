@@ -34,7 +34,6 @@
   "# server:@huaweicloud/ecs:list*=allow",
   "# server:@huaweicloud/ecs:get*=allow",
   "# server:@huaweicloud/vpc:*=allow",
-  "",
   "OBS:ListBuckets=allow",
   "*=deny"
 ]

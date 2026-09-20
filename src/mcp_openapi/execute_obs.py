@@ -19,6 +19,7 @@ from common.auth.credentials import Credentials
 from common.types import ClientResponse, ExecuteResult, PresignInfo
 
 from . import execute
+from .extract import ExtractSpec, apply_extract
 from .signer import obs as obs_sign
 from .spill import SpillConfig
 
@@ -437,19 +438,25 @@ def _pick_headers(resp: ClientResponse) -> dict[str, str] | None:
 
 
 def _normalize_obs(resp: ClientResponse, spill: SpillConfig | None = None,
-                   stem: str = "response") -> ExecuteResult:
+                   stem: str = "response", *,
+                   extract: ExtractSpec | None = None) -> ExecuteResult:
     status = resp.get("status", 0)
     picked = _pick_headers(resp)
     out: ExecuteResult
     if 200 <= status < 300:
-        out = execute.normalize_response(resp, spill, stem)
+        out = execute.normalize_response(resp, spill, stem, extract=extract)
     else:
         parsed = parse_obs_error(resp.get("body"))
         if parsed is not None:
             code, msg = parsed
             out = {"status": status, "error_code": code, "error_msg": msg}
+            if extract is not None:
+                # XML <Error> 信封无 body 字段：投影 no-op + note（信封形状不变）
+                outcome = apply_extract(None, extract)
+                if outcome.note is not None:
+                    out["extract"] = {"note": outcome.note}
         else:
-            out = execute.normalize_response(resp, spill, stem)
+            out = execute.normalize_response(resp, spill, stem, extract=extract)
     if picked is not None:
         out["headers"] = picked
     return out
@@ -459,10 +466,13 @@ def execute_obs_api(doc: dict[str, Any], path: str, method: str, op: dict[str, A
                     product: str, api_name: str, region: str, params: dict[str, Any],
                     *, client: ObsClient,
                     credentials: Credentials | None = None,
-                    spill: SpillConfig | None = None) -> ExecuteResult:
+                    spill: SpillConfig | None = None,
+                    extract: ExtractSpec | None = None) -> ExecuteResult:
     """执行 OBS API：请求构建 → OBS 签名发送 → 响应规范化（safety 已由上层完成）。
 
     spill 配置透传响应规范化：超限 body 完整落盘（S12 层级 1）。
+    extract（_jsonpath 投影）透传响应规范化：JSON 载体生效；
+    XML str / 无 body 错误信封降级 no-op + note。
     """
     logger.info("execute %s:%s region=%s mode=obs", product, api_name, region)
 
@@ -481,7 +491,7 @@ def execute_obs_api(doc: dict[str, Any], path: str, method: str, op: dict[str, A
     resp = client.request(method.upper(), host, bucket=built.bucket,
                           object_key=built.object_key, query=built.query,
                           headers=headers, body=built.body)
-    out = _normalize_obs(resp, spill, stem=f"{product}-{api_name}")
+    out = _normalize_obs(resp, spill, stem=f"{product}-{api_name}", extract=extract)
     out.update({"ok": True, "product": product, "api": api_name})
     return out
 

@@ -88,3 +88,39 @@ def test_service_execute_mock_denied():
     out = service.execute_api("ECS", "ListServersDetails")
     assert out["ok"] is False
     assert "policy" in out["reason"]
+
+
+def test_service_execute_mock_end_to_end_jsonpath():
+    """_jsonpath 全链（真 mock 端点）：全命中替换 body + extract 信封。"""
+    service = _service(RULES_ALLOW_ECS)
+    out = service.execute_api("ECS", "ListServersDetails",
+                              params={"_jsonpath": "$.servers[*].id"})
+    assert out["ok"] is True
+    assert out["status"] == 200
+    assert isinstance(out["body"], list) and out["body"]
+    assert all(isinstance(v, str) for v in out["body"])
+    assert out["truncated"] is True
+    assert out["extract"]["note"]
+
+
+def test_service_execute_mock_end_to_end_jsonpath_mapping():
+    """映射形部分命中：body 保持原始结构（自纠面），投影值在 extract 信封。"""
+    service = _service(RULES_ALLOW_ECS)
+    out = service.execute_api("ECS", "ListServersDetails",
+                              params={"_jsonpath": {"count": "$.count",
+                                                    "nope": "$.nope"}})
+    assert out["ok"] is True
+    assert "count" in out["body"]                       # body 未被替换
+    extracted = out["extract"]["extracted"]
+    assert extracted["count"] is not None
+    assert extracted["nope"] is None                    # 键集完整，未命中键 null
+    assert out["extract"]["misses"] == ["nope: 无命中（$.nope）"]
+
+
+def test_service_execute_mock_end_to_end_jsonpath_syntax_reject():
+    """语法错误在 dispatch 前拒绝，端点零调用（信封即结构化 reason）。"""
+    service = _service(RULES_ALLOW_ECS)
+    out = service.execute_api("ECS", "ListServersDetails", params={"_jsonpath": "$.["})
+    assert out["ok"] is False
+    assert "表达式非法" in (out.get("reason") or "")
+    assert "status" not in out

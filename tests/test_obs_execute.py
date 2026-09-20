@@ -796,3 +796,70 @@ def test_execute_obs_api_spill_passthrough(tmp_path):
     assert os.path.basename(out["spill"]["path"]).startswith("OBS-ListObjects-")
     with open(out["spill"]["path"], encoding="utf-8") as f:
         assert json.load(f) == big
+
+
+# ---------- _jsonpath 投影（OBS lane：XML/错误信封降级，JSON 错误体可投影） ----------
+
+def _extract(spec):
+    from mcp_openapi.extract import parse_extract
+    out = parse_extract(spec)
+    assert not isinstance(out, str)
+    return out
+
+
+def test_normalize_obs_xml_str_body_extract_noop():
+    """OBS 2xx XML body 为 str 载体：投影 no-op + note，body 现状不变。"""
+    resp = {"status": 200, "headers": {}, "body": "<ListAllMyBucketsResult/>"}
+    out = execute_obs._normalize_obs(resp, extract=_extract("$.a"))
+    assert out["body"] == "<ListAllMyBucketsResult/>"
+    assert "文本" in out["extract"]["note"]
+    assert "truncated" not in out
+
+
+def test_normalize_obs_xml_error_envelope_no_body_noop():
+    """OBS XML <Error> 信封无 body 字段：投影 no-op + note，信封形状不变。"""
+    resp = {"status": 404, "headers": {},
+            "body": "<?xml?><Error><Code>NoSuchKey</Code></Error>"}
+    out = execute_obs._normalize_obs(resp, extract=_extract("$.a"))
+    assert out["error_code"] == "NoSuchKey"
+    assert "body" not in out
+    assert out["extract"]["note"]
+
+
+def test_normalize_obs_json_error_body_extractable():
+    """OBS 非 2xx 非 XML 错误回退分支：JSON 错误体可投影。"""
+    resp = {"status": 400, "headers": {},
+            "body": {"error": {"code": "E.1", "message": "boom"}}}
+    out = execute_obs._normalize_obs(resp, extract=_extract("$.error.message"))
+    assert out["body"] == "boom"
+    assert out["error_code"] == "E.1"
+
+
+def test_normalize_obs_json_success_body_extract():
+    resp = {"status": 200, "headers": {},
+            "body": {"buckets": [{"name": "b1"}, {"name": "b2"}]}}
+    out = execute_obs._normalize_obs(resp, extract=_extract("$.buckets[*].name"))
+    assert out["body"] == ["b1", "b2"]
+    assert out["truncated"] is True
+
+
+def test_execute_obs_api_passes_extract():
+    """execute_obs_api 编排透传 extract（2xx JSON 控制面响应）。"""
+    doc = {"swagger": "2.0", "host": "obs.cn-north-4.myhuaweicloud.com",
+           "basePath": "/", "definitions": {}}
+    op = {"operationId": "ListBuckets", "responses": {"200": {"description": "OK"}}}
+    calls = []
+
+    class _Client:
+        def request(self, method, host, bucket=None, object_key=None,
+                    query=None, headers=None, body=None):
+            calls.append(method)
+            return {"status": 200, "headers": {},
+                    "body": {"buckets": [{"name": "b1"}, {"name": "b2"}]}}
+
+    out = execute_obs.execute_obs_api(
+        doc, "/", "get", op, "OBS", "ListBuckets", "cn-north-4", {},
+        client=_Client(), extract=_extract("$.buckets[*].name"))
+    assert out["ok"] is True
+    assert out["body"] == ["b1", "b2"]
+    assert calls == ["GET"]

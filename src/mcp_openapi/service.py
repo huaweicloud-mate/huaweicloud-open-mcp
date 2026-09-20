@@ -40,6 +40,7 @@ from . import execute, execute_obs
 from .deprecated import DeprecatedIndex
 from .entity_graph import EntityGraph
 from .execute_obs import ObsHttpClient
+from .extract import ExtractSpec, parse_extract
 from .hints import Hints
 from .signer.client import HttpClient
 from .spill import SpillConfig, guard_result
@@ -480,6 +481,8 @@ class ToolService:
 
         spill：超限响应自动落盘（S12）；params["_spill"]=false 按次退出
         （控制键在 dispatch 前剥离，不进入 query/body）。
+        _jsonpath：body JSONPath 投影（S24），控制键同样 dispatch 前剥离；
+        语法错误 fail-closed（不触网、不烧 once 授权），全命中替换 body。
         """
         if (api or "").strip() == "manage_policy":
             return {"ok": False, "reason": (
@@ -490,6 +493,7 @@ class ToolService:
         spill_cfg = self.config.spill
         if params.pop("_spill", None) is False:
             spill_cfg = None
+        jp_raw = params.pop("_jsonpath", None)
         mode = "mock" if self.config.mock else "real"
         policy_err = self._check_policy(product, api)
         if policy_err:
@@ -497,6 +501,17 @@ class ToolService:
                            product, api, region, mode,
                            "unconfigured" if self._effective_policy_rules() is None else "deny")
             return {"ok": False, "reason": policy_err}
+
+        # _jsonpath 预检（policy 之后、元数据拉取之前）：语法错误 fail-closed，
+        # 不触网、不烧 once 授权（validate_params 同层先例）
+        extract_spec: ExtractSpec | None = None
+        if jp_raw is not None:
+            parsed = parse_extract(jp_raw)
+            if isinstance(parsed, str):
+                logger.warning("execute %s:%s jsonpath=reject reason=%s",
+                               product, api, parsed)
+                return {"ok": False, "reason": parsed}
+            extract_spec = parsed
 
         hit = self.load_api_doc(product, api, region)
         if hit is None:
@@ -511,6 +526,9 @@ class ToolService:
             if not is_obs_op:
                 return {"ok": False,
                         "reason": "_presign 仅支持 OBS 产品（其余服务无预签发语义）"}
+            if extract_spec is not None:
+                return {"ok": False,
+                        "reason": "_jsonpath 不适用于预签发信封（预签发无响应 body 可投影）"}
             gate_err = self._authorize(product, api)   # 预签发前消费一次性授权
             if gate_err:
                 logger.warning("execute %s:%s region=%s mode=%s policy=%s",
@@ -530,6 +548,12 @@ class ToolService:
                 logger.warning("execute %s:%s schema=reject reason=%s", product, api, err)
                 return {"ok": False, "reason": err}
 
+        # 对象数据面强制 presign（单口径，无响应 body）同样拒绝 _jsonpath，先于授权门
+        if (extract_spec is not None and lane == "obs"
+                and execute_obs.is_object_data_api(api, hit.op)):
+            return {"ok": False,
+                    "reason": "_jsonpath 不适用于预签发信封（对象数据面恒预签发，无响应 body 可投影）"}
+
         # dispatch 前原子授权门：once 规则首次放行即焚毁（校验失败不会到达此处）
         gate_err = self._authorize(product, api)
         if gate_err:
@@ -543,7 +567,7 @@ class ToolService:
         if lane == "mock":
             return execute.execute_api(hit, product, api, region, params,
                                        executor=self._mock_executor(),
-                                       spill=spill_cfg)
+                                       spill=spill_cfg, extract=extract_spec)
 
         if lane == "obs":
             if execute_obs.is_object_data_api(api, hit.op):
@@ -556,8 +580,8 @@ class ToolService:
                 hit.doc, hit.path, hit.method, hit.op, product, api, region,
                 params, client=self._make_obs_client(),
                 credentials=self.config.credentials,
-                spill=spill_cfg)
+                spill=spill_cfg, extract=extract_spec)
 
         return execute.execute_api(hit, product, api, region, params,
                                    executor=self._real_executor(),
-                                   spill=spill_cfg)
+                                   spill=spill_cfg, extract=extract_spec)
