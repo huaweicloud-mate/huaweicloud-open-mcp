@@ -48,6 +48,13 @@ def test_load_profile_basic(tmp_path):
     assert cred.project_id == "PPID"
 
 
+def test_load_profile_security_token(tmp_path):
+    p = tmp_path / "credentials"
+    p.write_text("[basic]\nak = PAK\nsk = PSK\nsecurity_token = PTOK\n", encoding="utf-8")
+    cred = credentials.load_profile(path=str(p))
+    assert cred.security_token == "PTOK"
+
+
 def test_load_profile_no_basic(tmp_path):
     p = tmp_path / "credentials"
     p.write_text("[global]\nak = GAK\nsk = GSK\n", encoding="utf-8")
@@ -55,9 +62,29 @@ def test_load_profile_no_basic(tmp_path):
     assert cred is None
 
 
+def _write_profile(monkeypatch, tmp_path, ak: str) -> None:
+    home = tmp_path / "home"
+    (home / ".huaweicloud").mkdir(parents=True)
+    (home / ".huaweicloud" / "credentials").write_text(
+        f"[basic]\nak = {ak}\nsk = FSK\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+
 def test_get_credentials_env_first(monkeypatch, tmp_path):
     monkeypatch.setenv("HUAWEICLOUD_SDK_AK", "EAK")
     monkeypatch.setenv("HUAWEICLOUD_SDK_SK", "ESK")
-    monkeypatch.setenv("HUAWEICLOUD_SDK_CREDENTIALS_FILE", str(tmp_path / "nope"))
+    _write_profile(monkeypatch, tmp_path, "PAK")
     cred = credentials.get_credentials()
+    assert cred is not None
     assert cred.ak == "EAK"
+
+
+def test_get_credentials_profile_fallback(monkeypatch, tmp_path):
+    # env 缺失时回落 profile（HOME 指向 tmp 隔离开发机真实凭证）
+    monkeypatch.delenv("HUAWEICLOUD_SDK_AK", raising=False)
+    monkeypatch.delenv("HUAWEICLOUD_SDK_SK", raising=False)
+    _write_profile(monkeypatch, tmp_path, "FAK")
+    cred = credentials.get_credentials()
+    assert cred is not None
+    assert cred.ak == "FAK"
+    assert cred.sk == "FSK"

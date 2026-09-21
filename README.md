@@ -74,7 +74,7 @@ sk = your-secret-access-key
 # domain_id = <domain-id>
 ```
 
-Optional keys (uncomment as needed): `security_token` (temporary credentials), `project_id` (auto-resolved when unset), `domain_id` (global-level services; full support in progress). Keep the file private — it holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default. The server reads this file at startup; the log line `server start: ... credentials=configured` (see `--log-file`) confirms it was picked up.
+Optional keys (uncomment as needed): `security_token` (temporary credentials — IAM temporary AK/SK + securitytoken, 15 min–24 h validity; attached automatically and included in the request signature), `project_id` (optional static value; substituted into `{project_id}` path parameters and the `X-Project-Id` header), `domain_id` (global-level services; full support in progress). Keep the file private — it holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default. The server reads this file at startup; the log line `server start: ... credentials=configured` (see `--log-file`) confirms it was picked up.
 
 ### Step 2 — Create a read-only safety policy
 
@@ -398,8 +398,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | Variable | Purpose |
 | --- | --- |
 | `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` | Access key / secret key (real mode); see [Credentials](#credentials) for the profile-file alternative |
-| `HUAWEICLOUD_SDK_SECURITY_TOKEN` | Optional temporary-security-credential token |
-| `HUAWEICLOUD_SDK_PROJECT_ID` | Optional; resolved automatically when unset |
+| `HUAWEICLOUD_SDK_SECURITY_TOKEN` | Optional temporary-security-credential token; attached as `X-Security-Token` (and `x-obs-security-token` for OBS) before signing, and included in the request signature |
+| `HUAWEICLOUD_SDK_PROJECT_ID` | Optional static project ID (substituted into `{project_id}` path parameters and the `X-Project-Id` header) |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | Optional; loaded for global-level services (full support in progress) |
 | `HUAWEICLOUD_MCP_MODE` | Same as `--mode` |
 | `HUAWEICLOUD_MCP_TRANSPORT` | Same as `--transport` |
@@ -465,8 +465,8 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | Variable | Purpose |
 | --- | --- |
 | `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` | Required pair |
-| `HUAWEICLOUD_SDK_SECURITY_TOKEN` | Optional temporary-security-credential token |
-| `HUAWEICLOUD_SDK_PROJECT_ID` | Optional; resolved automatically when unset |
+| `HUAWEICLOUD_SDK_SECURITY_TOKEN` | Optional temporary-security-credential token; attached as `X-Security-Token` (and `x-obs-security-token` for OBS) before signing, and included in the request signature |
+| `HUAWEICLOUD_SDK_PROJECT_ID` | Optional static project ID (substituted into `{project_id}` path parameters and the `X-Project-Id` header) |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | Optional; loaded for global-level services (full support in progress) |
 
 ### Behavior notes

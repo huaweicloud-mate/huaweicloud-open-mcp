@@ -359,6 +359,32 @@ def _fake_urlopen(monkeypatch, status: int, headers: dict, raw: bytes) -> None:
     monkeypatch.setattr(ur, "urlopen", lambda req, timeout=None: _Resp())
 
 
+def _capture_urlopen(monkeypatch) -> list:
+    """捕获发往 urllib 的请求头（每次调用一条 dict）。"""
+    import urllib.request as ur
+    captured: list = []
+
+    class _Resp:
+        status = 200
+        headers: dict = {}
+
+        def read(self):
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured.append(dict(req.headers))
+        return _Resp()
+
+    monkeypatch.setattr(ur, "urlopen", fake_urlopen)
+    return captured
+
+
 def test_obs_http_client_binary_body_passthrough_bytes(monkeypatch):
     """OBS adapter 不再本地渲染二进制：raw bytes 原样进 ClientResponse
     （判据单点收拢于 parse_body，与 real/mock lane 同源）。"""
@@ -445,6 +471,46 @@ def test_obs_http_client_auto_content_md5(monkeypatch):
     client.request("put", "obs.cn-north-4.myhuaweicloud.com", bucket="b", body=body)
     sent = {k.lower(): v for k, v in captured["headers"].items()}
     assert sent["content-md5"] == expected_md5
+
+
+# ---------- S9g 临时凭证（securitytoken）OBS lane 注入 ----------
+
+def test_obs_http_client_injects_security_token_header(monkeypatch):
+    """临时凭证：ObsHttpClient 签名前注入 x-obs-security-token（官方「Header中携带签名」
+    表5——头域随 x-obs- 前缀进 CanonicalizedHeaders 参与签名）。"""
+    from common.auth.credentials import Credentials
+    captured = _capture_urlopen(monkeypatch)
+    cred = Credentials(ak="AK", sk="SK", security_token="TOK123")
+    ObsHttpClient(credentials=cred).request(
+        "get", "obs.cn-north-4.myhuaweicloud.com", bucket="b", object_key="o.txt")
+    sent = {k.lower(): v for k, v in captured[0].items()}
+    assert sent["x-obs-security-token"] == "TOK123"
+
+
+def test_obs_http_client_security_token_participates_in_signature(monkeypatch):
+    """token 值变化 → Authorization 随之变化（参与 HMAC-SHA1 签名的行为锚定）。"""
+    from common.auth.credentials import Credentials
+    captured = _capture_urlopen(monkeypatch)
+    client1 = ObsHttpClient(credentials=Credentials(ak="AK", sk="SK", security_token="T1"))
+    client2 = ObsHttpClient(credentials=Credentials(ak="AK", sk="SK", security_token="T2"))
+    client1.request("get", "obs.cn-north-4.myhuaweicloud.com", bucket="b")
+    client2.request("get", "obs.cn-north-4.myhuaweicloud.com", bucket="b")
+    auth1 = {k.lower(): v for k, v in captured[0].items()}["authorization"]
+    auth2 = {k.lower(): v for k, v in captured[1].items()}["authorization"]
+    assert auth1.startswith("OBS AK:")
+    assert auth1 != auth2
+
+
+def test_obs_http_client_no_token_header_without_temp_credentials(monkeypatch):
+    """回归红线：无临时凭证（永久 AK/SK 或 None）时不注入 x-obs-security-token。"""
+    from common.auth.credentials import Credentials
+    captured = _capture_urlopen(monkeypatch)
+    ObsHttpClient(credentials=Credentials(ak="AK", sk="SK")).request(
+        "get", "obs.cn-north-4.myhuaweicloud.com", bucket="b")
+    ObsHttpClient(credentials=None).request(
+        "get", "obs.cn-north-4.myhuaweicloud.com", bucket="b")
+    for headers in captured:
+        assert "x-obs-security-token" not in {k.lower() for k in headers}
 
 
 def test_build_obs_url_virtual_hosted():
@@ -620,6 +686,45 @@ def test_execute_presign_get_envelope_clean():
     assert ps["signed_content_type"] == ""
     assert ps["headers"] == {}
     assert "note" not in ps          # GET 无 body，无 CT 警示
+
+
+# ---------- S9g 临时凭证（securitytoken）presign 子资源 ----------
+
+def test_execute_presign_api_temp_token_in_url():
+    """临时凭证 presign：x-obs-security-token 作为白名单子资源进 CanonicalizedResource
+    签名并追加到 URL（官方「URL中携带签名」表5 形态）。签名以 SK9 对含 token 子资源的
+    StringToSign 独立交叉验证。"""
+    import base64
+    import hashlib
+    import hmac as _hmac
+    from urllib.parse import unquote
+
+    from common.auth.credentials import Credentials
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "get", PRESIGN_OP_GET, "OBS", "GetObject",
+        "cn-north-4", {"bucket_name": "b", "object_key": "o"},
+        credentials=Credentials(ak="AK9", sk="SK9", security_token="TOK"))
+    assert out["ok"] is True
+    url = out["presign"]["url"]
+    assert "x-obs-security-token=TOK" in url
+    expires_epoch = int(url.split("Expires=", 1)[1].split("&", 1)[0])
+    sig = unquote(url.rsplit("Signature=", 1)[1])
+    expected = base64.b64encode(_hmac.new(
+        b"SK9", b"GET\n\n\n" + str(expires_epoch).encode() +
+        b"\n/b/o?x-obs-security-token=TOK", hashlib.sha1).digest()).decode()
+    assert sig == expected
+
+
+def test_execute_presign_api_no_token_url_clean():
+    """回归红线：无临时凭证时 URL 不含 x-obs-security-token（信封形态不变）。"""
+    from common.auth.credentials import Credentials
+    out = execute_obs.execute_presign_api(
+        PRESIGN_DOC, "/{object_key}", "get", PRESIGN_OP_GET, "OBS", "GetObject",
+        "cn-north-4", {"bucket_name": "b", "object_key": "o"},
+        credentials=Credentials(ak="AK9", sk="SK9"))
+    assert "x-obs-security-token" not in out["presign"]["url"]
+    assert set(out["presign"].keys()) == {"url", "method", "expires_in",
+                                          "signed_content_type", "headers"}
 
 
 def test_execute_presign_api_invalid_expires():

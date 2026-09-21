@@ -391,6 +391,10 @@ class ObsHttpClient:
             body_bytes = str(body).encode("utf-8")
 
         creds = self.credentials
+        if creds and creds.security_token:
+            # 临时凭证：x-obs-security-token 头域随 x-obs- 前缀进 CanonicalizedHeaders
+            # 参与签名（官方「Header中携带签名」表5）；setdefault 保留调用方显式值
+            headers.setdefault("x-obs-security-token", creds.security_token)
         vh = is_virtual_hosted(host, bucket)
         if body_bytes and not any(k.lower() == "content-md5" for k in headers):
             # OBS 对带 body 的写请求强制 Content-MD5（缺失报 InvalidRequest/MalformedXML）
@@ -593,10 +597,17 @@ def execute_presign_api(doc: dict[str, Any], path: str, method: str, op: dict[st
         else:
             presign_notes.append("HEAD 预检不可用，信封未附带对象元数据预期值")
 
+    query = dict(built.query or {})
+    if credentials.security_token:
+        # 临时凭证 presign：token 作为白名单子资源进 CanonicalizedResource 签名并
+        # 追加到 URL（官方「URL中携带签名」表5 形态）；HEAD 预检仍用原始 query
+        # （预检请求经 ObsHttpClient 走头域注入，不双携带）
+        query.setdefault("x-obs-security-token", credentials.security_token)
+
     import time
     url = obs_sign.sign_obs_url(
         method.upper(), ak=credentials.ak, sk=credentials.sk, host=host,
-        bucket=built.bucket, object_key=built.object_key, query=built.query,
+        bucket=built.bucket, object_key=built.object_key, query=query,
         expires=int(time.time()) + expires, virtual_hosted=bool(built.bucket),
         content_type=content_type,
     )

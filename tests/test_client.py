@@ -109,6 +109,27 @@ def test_request_security_token_header(monkeypatch):
     assert get_header(calls[0], "X-Security-Token") == "ST"
 
 
+def test_request_security_token_participates_in_signature(monkeypatch):
+    # 官方《使用临时AK/SK做签名》：X-Security-Token 作为普通消息头参与签名——
+    # SignedHeaders 列出该头，token 值变化 → Signature 变化
+    calls = _install(monkeypatch, [FakeResponse(200, b"{}"), FakeResponse(200, b"{}")])
+    HttpClient(credentials=Credentials(ak="AK", sk="SK", security_token="ST1")).request(
+        "GET", "h.example.com", "/p")
+    HttpClient(credentials=Credentials(ak="AK", sk="SK", security_token="ST2")).request(
+        "GET", "h.example.com", "/p")
+    a1 = get_header(calls[0], "Authorization")
+    a2 = get_header(calls[1], "Authorization")
+    assert "x-security-token" in a1
+    assert a1 != a2
+
+
+def test_request_without_token_not_in_signed_headers(monkeypatch):
+    # 回归红线：无临时凭证时 SignedHeaders 不含 x-security-token
+    calls = _install(monkeypatch, [FakeResponse(200, b"{}")])
+    HttpClient(credentials=CRED).request("GET", "h.example.com", "/p")
+    assert "x-security-token" not in get_header(calls[0], "Authorization")
+
+
 def test_request_body_serialized(monkeypatch):
     calls = _install(monkeypatch, [FakeResponse(200, b"{}")])
     client = HttpClient(credentials=CRED)

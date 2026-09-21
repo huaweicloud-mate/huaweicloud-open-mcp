@@ -87,6 +87,14 @@ def test_signed_headers_exclude_underscore_and_content_type():
     assert sh == ["x-auth", "x-custom", "x-sdk-date"]
 
 
+def test_signed_headers_list_includes_security_token():
+    # 临时凭证场景（官方《使用临时AK/SK做签名》）：X-Security-Token 作为普通消息头
+    # 参与 SDK-HMAC-SHA256 签名——即落入 SignedHeaders，与其它头同一排除规则
+    sh = sign.signed_headers_list({"Host": HOST, "X-Sdk-Date": SDK_DATE,
+                                   "X-Security-Token": "t"})
+    assert sh == ["host", "x-sdk-date", "x-security-token"]
+
+
 def test_sign_string_to_sign_uses_date():
     cr = ("GET\n/path/\n\nhost:example.huaweicloud.com\nx-sdk-date:20060102T150405Z\n"
           "\nx-sdk-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")

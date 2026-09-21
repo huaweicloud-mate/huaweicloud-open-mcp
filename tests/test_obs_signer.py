@@ -78,6 +78,33 @@ def test_x_obs_date_empties_date_line():
     assert sts.startswith("PUT\n\n\n\nx-obs-date:Tue, 15 Oct 2015 07:20:09 GMT\n")
 
 
+def test_string_to_sign_doc_table5_temp_token_header():
+    # 表5：使用临时AK/SK和securitytoken上传对象——x-obs-security-token 头域
+    # 随 x-obs- 前缀进 CanonicalizedHeaders 参与签名；x-obs-date 置空 Date 位
+    sts = obs.obs_string_to_sign(
+        "PUT", bucket="bucket", object_key="object.txt",
+        headers={"x-obs-date": "Tue, 15 Oct 2015 07:20:09 GMT",
+                 "x-obs-security-token": "YwkaRTbdY8g7q....",
+                 "Content-Type": "text/plain"},
+    )
+    assert sts == ("PUT\n\ntext/plain\n\n"
+                   "x-obs-date:Tue, 15 Oct 2015 07:20:09 GMT\n"
+                   "x-obs-security-token:YwkaRTbdY8g7q....\n"
+                   "/bucket/object.txt")
+
+
+def test_signature_doc_table5_temp_token_header():
+    # openssl 金标（printf '<表5 StringToSign>' | openssl dgst -sha1
+    #   -hmac 'SecretKey' -binary | base64，StringToSign 与上一测试一致）
+    out = obs.sign_obs(
+        "PUT", ak=AK, sk=SK, bucket="bucket", object_key="object.txt",
+        headers={"x-obs-date": "Tue, 15 Oct 2015 07:20:09 GMT",
+                 "x-obs-security-token": "YwkaRTbdY8g7q....",
+                 "Content-Type": "text/plain"},
+    )
+    assert out["Authorization"] == f"OBS {AK}:QIRDwk/3LRgnkPY7Sqr5A8rIYSw="
+
+
 def test_canonicalized_resource_only_whitelisted_subresources():
     # prefix/max-keys 等列表参数不进 CanonicalizedResource；subresource 按字典序
     res = obs.canonicalized_resource(

@@ -75,7 +75,7 @@ sk = your-secret-access-key
 # domain_id = <domain-id>
 ```
 
-可选键（按需取消注释）：`security_token`（临时凭证）、`project_id`（缺省自动解析）、`domain_id`（全局级服务，完整支持开发中）。妥善保管该文件 —— 里面有你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。server 启动时读取该文件；日志行 `server start: ... credentials=configured`（见 `--log-file`）可确认已加载。
+可选键（按需取消注释）：`security_token`（临时凭证——IAM 临时 AK/SK + securitytoken，有效期 15 分钟~24 小时；网关自动携带并参与请求签名）、`project_id`（可选静态值，用于 `{project_id}` 路径参数填充与 `X-Project-Id` 头）、`domain_id`（全局级服务，完整支持开发中）。妥善保管该文件 —— 里面有你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。server 启动时读取该文件；日志行 `server start: ... credentials=configured`（见 `--log-file`）可确认已加载。
 
 ### 步骤 2：创建只读 safety policy
 
@@ -399,8 +399,8 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | 变量 | 用途 |
 | --- | --- |
 | `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` | Access Key / Secret Key（真实模式）；profile 文件替代方式见[凭证](#凭证) |
-| `HUAWEICLOUD_SDK_SECURITY_TOKEN` | 可选临时安全凭证 token |
-| `HUAWEICLOUD_SDK_PROJECT_ID` | 可选；缺省自动解析 |
+| `HUAWEICLOUD_SDK_SECURITY_TOKEN` | 可选临时安全凭证 token；签名前自动携带 `X-Security-Token`（OBS 为 `x-obs-security-token`）并参与请求签名 |
+| `HUAWEICLOUD_SDK_PROJECT_ID` | 可选静态 project ID（用于 `{project_id}` 路径参数填充与 `X-Project-Id` 头） |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | 可选；为全局级服务预留（完整支持开发中） |
 | `HUAWEICLOUD_MCP_MODE` | 等价 `--mode` |
 | `HUAWEICLOUD_MCP_TRANSPORT` | 等价 `--transport` |
@@ -466,8 +466,8 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | 变量 | 用途 |
 | --- | --- |
 | `HUAWEICLOUD_SDK_AK` / `HUAWEICLOUD_SDK_SK` | 必需成对 |
-| `HUAWEICLOUD_SDK_SECURITY_TOKEN` | 可选临时安全凭证 token |
-| `HUAWEICLOUD_SDK_PROJECT_ID` | 可选；缺省自动解析 |
+| `HUAWEICLOUD_SDK_SECURITY_TOKEN` | 可选临时安全凭证 token；签名前自动携带 `X-Security-Token`（OBS 为 `x-obs-security-token`）并参与请求签名 |
+| `HUAWEICLOUD_SDK_PROJECT_ID` | 可选静态 project ID（用于 `{project_id}` 路径参数填充与 `X-Project-Id` 头） |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | 可选；为全局级服务预留（完整支持开发中） |
 
 ### 行为要点
