@@ -68,6 +68,8 @@ def _write_profile(monkeypatch, tmp_path, ak: str) -> None:
     (home / ".huaweicloud" / "credentials").write_text(
         f"[basic]\nak = {ak}\nsk = FSK\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
+    # Windows 上 expanduser 优先读 USERPROFILE（HOME 仅 POSIX 语义）
+    monkeypatch.setenv("USERPROFILE", str(home))
 
 
 def test_get_credentials_env_first(monkeypatch, tmp_path):
