@@ -13,9 +13,9 @@
 **Open Connect. Explore What's Next.**
 **开放连接，探索下一个可能**
 
-一个开放的本地 [Model Context Protocol](https://modelcontextprotocol.io) 网关，把 code agent —— opencode、Codex、Cursor 以及任何支持 MCP 的客户端 —— 以自然语言连接到华为云。无需逐服务手写封装：Agent 逐步探索全量目录（300+ 产品、17000+ API），收窄到一次具体调用并执行，请求在本地完成签名。这是面向个人的本地化部署方案：网关完全运行在你自己的机器上——AK/SK 永不出本机。
+一个开放的本地 [Model Context Protocol](https://modelcontextprotocol.io) 网关，让 code agent——opencode、Codex、Cursor 以及任何支持 MCP 的客户端——用自然语言连接华为云。无需逐服务手写封装：Agent 逐步探索全量目录（300+ 产品、17000+ API），层层收窄到一次具体调用再执行，请求全程在本地签名。这是一套面向个人的本地部署方案：网关完全运行在你自己的机器上，AK/SK 永不出本机。
 
-三种模式经 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘——本地计算工具，不需要凭证、不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合 / transform_data 整形落盘，仅聚合结果或产物元数据进入模型上下文。网关默认走 **stdio**（MCP 客户端拉起的本地形态）；`--transport http` 补充 **Streamable HTTP** 多客户端部署——见 [HTTP 传输（多会话）](#http-传输多会话)。
+三种模式可通过 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现并连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘——纯本地计算，不需要凭证，也不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合 / transform_data 整形落盘，仅聚合结果或产物元数据进入模型上下文。网关默认走 **stdio**（MCP 客户端拉起的本地形态）；`--transport http` 另提供 **Streamable HTTP**，适配多客户端部署——见 [HTTP 传输（多会话）](#http-传输多会话)。
 
 ## 工作原理
 
@@ -51,7 +51,7 @@ Windows 与 macOS 预期可用——两平台的依赖解析已验证、代码�
 
 ### 安装
 
-快速开始经 [uvx](https://docs.astral.sh/uv/) 运行网关——无需安装步骤：首次调用自动拉取包。偏好持久安装时：
+快速开始直接经 [uvx](https://docs.astral.sh/uv/) 运行网关，无需安装步骤：首次调用会自动拉取包。如需持久安装：
 
 ```bash
 pip install huaweicloud-open-mcp                  # 或 uv tool install / pipx install——装完在步骤 3 用 huaweicloud-open-mcp 替换 uvx huaweicloud-open-mcp
@@ -60,7 +60,7 @@ pip install "huaweicloud-open-mcp[datafusion]"    # 可选 extra：data 模式 S
 
 ### 步骤 1：提供凭证
 
-网关从 `~/.huaweicloud/credentials`（INI 格式，`[basic]` 节）读取你的 AK/SK —— Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`。偏好环境变量内联方式见[凭证](#凭证)。
+网关从 `~/.huaweicloud/credentials`（INI 格式，`[basic]` 节）读取你的 AK/SK —— Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`。想改用环境变量内联方式，见[凭证](#凭证)。
 
 在你的用户主目录创建 `.huaweicloud` 目录，再在其中创建 `credentials` 文件，内容如下：
 
@@ -79,7 +79,7 @@ sk = your-secret-access-key
 
 ### 步骤 2：创建只读 safety policy
 
-除非 policy 文件显式允许，网关拒绝每一次 `execute_api`；未配置 policy 时全部拒绝。
+除非 policy 文件显式允许，网关会拒绝每一次 `execute_api`——未配置 policy 时全部拒绝。
 
 在你的主目录创建一个 policy 文件（例如 `hwc-policy.json`），内容如下：
 
@@ -179,7 +179,7 @@ Agent 走渐进式工作流 —— `list_apis(ECS)` 找到 API、`get_api` 读�
 
 `"count": 0` 且 `servers` 为空同样是成功 —— 该 region 下账号没有实例；换个 `region` 再问（例如 `cn-east-3`）。
 
-安全说明：请求在本地签名，SK 永不出本机；policy 文件把 Agent 限定在只读 ECS `List*` API 内。放宽策略请逐条渐进 —— 见 [Safety policy](#safety-policy)。
+安全说明：请求在本地签名，SK 永不出本机；policy 文件把 Agent 限定在只读 ECS `List*` API 内。如需放宽限制，请一次一条、审慎添加 —— 见 [Safety policy](#safety-policy)。
 
 ### 还没有账号？Mock 模式
 
@@ -232,19 +232,19 @@ uvx huaweicloud-open-mcp --transport http --http-host 0.0.0.0 --http-port 9000
 { "mcpServers": { "huaweicloud": { "type": "http", "url": "http://127.0.0.1:8000/mcp" } } }
 ```
 
-HTTP 档改变的——会话语义：
+HTTP 档带来的变化集中在会话语义：
 
 - 每个客户端连接拥有独立的 policy 会话。经 `manage_policy`（直接或经 elicitation）授予的 `session` 档规则仅对本连接可见、对其它连接不可见；断开重连即新会话，不继承原授予；`once` 规则在授予会话内焚毁。`permanent` 规则照旧落策略文件，跨会话、跨重启共享。
 - 无 MCP 会话身份的请求（modern 单交换协议）无法写入 session 档授予——收到结构化拒绝，而非静默共享状态。
 - `GET /healthz` 供探针使用。审计事件（配置 `--audit-file` 时）携带 `session` 字段，把每次调用归因到其 MCP 会话；stdio 下审计输出与此前逐字节一致。
-- 闲置会话回收：30 分钟无 store 活动的会话桶被回收，任何授予在 24 小时绝对年龄后失效——持续工作的会话授予持续存活。
+- 闲置会话回收：30 分钟无活动的会话桶被回收，任何授予超过 24 小时绝对年龄即失效——持续工作的会话，其授予持续存活。
 
 安全口径：
 
-- 代码默认绑定 `127.0.0.1`（loopback 同时自动启用 SDK 的 DNS rebinding 防护）。容器部署在镜像或运行命令里置 `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0`——发布端口本身已是显式动作。绑定非 loopback 地址会打印告警：能达端口者即可使用本部署 AK/SK 身份执行；跨出可信网段请置于带 TLS/认证的反代之后。v1 不内置 HTTP 认证。
+- 默认绑定 `127.0.0.1`（loopback 同时自动启用 SDK 的 DNS rebinding 防护）。容器部署在镜像或运行命令里置 `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0`——开放端口本身已是显式动作。绑定非 loopback 地址会打印告警：能达端口者即可用本部署的 AK/SK 身份执行操作；跨出可信网段时请置于带 TLS/认证的反代之后。v1 不内置 HTTP 认证。
 - 不支持多 worker 进程（会话状态在进程内）。
 
-嵌入（ASGI）：`build_app(...).streamable_http_app()` 返回 Starlette app（lifespan 已接线 MCP session manager），可交给任意 ASGI runner（uvicorn/gunicorn）驱动。自行组合 HTTP 服务时，请在传给 `build_app` 的 args 里声明（`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`）以接好按会话隔离；以 stdio 声明的装配去组合 HTTP，无会话身份请求的 session 档授予会落入共享命名空间。
+嵌入（ASGI）：`build_app(...).streamable_http_app()` 返回 Starlette app（lifespan 已接线 MCP session manager），可交给任意 ASGI runner（uvicorn/gunicorn）驱动。自行组合 HTTP 服务时，请在传给 `build_app` 的 args 里声明（`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`），按会话隔离才会正确接线；若以 stdio 声明的装配去组合 HTTP，无会话身份请求的 session 档授予会落入同一共享命名空间。
 
 ## 工具（openapi 模式）
 
@@ -331,7 +331,7 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 
 ### 帮助中心功能介绍补全（可选，构建期）
 
-`api-refresh` 额外提供两个阶段（不在默认 refresh 范围），从官方帮助中心收割更完善的「功能介绍」并生成 hints 配置：
+`api-refresh` 额外提供两个阶段（不在默认 refresh 范围），从官方帮助中心采集更完善的「功能介绍」，转化为 hints 配置：
 
 ```bash
 uv run api-refresh helpdocs    # 抓取解析帮助中心页面（sitemap 种子 + 同文档集链接 BFS，断点续传）
@@ -351,7 +351,7 @@ uv run huaweicloud-open-mcp         # 运行时缺省加载 configs/entity-index
 
 运行时 `search_apis` 把快照喂给 tantivy BM25 引擎：约 1.8 万条 API 文本经 token 化（ASCII 词 + 驼峰切分；CJK 2-gram）构建内存索引（启动一次性约 0.6s），查询亚毫秒级完成，再与手调身份层（别名/产品名/判别 tag/产品广度先验）合并排序。排序质量由人工标注金评集（`tests/fixtures/entity_eval.json`，45 例）在测试套件中固化门禁。
 
-- 仅差集口径：仅当帮助中心功能介绍明显比 API Explorer 描述更完善时才补全（`--min-gain`，默认 20 字符）。
+- 差集口径：只有当帮助中心的功能介绍明显比 API Explorer 描述更完善时才补全（`--min-gain`，默认 20 字符）。
 - 每条 note 为功能介绍全文（`--cap` 截断，默认 2000 字符，超长加 …）+ 官方文档 URL。
 - 限速爬取（0.4s/页）+ 人机验证退避 + 断点续传；产物可重建不入库。完整管线规则见 [AGENTS.md](AGENTS.md)。
 - `--hints` / `--deprecated-index` 支持裸文件名，按 `configs/` 解析（仓库根优先 → 安装包内置副本）。
@@ -423,7 +423,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 ## 凭证
 
-网关按顺序从两个来源加载 AK/SK：**环境变量 → `~/.huaweicloud/credentials`**（Windows：`%USERPROFILE%\.huaweicloud\credentials`）。两者同时配置时环境变量优先。
+网关按顺序从两个来源加载 AK/SK：**环境变量 → `~/.huaweicloud/credentials`**（Windows：`%USERPROFILE%\.huaweicloud\credentials`）——两者同时配置时环境变量优先。
 
 ### 方式 A —— Profile 文件（快速开始主路径）
 
@@ -481,7 +481,7 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | 症状 | 可能原因 | 处理 |
 | --- | --- | --- |
 | 客户端显示 "failed to connect" 或 server 立即退出 | `--policy` 是相对路径或文件缺失 —— policy 文件有问题时 server 快速失败 | 使用存在的文件的绝对路径 |
-| 七个工具从未出现在 Agent 中 | `uvx` 不在客户端 PATH 上 | `which uvx`（macOS/Linux）或 `where uvx`（Windows）定位后在命令中改用绝对路径 |
+| 网关工具从未出现在 Agent 中 | `uvx` 不在客户端 PATH 上 | `which uvx`（macOS/Linux）或 `where uvx`（Windows）定位后在命令中改用绝对路径 |
 | 元数据工具正常但 `execute_api` 失败 | 凭证未加载（`[basic]` 节为空，或环境变量覆盖了一个空文件） | 修正 `~/.huaweicloud/credentials`（见[凭证](#凭证)）或设置 `HUAWEICLOUD_SDK_*` 环境变量 |
 | `execute_api` 返回 `{"ok": false, "reason": ...}` 且提及 policy | 该 API 未被 policy 文件允许（快速开始文件仅允许 `ECS:*List*`） | 编辑 policy 文件 —— 热生效无需重启 server —— 或（先向用户确认后）让 Agent 经 `manage_policy` 加规则 |
 | 401 / SignatureDoesNotMatch | AK 或 SK 错误 | 核对正在生效的凭证来源（env 优先于 profile 文件） |
@@ -499,7 +499,7 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | 总体设计（分层、模块、日志、测试） |
 | [docs/mcp-openapi.md](docs/mcp-openapi.md) | openapi 模式设计（工作流、签名、OBS lane） |
-| [AGENTS.md](AGENTS.md) | 贡献者约定（TDD 接缝、发布流程） |
+| [AGENTS.md](AGENTS.md) | 贡献者约定（TDD 接缝） |
 | [benchmarks/README.md](benchmarks/README.md) | 工作流 benchmark 设计 |
 
 ## 开发
@@ -514,23 +514,6 @@ uv run mypy src                          # 类型检查
 ```
 
 配套 CLI：`api-refresh`（离线 APIE 管道：抓取 API Explorer → OpenAPI 2.0 文档；`graph` 实体图谱构建含 `--llm` 语义抽取；帮助中心补全阶段 `helpdocs`/`helphints`）与 `api-docs`（终端元数据查询）。详见 [AGENTS.md](AGENTS.md)。
-
-### 发布
-
-发布区分 TestPyPI 与正式 PyPI 仓库，上传 URL 经 `pyproject.toml` 具名 index（`[[tool.uv.index]]`）固化：
-
-```bash
-scripts/publish test                      # TestPyPI（token：UV_PUBLISH_TOKEN_TEST）
-scripts/publish prod                      # 正式 PyPI（token：UV_PUBLISH_TOKEN_PROD，带确认门；--yes 供 CI 跳过）
-scripts/publish <test|prod> --skip-build  # 复用已有 dist/ 产物重发
-```
-
-说明：
-
-- TestPyPI 与 PyPI 账号、API token 相互独立——分别在两站 Account Settings 申请；脚本严格按目标取用对应环境变量、无共享回退，凭证不会拿错。
-- 每次构建先清空 `dist/`（`uv build` + `uvx twine check`），陈旧产物不会混入上传。
-- `prod` 发布前打印目标 URL、项目版本与产物清单，需手动输入 yes 确认。
-- 版本号在单个 index 内不可重复：已上传过的版本永不可重发（TestPyPI 验证通过后升版本号再发正式仓）。
 
 ## 许可证
 

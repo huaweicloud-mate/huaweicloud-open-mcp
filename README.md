@@ -12,9 +12,9 @@
 
 **Open Connect. Explore What's Next.**
 
-One open, local [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents — opencode, Codex, Cursor, and any other MCP-capable client — to Huawei Cloud in natural language. No per-service wrappers: the agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrowing it down to one concrete API call, executed with locally signed requests. This is a personal, local deployment: the gateway runs entirely on your machine — your AK/SK never leave it.
+One open, local [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents — opencode, Codex, Cursor, or any other MCP-capable client — to Huawei Cloud in natural language. No per-service wrappers: the agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrowing down to one concrete API call, then executes it with a locally signed request. This is a personal, local deployment: the gateway runs entirely on your machine, and your AK/SK never leave it.
 
-Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `openapi` (default) talks to Huawei Cloud OpenAPI, `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet), and `data` runs read-only SQL analytics and transformations over inline/local data with DataFusion — local compute tools that need no credentials and are not governed by the safety policy. The typical closed loop (`openapi,data`): pull a large dataset via `execute_api`, save it to a file, aggregate with `query_data` or reshape it to a new dataset with `transform_data` — only aggregated results or artifact metadata enter the model context. The gateway serves **stdio** by default (the form your code agent launches); `--transport http` adds **Streamable HTTP** for multi-client deployments — see [HTTP transport](#http-transport-multi-session).
+Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `openapi` (default) talks to Huawei Cloud OpenAPI, `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet), and `data` runs read-only SQL analytics and transformations over inline/local data with DataFusion — pure local compute that needs no credentials and is not governed by the safety policy. The typical closed loop (`openapi,data`): pull a large dataset via `execute_api`, save it to a file, then aggregate it with `query_data` or reshape it into a new dataset with `transform_data` — only the aggregated results or artifact metadata enter the model context. The gateway serves **stdio** by default (the form your code agent launches); `--transport http` adds **Streamable HTTP** for multi-client deployments — see [HTTP transport](#http-transport-multi-session).
 
 ## How it works
 
@@ -59,7 +59,7 @@ pip install "huaweicloud-open-mcp[datafusion]"    # optional extra: data-mode SQ
 
 ### Step 1 — Provide credentials
 
-The gateway reads your AK/SK from `~/.huaweicloud/credentials` (INI format, `[basic]` section) — on Windows that is `%USERPROFILE%\.huaweicloud\credentials`. See [Credentials](#credentials) for the alternative inline-environment-variable way.
+The gateway reads your AK/SK from `~/.huaweicloud/credentials` (INI format, `[basic]` section) — on Windows that is `%USERPROFILE%\.huaweicloud\credentials`. See [Credentials](#credentials) for the inline environment-variable alternative.
 
 Create a `.huaweicloud` directory in your home directory, then a `credentials` file inside it with the following content:
 
@@ -78,7 +78,7 @@ Optional keys (uncomment as needed): `security_token` (temporary credentials —
 
 ### Step 2 — Create a read-only safety policy
 
-The gateway refuses every `execute_api` call unless a policy file explicitly allows it; with no policy configured, everything is denied.
+The gateway refuses every `execute_api` call unless a policy file explicitly allows it — with no policy configured, everything is denied.
 
 Create a policy file — e.g. `hwc-policy.json` in your home directory — with the following content:
 
@@ -240,10 +240,10 @@ What changes over HTTP — session semantics:
 
 Security posture:
 
-- The code default binds `127.0.0.1` (loopback also auto-enables the SDK's DNS-rebinding protection). For containers, set `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0` in the image or run command — publishing the port is already an explicit act. Binding a non-loopback address prints a warning: anyone who can reach the port can act with this deployment's AK/SK; put a reverse proxy with TLS/auth in front beyond a trusted network. v1 ships no built-in HTTP authentication.
+- By default the gateway binds `127.0.0.1` (loopback also auto-enables the SDK's DNS-rebinding protection). For containers, set `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0` in the image or run command — exposing the port is already an explicit decision. Binding a non-loopback address prints a warning: anyone who can reach the port can act with this deployment's AK/SK; beyond a trusted network, put a reverse proxy with TLS/auth in front. v1 ships no built-in HTTP authentication.
 - Multiple worker processes are not supported (session state lives in the process).
 
-Embedding (ASGI): `build_app(...).streamable_http_app()` returns a Starlette app whose lifespan runs the MCP session manager — drive it with any ASGI runner (uvicorn/gunicorn). When you compose the HTTP serving yourself, declare it in the args passed to `build_app` (`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`) so per-session isolation is wired; composing HTTP on a stdio-declared deployment leaves session-scoped grants from session-less requests sharing one namespace.
+Embedding (ASGI): `build_app(...).streamable_http_app()` returns a Starlette app whose lifespan runs the MCP session manager — drive it with any ASGI runner (uvicorn/gunicorn). If you compose the HTTP serving yourself, declare it in the args passed to `build_app` (`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`) so per-session isolation is wired in; composing HTTP on a stdio-declared deployment would let session-scoped grants from session-less requests share one namespace.
 
 ## Tools (openapi mode)
 
@@ -422,7 +422,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 ## Credentials
 
-The gateway loads AK/SK from two sources, checked in order: **environment variables → `~/.huaweicloud/credentials`** (on Windows: `%USERPROFILE%\.huaweicloud\credentials`). When both are configured, environment variables win.
+The gateway loads AK/SK from two sources, checked in order: **environment variables → `~/.huaweicloud/credentials`** (on Windows: `%USERPROFILE%\.huaweicloud\credentials`) — when both are set, environment variables win.
 
 ### Option A — Profile file (quick-start main path)
 
@@ -480,7 +480,7 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | Client shows "failed to connect" or the server exits immediately | `--policy` path is relative or the file is missing — the server fails fast on a bad policy file | Use an absolute path to a file that exists |
-| The seven tools never appear in the agent | `uvx` is not on the client's PATH | Find it with `which uvx` (macOS/Linux) or `where uvx` (Windows) and use the absolute path in place of `uvx` in the command |
+| The gateway tools never appear in the agent | `uvx` is not on the client's PATH | Find it with `which uvx` (macOS/Linux) or `where uvx` (Windows) and use the absolute path in place of `uvx` in the command |
 | Metadata tools work but `execute_api` fails | Credentials not loaded (empty `[basic]` section, or env vars shadow an empty file) | Fix `~/.huaweicloud/credentials` (see [Credentials](#credentials)) or set the `HUAWEICLOUD_SDK_*` environment variables |
 | `execute_api` returns `{"ok": false, "reason": ...}` mentioning policy | The API is not allowed by the policy file (the quick-start file allows only `ECS:*List*`) | Edit the policy file — changes hot-reload without restarting the server — or, after confirming with the user, have the agent add a rule via `manage_policy` |
 | 401 / SignatureDoesNotMatch | Wrong AK or SK | Recheck the credentials source in use (env wins over profile file) |
@@ -498,7 +498,7 @@ Explore the design behind the gateway:
 | --- | --- | --- |
 | [docs/architecture.md](docs/architecture.md) | Design overview (layers, modules, logging, tests) | 中文 |
 | [docs/mcp-openapi.md](docs/mcp-openapi.md) | openapi-mode design (workflow, signing, OBS lane) | 中文 |
-| [AGENTS.md](AGENTS.md) | Contributor conventions (TDD seams, release flow) | 中文 |
+| [AGENTS.md](AGENTS.md) | Contributor conventions (TDD seams) | 中文 |
 | [benchmarks/README.md](benchmarks/README.md) | Workflow-benchmark design | 中文 |
 
 ## Development
@@ -513,23 +513,6 @@ uv run mypy src                          # type check
 ```
 
 Companion CLIs: `api-refresh` (offline APIE pipeline: fetch API Explorer → OpenAPI 2.0 docs; `graph` entity-graph build with `--llm` semantic extraction; help-center completion stages `helpdocs`/`helphints`) and `api-docs` (metadata queries from the terminal). Details in [AGENTS.md](AGENTS.md).
-
-### Publishing
-
-Releases distinguish TestPyPI from the production PyPI index; both upload URLs are pinned as named indexes in `pyproject.toml` (`[[tool.uv.index]]`):
-
-```bash
-scripts/publish test                      # TestPyPI (token: UV_PUBLISH_TOKEN_TEST)
-scripts/publish prod                      # PyPI (token: UV_PUBLISH_TOKEN_PROD, confirmation gate; --yes for CI)
-scripts/publish <test|prod> --skip-build  # republish existing dist/ artifacts
-```
-
-Notes:
-
-- TestPyPI and PyPI accounts/API tokens are independent — request each token from the corresponding site's Account Settings; the script strictly uses the target-specific env var with no fallback, so credentials can never be mixed up.
-- Each build clears `dist/` first (`uv build` + `uvx twine check`), so no stale artifacts can be uploaded.
-- `prod` prints the target URL, project version, and artifact list, then requires typing `yes`.
-- Version numbers are unique per index: never reuse a version already uploaded (verify on TestPyPI, bump the version, then publish to PyPI).
 
 ## License
 
