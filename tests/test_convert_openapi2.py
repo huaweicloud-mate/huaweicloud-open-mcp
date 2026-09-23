@@ -4,23 +4,29 @@ import json
 import os
 
 from apie import convert_openapi2 as conv
+from apie import schema_normalize as sn
 from apie.api_location import ApiLocation
 
-# ---------- fix_schema_type ----------
 
-def test_fix_schema_type_maps_nonstandard():
-    schema = {"type": "long", "properties": {"a": {"type": "int"}, "b": {"type": "Bigint"}}}
-    conv.fix_schema_type(schema)
-    assert schema["type"] == "integer"
-    assert schema["properties"]["a"]["type"] == "integer"
-    assert schema["properties"]["b"]["type"] == "integer"
+def _norm_schema(schema):
+    """经公共接口归一单个 schema 节点（包一层 doc）。"""
+    return sn.normalize_doc({"definitions": {"X": schema}})["definitions"]["X"]
 
 
-def test_fix_schema_type_keeps_standard():
-    schema = {"type": "string", "properties": {"n": {"type": "number"}}}
-    conv.fix_schema_type(schema)
-    assert schema["type"] == "string"
-    assert schema["properties"]["n"]["type"] == "number"
+# ---------- schema_normalize: type 归一 ----------
+
+def test_normalize_maps_nonstandard_types():
+    out = _norm_schema({"type": "long",
+                        "properties": {"a": {"type": "int"}, "b": {"type": "Bigint"}}})
+    assert out["type"] == "integer"
+    assert out["properties"]["a"]["type"] == "integer"
+    assert out["properties"]["b"]["type"] == "integer"
+
+
+def test_normalize_keeps_standard_types():
+    out = _norm_schema({"type": "string", "properties": {"n": {"type": "number"}}})
+    assert out["type"] == "string"
+    assert out["properties"]["n"]["type"] == "number"
 
 
 # ---------- convert_ref ----------
@@ -71,42 +77,189 @@ def test_oas2_parameter_keeps_x_extensions():
     assert p["x-constraint"] == "note"
 
 
-# ---------- clean_schema ----------
+# ---------- schema_normalize: 键策略（保留合法 / 非 2.0 转 x-） ----------
 
-def test_clean_schema_removes_3o_fields():
-    s = {"type": "object", "nullable": True, "deprecated": True, "oneOf": [{"type": "string"}], "writeOnly": True,
-         "properties": {"a": {"type": "string", "linkage_node_fields": "x"}}}
-    conv.clean_schema(s)
-    assert "nullable" not in s
-    assert "deprecated" not in s
-    assert "oneOf" not in s
-    assert "writeOnly" not in s
-    assert "linkage_node_fields" not in s["properties"]["a"]
-
-
-def test_clean_schema_removes_bool_required():
-    s = {"type": "object", "required": True, "properties": {"a": {"type": "string", "required": True}}}
-    conv.clean_schema(s)
-    assert "required" not in s
-    assert "required" not in s["properties"]["a"]
-
-
-def test_clean_schema_enum_dedup():
-    s = {"type": "string", "enum": [0, 1, 2, 1, 0]}
-    conv.clean_schema(s)
-    assert s["enum"] == [0, 1, 2]
+def test_normalize_preserves_valid_2o_keys():
+    out = _norm_schema({
+        "type": "object", "title": "T", "readOnly": True, "maxProperties": 3,
+        "minProperties": 1, "discriminator": "kind", "example": {"a": 1},
+        "externalDocs": {"url": "u"},
+        "properties": {"a": {"type": "string", "readOnly": True}},
+    })
+    assert out["title"] == "T"
+    assert out["readOnly"] is True
+    assert out["maxProperties"] == 3
+    assert out["minProperties"] == 1
+    assert out["discriminator"] == "kind"
+    assert out["example"] == {"a": 1}
+    assert out["externalDocs"] == {"url": "u"}
+    assert out["properties"]["a"]["readOnly"] is True
 
 
-def test_clean_schema_removes_non_dict_props():
-    s = {"type": "object", "properties": {"a": {"type": "string"}, "junk": ["x"]}}
-    conv.clean_schema(s)
-    assert "junk" not in s["properties"]
+def test_normalize_translates_non_2o_keys_to_x():
+    out = _norm_schema({
+        "type": "object", "nullable": True, "deprecated": True,
+        "oneOf": [{"type": "string"}], "writeOnly": True,
+        "properties": {"a": {"type": "string", "linkage_node_fields": "x"}},
+    })
+    assert "nullable" not in out and out["x-nullable"] is True
+    assert "oneOf" not in out and out["x-oneOf"] == [{"type": "string"}]
+    assert "writeOnly" not in out and out["x-writeOnly"] is True
+    assert "deprecated" not in out and out["x-deprecated"] is True
+    assert "linkage_node_fields" not in out["properties"]["a"]
+    assert out["properties"]["a"]["x-linkage_node_fields"] == "x"
 
 
-def test_clean_schema_keeps_list_required():
-    s = {"type": "object", "required": ["a"], "properties": {"a": {"type": "string"}}}
-    conv.clean_schema(s)
-    assert s["required"] == ["a"]
+def test_normalize_object_discriminator_to_x():
+    out = _norm_schema({"type": "object", "discriminator": {"propertyName": "kind"}})
+    assert "discriminator" not in out
+    assert out["x-discriminator"] == {"propertyName": "kind"}
+
+
+def test_normalize_preserves_allof():
+    out = _norm_schema({"allOf": [
+        {"$ref": "#/definitions/Base"},
+        {"type": "object", "properties": {"x": {"type": "string"}}},
+    ]})
+    assert out["allOf"][0]["$ref"] == "#/definitions/Base"
+    assert out["allOf"][1]["properties"]["x"]["type"] == "string"
+
+
+def test_normalize_drops_invalid_allof():
+    assert "allOf" not in _norm_schema({"type": "object", "allOf": None})
+    assert "allOf" not in _norm_schema({"type": "object", "allOf": []})
+
+
+def test_normalize_keeps_enum_only_property():
+    """此前属性删除规则会整条删掉 enum-only/title-only 合法属性。"""
+    out = _norm_schema({"type": "object", "properties": {
+        "a": {"enum": [1, 2]}, "b": {"title": "B"}}})
+    assert out["properties"]["a"] == {"enum": [1, 2]}
+    assert out["properties"]["b"] == {"title": "B"}
+
+
+def test_normalize_removes_bool_required():
+    out = _norm_schema({"type": "object", "required": True,
+                        "properties": {"a": {"type": "string", "required": True}}})
+    assert "required" not in out
+    assert "required" not in out["properties"]["a"]
+
+
+def test_normalize_enum_dedup():
+    assert _norm_schema({"type": "string", "enum": [0, 1, 2, 1, 0]})["enum"] == [0, 1, 2]
+
+
+def test_normalize_removes_non_dict_props():
+    out = _norm_schema({"type": "object",
+                        "properties": {"a": {"type": "string"}, "junk": ["x"]}})
+    assert "junk" not in out["properties"]
+
+
+def test_normalize_keeps_list_required():
+    out = _norm_schema({"type": "object", "required": ["a"],
+                        "properties": {"a": {"type": "string"}}})
+    assert out["required"] == ["a"]
+
+
+def test_normalize_idempotent():
+    s = {"allOf": [{"$ref": "#/definitions/Base"}], "nullable": True,
+         "properties": {"a": {"type": "long", "enum": [1, 1]}}}
+    once = _norm_schema(s)
+    assert _norm_schema(once) == once
+
+
+# ---------- schema_normalize: 位置严格性 / 边界 ----------
+
+def test_normalize_position_strict_primitives_items():
+    """参数/头 items（primitivesItems）窄档：schema 专属键转 x-。"""
+    out = sn.normalize_doc({"paths": {"/p": {"get": {"parameters": [
+        {"name": "q", "in": "query", "type": "string",
+         "items": {"type": "string", "description": "d", "$ref": "#/definitions/X"}},
+    ]}}}})
+    items = out["paths"]["/p"]["get"]["parameters"][0]["items"]
+    assert items["type"] == "string"
+    assert "description" not in items and items["x-description"] == "d"
+    assert "$ref" not in items and items["x-$ref"] == "#/definitions/X"
+
+
+def test_normalize_position_strict_file_schema():
+    """type:file 响应 schema（fileSchema）窄档：xml/properties 转 x-。"""
+    out = sn.normalize_doc({"paths": {"/p": {"get": {"responses": {"200": {
+        "description": "ok",
+        "schema": {"type": "file", "xml": {"name": "R"},
+                   "properties": {"a": {"type": "string"}}},
+    }}}}}})
+    schema = out["paths"]["/p"]["get"]["responses"]["200"]["schema"]
+    assert schema["type"] == "file"
+    assert "xml" not in schema and schema["x-xml"] == {"name": "R"}
+    assert "properties" not in schema and "x-properties" in schema
+
+
+def test_normalize_param_type_mapping():
+    """fix_schema_type 退役后，参数/头 type 仍归一（RDS type:'Integer' 类）。"""
+    out = sn.normalize_doc({"paths": {"/p": {"get": {"parameters": [
+        {"name": "limit", "in": "query", "type": "Integer"},
+    ]}}}})
+    assert out["paths"]["/p"]["get"]["parameters"][0]["type"] == "integer"
+
+
+def test_normalize_drops_empty_enum_and_required():
+    out = _norm_schema({"type": "object", "enum": [], "required": []})
+    assert "enum" not in out and "required" not in out
+
+
+def test_normalize_drops_non_dict_allof_and_items_members():
+    out = _norm_schema({"allOf": [{"type": "string"}, 1, "x"], "items": [1, "x"]})
+    assert out.get("allOf") == [{"type": "string"}]
+    assert "items" not in out
+
+
+def test_normalize_x_collision_explicit_wins():
+    """已存在显式 x- 键时，非 2.0 键的翻译不覆盖（确定性、无损）。"""
+    out = _norm_schema({"oneOf": [1], "x-oneOf": [2]})
+    assert out["x-oneOf"] == [2]
+
+
+def test_normalize_xml_hoist_nested():
+    out = _norm_schema({"type": "object", "properties": {
+        "inner": {"xml": {"name": "InnerRoot"}}}})
+    assert out["properties"]["inner"]["x-xml-root"] == "InnerRoot"
+
+
+def test_normalize_example_payload_untouched():
+    """example 载荷是数据非 schema：不得改写其中 type 等字面量。"""
+    out = _norm_schema({"type": "object", "example": {"type": "long", "oneOf": [1]}})
+    assert out["example"] == {"type": "long", "oneOf": [1]}
+
+
+def test_normalize_doc_idempotent():
+    doc = {"definitions": {"A": {"allOf": [{"$ref": "#/definitions/B"}],
+                                 "nullable": True},
+                           "B": {"type": "object", "properties": {"x": {"type": "long"}}}},
+           "paths": {"/p": {"post": {"parameters": [
+               {"name": "b", "in": "body", "schema": {"$ref": "#/definitions/A"}},
+               {"name": "q", "in": "query", "type": "Integer"}],
+               "responses": {"200": {"description": "ok"}}}}}}
+    once = sn.normalize_doc(json.loads(json.dumps(doc)))
+    assert sn.normalize_doc(json.loads(json.dumps(once))) == once
+
+
+def test_normalize_identity_for_clean_schema():
+    """已 2.0 合法、无 allOf 的 schema：逐值不变（S1 身份语义）。"""
+    s = {"type": "object", "required": ["a"],
+         "properties": {"a": {"type": "string", "maxLength": 5}}}
+    assert _norm_schema(s) == s
+
+
+def test_format_api_detail_collects_deep_refs():
+    """get_api 信封 definitions 自包含：深度 >2 的 ref 也收集（不悬空）。"""
+    from apie.metadata import format_api_detail
+    doc = conv.convert_api(_allof_raw())
+    path = "/{project_id}/apigw/instances/{instance_id}/apis"
+    op = doc["paths"][path]["post"]
+    out = format_api_detail(ApiLocation(doc, path, "post", op), "APIG")
+    # 链 ApiCreate -> ApiCreateBase -> ApiBaseInfo 全部可达
+    assert {"ApiCreate", "ApiCreateBase", "ApiBaseInfo"} <= set(out["definitions"])
 
 
 # ---------- clean_response / clean_header ----------
@@ -211,22 +364,22 @@ def test_converted_doc_validates(mini_detail, swagger_schema):
 
 # ---------- x-xml-root 提升（OBS 根元素名保留） ----------
 
-def test_clean_schema_hoists_xml_name():
+def test_normalize_keeps_xml_and_hoists_root():
     schema = {"xml": {"name": "CreateBucketConfiguration"},
               "properties": {"Location": {"type": "string"}}}
-    conv.clean_schema(schema)
-    assert "xml" not in schema
-    assert schema["x-xml-root"] == "CreateBucketConfiguration"
+    out = _norm_schema(schema)
+    assert out["xml"] == {"name": "CreateBucketConfiguration"}
+    assert out["x-xml-root"] == "CreateBucketConfiguration"
 
 
 def test_convert_api_preserves_obs_root_element():
-    """OBS raw 定义含 xml.name：转换后经 x-xml-root 保留（运行时 LiveFallback 依赖）。"""
+    """OBS raw 定义含 xml.name：转换后 xml 保留且 x-xml-root 提升（运行时依赖）。"""
     with open(_fixture("obs_create_bucket_raw.json"), encoding="utf-8") as f:
         raw = json.load(f)
     doc = conv.convert_api(raw)
     defs = doc["definitions"]["CreateBucketRequestBody"]
     assert defs["x-xml-root"] == "CreateBucketConfiguration"
-    assert "xml" not in defs
+    assert defs["xml"]["name"] == "CreateBucketConfiguration"
 
 
 def _fixture(name):
@@ -240,6 +393,47 @@ def test_converted_obs_doc_validates(swagger_schema):
     doc = conv.convert_api(raw)
     errs = list(Draft4Validator(swagger_schema).iter_errors(doc))
     assert errs == [], f"OBS 转换文档校验失败: {errs[:3]}"
+
+
+# ---------- allOf 组合保留（原 bug：body schema 塌缩为 {}） ----------
+
+def _allof_raw():
+    with open(_fixture("allof_raw.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def test_convert_api_preserves_allof_definition():
+    doc = conv.convert_api(_allof_raw())
+    api_create = doc["definitions"]["ApiCreate"]
+    assert api_create.get("allOf"), "allOf 不应被丢弃"
+    assert api_create["allOf"][0]["$ref"] == "#/definitions/ApiCreateBase"
+    assert doc["definitions"]["ApiCreateBase"]["allOf"]
+
+
+def test_convert_api_allof_member_non_2o_to_x():
+    doc = conv.convert_api(_allof_raw())
+    member = doc["definitions"]["ApiCreateBase"]["allOf"][1]
+    assert "nullable" not in member["properties"]["nullable_flag"]
+    assert member["properties"]["nullable_flag"]["x-nullable"] is True
+
+
+def test_convert_api_body_schema_not_empty():
+    doc = conv.convert_api(_allof_raw())
+    path = "/{project_id}/apigw/instances/{instance_id}/apis"
+    op = doc["paths"][path]["post"]
+    body = [p for p in op["parameters"] if p.get("in") == "body"][0]
+    assert body["schema"], "body schema 不应为空"
+    from apie.metadata import format_api_detail
+    out = format_api_detail(ApiLocation(doc, path, "post", op), "APIG")
+    bp = [p for p in out["parameters"] if p.get("in") == "body"][0]
+    assert bp["schema"], "get_api 呈现的 body schema 不应为空"
+
+
+def test_convert_api_allof_doc_validates(swagger_schema):
+    from jsonschema import Draft4Validator
+    doc = conv.convert_api(_allof_raw())
+    errs = list(Draft4Validator(swagger_schema).iter_errors(doc))
+    assert errs == [], f"allOf 文档校验失败: {errs[:3]}"
 
 
 # ---------- 认证头 required 降级（auth demote，2026-09） ----------

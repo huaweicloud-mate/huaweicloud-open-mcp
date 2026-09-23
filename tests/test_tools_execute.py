@@ -570,6 +570,143 @@ def test_validate_params_body_type_error():
     assert err is not None and "body" in err
 
 
+def test_validate_params_body_allof_not_enforced():
+    """allOf 组合约束不强制（Explorer 组合不可靠，2026-09 实测 35 个官方示例被
+    组合约束误拒）；直接声明的约束仍生效。"""
+    doc = {"definitions": {
+        "Base": {"type": "object", "required": ["name"],
+                 "properties": {"name": {"type": "string"}}},
+        "Req": {"allOf": [{"$ref": "#/definitions/Base"},
+                          {"type": "object", "properties": {"x": {"type": "string"}}}]},
+    }}
+    op = _op({"name": "body", "in": "body", "required": True,
+              "schema": {"$ref": "#/definitions/Req"}})
+    # allOf 的 required 不强制：缺 name 也放行
+    assert execute.validate_params(doc, "/x", op, {"body": {}}, None) is None
+    # 直接声明的约束仍生效
+    op2 = _op({"name": "body", "in": "body", "required": True,
+               "schema": {"type": "object", "properties": {"count": {"type": "integer"}}}})
+    err = execute.validate_params({}, "/x", op2, {"body": {"count": "x"}}, None)
+    assert err is not None
+
+
+def _bad_pattern_doc():
+    return {"definitions": {"keypair": {
+        "type": "object", "required": ["key"],
+        "properties": {"key": {"type": "string", "pattern": "^([\\p{L}]*)$"}}}}}
+
+
+def test_validate_params_uncompilable_pattern_does_not_raise():
+    """PCRE 方言 pattern（\\p{L}）Python re 编译期抛错：校验层忽略该约束，不崩。"""
+    doc = _bad_pattern_doc()
+    op = _op({"name": "body", "in": "body", "required": True,
+              "schema": {"$ref": "#/definitions/keypair"}})
+    assert execute.validate_params(doc, "/x", op, {"body": {"key": "中文"}}, None) is None
+
+
+def test_validate_params_uncompilable_pattern_does_not_mask_other_errors():
+    """只剥离 pattern，其余约束（type/required）照常——不能宽 catch 吞掉真实错误。"""
+    doc = _bad_pattern_doc()
+    op = _op({"name": "body", "in": "body", "required": True,
+              "schema": {"$ref": "#/definitions/keypair"}})
+    err = execute.validate_params(doc, "/x", op, {"body": {"key": 123}}, None)
+    assert err is not None and "string" in err
+    err2 = execute.validate_params(doc, "/x", op, {"body": {}}, None)
+    assert err2 is not None and "key" in err2
+
+
+def test_validate_params_compilable_pattern_still_enforced():
+    doc = {"definitions": {"X": {"type": "object", "properties": {
+        "k": {"type": "string", "pattern": "^[a-z]+$"}}}}}
+    op = _op({"name": "body", "in": "body", "required": True,
+              "schema": {"$ref": "#/definitions/X"}})
+    assert execute.validate_params(doc, "/x", op, {"body": {"k": "abc"}}, None) is None
+    err = execute.validate_params(doc, "/x", op, {"body": {"k": "ABC"}}, None)
+    assert err is not None
+
+
+def test_validate_params_does_not_mutate_doc_pattern():
+    """校验视图 copy-on-write：调用后原始 doc 仍保留 pattern（元数据真值不丢）。"""
+    doc = _bad_pattern_doc()
+    op = _op({"name": "body", "in": "body", "required": True,
+              "schema": {"$ref": "#/definitions/keypair"}})
+    execute.validate_params(doc, "/x", op, {"body": {"key": "x"}}, None)
+    assert doc["definitions"]["keypair"]["properties"]["key"]["pattern"] == "^([\\p{L}]*)$"
+
+
+def test_validation_view_strips_bad_patterns():
+    bad = "^([\\p{L}]*)$"
+    bad2 = "^[\\w-.]+$"
+    out = execute._validation_view({
+        "type": "object", "pattern": bad,
+        "properties": {"a": {"pattern": bad, "description": "d"},
+                       "b": {"pattern": "^[a-z]+$"}},
+        "items": {"pattern": bad2},
+        "additionalProperties": {"pattern": bad},
+        "allOf": [{"pattern": bad}],
+    })
+    assert "pattern" not in out                       # 顶层坏 pattern 删除
+    assert "pattern" not in out["properties"]["a"]    # 嵌套坏 pattern 删除
+    assert out["properties"]["a"]["description"] == "d"  # 兄弟键保留
+    assert out["properties"]["b"]["pattern"] == "^[a-z]+$"  # 好 pattern 保留
+    assert "pattern" not in out["items"]
+    assert "pattern" not in out["additionalProperties"]
+    assert "allOf" not in out                         # allOf 亦剥离
+    # copy-on-write：入参未变
+    src = {"pattern": bad}
+    execute._validation_view(src)
+    assert src["pattern"] == bad
+    # 幂等
+    assert execute._validation_view(out) == out
+    # 非字符串 pattern 一并剥离（Draft4 会 TypeError）
+    assert execute._validation_view({"pattern": 5}) == {}
+    # 数据/扩展载荷不递归：enum 成员不得被改写（防误拒）
+    data_doc = {"enum": [{"pattern": bad}], "example": {"pattern": bad},
+                "x-note": {"pattern": bad}}
+    assert execute._validation_view(data_doc) == data_doc
+
+
+def test_validate_params_uncompilable_pattern_in_allof_member():
+    inner = {"type": "object", "properties": {
+        "k": {"type": "string", "pattern": "^([\\p{L}]*)$"}}}
+    doc = {"definitions": {"X": {"allOf": [inner]}}}
+    op = _op({"name": "body", "in": "body", "required": True,
+              "schema": {"$ref": "#/definitions/X"}})
+    assert execute.validate_params(doc, "/x", op, {"body": {"k": "中文"}}, None) is None
+
+
+def test_validate_params_enum_of_dicts_not_mutated():
+    """校验视图不进入 enum 数据：枚举成员含 pattern 键时不得被改写（防误拒）。"""
+    member = {"pattern": "^([\\p{L}]*)$"}
+    doc = {"definitions": {"X": {"type": "object", "properties": {
+        "kind": {"enum": [member]}}}}}
+    op = _op({"name": "body", "in": "body", "required": True,
+              "schema": {"$ref": "#/definitions/X"}})
+    assert execute.validate_params(doc, "/x", op, {"body": {"kind": member}}, None) is None
+
+
+_PATTERN_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "fixtures", "pattern_dialect_raw.json")
+
+
+def test_pattern_dialect_fixture_no_crash_and_display_preserved():
+    """真实语料形状 fixture（CI 可达）：PCRE 方言 pattern 校验不崩，展示层保留 pattern。"""
+    from apie import convert_openapi2 as conv
+    from apie.api_location import ApiLocation
+    from apie.metadata import format_api_detail
+
+    with open(_PATTERN_FIXTURE, encoding="utf-8") as f:
+        raw = json.load(f)
+    doc = conv.convert_api(raw)
+    path = "/v1/{project_id}/pools/{pool_name}/tags/create"
+    op = doc["paths"][path]["post"]
+    body = {"tags": [{"key": "test", "value": "service-gpu"}]}
+    assert execute.validate_params(doc, path, op, {"body": body}, None) is None
+    out = format_api_detail(ApiLocation(doc, path, "post", op), "ModelArts")
+    defs = out["definitions"]["BatchCreatePoolTagsRequestBody"]
+    assert "\\p{L}" in defs["properties"]["tags"]["items"]["properties"]["key"]["pattern"]
+
+
 def test_validate_params_body_absent():
     op = _op({"name": "body", "in": "body", "schema": {"type": "object"}})
     assert execute.validate_params({}, "/x", op, {}, None) is None

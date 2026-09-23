@@ -10,29 +10,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, cast
 
-logger = logging.getLogger("apie.convert_openapi2")
+from .schema_normalize import normalize_doc
 
-TYPE_MAP = {
-    "long": "integer",
-    "int": "integer",
-    "float": "number",
-    "double": "number",
-    "decimal": "number",
-    "String": "string",
-    "Boolean": "boolean",
-    "Integer": "integer",
-    "Number": "number",
-    "Array": "array",
-    "Object": "object",
-    "text": "string",
-    "1": "string",
-    "0": "string",
-    "A": "string",
-    "": "string",
-    "Bigint": "integer",
-    "container": "object",
-    "xml": "object",
-}
+logger = logging.getLogger("apie.convert_openapi2")
 
 PARAM_ALLOWED = {
     "name", "in", "description", "required", "type", "format", "items",
@@ -47,42 +27,6 @@ HEADER_ALLOWED = {
     "maxItems", "minItems", "uniqueItems", "enum", "multipleOf", "items",
     "collectionFormat", "required",
 }
-
-SCHEMA_KEYS = {
-    "type", "format", "description", "default", "maximum", "exclusiveMaximum",
-    "minimum", "exclusiveMinimum", "maxLength", "minLength", "pattern",
-    "maxItems", "minItems", "uniqueItems", "enum", "multipleOf", "items",
-    "properties", "required", "additionalProperties", "$ref",
-}
-
-
-def fix_schema_type(schema: Any) -> Any:
-    if not isinstance(schema, dict):
-        return schema
-    if "type" in schema and isinstance(schema["type"], str) and schema["type"] in TYPE_MAP:
-        schema["type"] = TYPE_MAP[schema["type"]]
-    for v in schema.values():
-        if isinstance(v, dict):
-            fix_schema_type(v)
-        elif isinstance(v, list):
-            for item in v:
-                if isinstance(item, dict):
-                    fix_schema_type(item)
-    return schema
-
-
-def remove_bool_required(obj: Any) -> Any:
-    if isinstance(obj, dict):
-        for k, v in list(obj.items()):
-            if k == "required" and isinstance(v, bool):
-                del obj[k]
-            else:
-                remove_bool_required(v)
-    elif isinstance(obj, list):
-        for item in obj:
-            remove_bool_required(item)
-    return obj
-
 
 def convert_ref(doc: dict[str, Any], obj: Any) -> Any:
     if isinstance(obj, dict):
@@ -387,53 +331,6 @@ def clean_response(resp: Any, header_defs: dict[str, Any] | None = None) -> Any:
     return r
 
 
-def clean_schema(obj: Any) -> Any:
-    if isinstance(obj, dict):
-        xml = obj.get("xml")
-        if isinstance(xml, dict) and xml.get("name"):
-            # Swagger 2.0 元 schema 只放行 x- 前缀扩展；清洗前提升保留 OBS 根元素名
-            obj.setdefault("x-xml-root", xml["name"])
-        for k in ("nullable", "deprecated", "oneOf", "discriminator", "xml", "example", "externalDocs",
-                  "writeOnly", "linkage_node_fields", "allOf"):
-            obj.pop(k, None)
-        if "type" in obj and isinstance(obj["type"], str) and obj["type"] in TYPE_MAP:
-            obj["type"] = TYPE_MAP[obj["type"]]
-        if isinstance(obj.get("required"), bool):
-            del obj["required"]
-        if isinstance(obj.get("enum"), list):
-            seen = set()
-            uniq = []
-            for v in obj["enum"]:
-                key = json.dumps(v, sort_keys=True)
-                if key not in seen:
-                    seen.add(key)
-                    uniq.append(v)
-            obj["enum"] = uniq
-        props = obj.get("properties")
-        if props is None:
-            obj.pop("properties", None)
-        if isinstance(props, dict):
-            for pname, pval in list(props.items()):
-                if not isinstance(pval, dict):
-                    props.pop(pname, None)
-                    continue
-                for k in list(pval.keys()):
-                    if k not in SCHEMA_KEYS and not k.startswith("x-"):
-                        pval.pop(k, None)
-                if pval.get("properties") is None and "$ref" not in pval and "type" not in pval:
-                    props.pop(pname, None)
-                    continue
-                clean_schema(pval)
-        items = obj.get("items")
-        if isinstance(items, dict):
-            clean_schema(items)
-    elif isinstance(obj, list):
-        for item in obj:
-            if isinstance(item, dict):
-                clean_schema(item)
-    return obj
-
-
 def finalize(doc: dict[str, Any]) -> dict[str, Any]:
     doc["swagger"] = "2.0"
     if "info" not in doc:
@@ -463,8 +360,6 @@ def finalize(doc: dict[str, Any]) -> dict[str, Any]:
     header_defs = doc.get("headers") or {}
     for name, r in list(doc.get("responses", {}).items()):
         doc["responses"][name] = clean_response(r, header_defs)
-    for schema in doc.get("definitions", {}).values():
-        clean_schema(schema)
     doc_params = doc.get("parameters") or {}
     for path, path_item in (doc.get("paths") or {}).items():
         if not isinstance(path_item, dict):
@@ -570,7 +465,8 @@ def convert_api(api: dict[str, Any], *,
     doc = demote_auth_headers(doc, product, name, auth_demote)
     doc = _complete_path_params(doc)
     doc = convert_ref(doc, doc)
-    doc = fix_schema_type(doc)
+    # 终端 schema 归一（单一 owner）：替换旧 clean_schema + fix_schema_type
+    doc = normalize_doc(doc)
     return cast(dict[str, Any], doc)
 
 

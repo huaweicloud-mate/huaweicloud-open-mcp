@@ -184,6 +184,71 @@ def _path_param_values(path: str, params: dict[str, Any],
     return values, None
 
 
+# 校验视图不进入的「数据/扩展载荷」键：enum/default/example 是数据（改其内容会
+# 改变枚举等约束的语义、可能误拒），x-* 对 Draft4 不透明（无需处理）。仅对 schema
+# 位置（properties/items/additionalProperties/allOf 成员等）应用校验松弛变换。
+_VALIDATION_VIEW_DATA_KEYS = frozenset({"enum", "default", "example"})
+
+
+def _pattern_compilable(value: Any) -> bool:
+    """pattern 是否可被 Python re 编译（与 jsonschema 编译路径一致，flags=0）。"""
+    if not isinstance(value, str):
+        return False
+    try:
+        re.compile(value)
+        return True
+    except (re.error, OverflowError, RecursionError):
+        return False
+
+
+def _relax_validation(key: str, value: Any) -> bool:
+    """校验视图的删除谓词（只放松、不新增拒绝）。
+
+    - ``allOf``：API Explorer 组合不可靠（跨分支冲突 + 与官方 x-request-examples
+      不一致，实测官方示例被组合约束误拒）→ 校验层不强制（展示层保留）。
+    - ``pattern``：服务端（Java/PCRE/ECMA-262）方言（``\\p{L}``/``[\\w-.]`` 等）
+      Python re 编译期抛错，jsonschema 惰性编译时异常逃逸 execute_api；非字符串
+      pattern 亦会令 Draft4 TypeError → 一并剥离。仅删该键，其余 required/type/
+      enum/可编译 pattern 照常强制。
+    """
+    if key == "allOf":
+        return True
+    if key == "pattern" and not _pattern_compilable(value):
+        logger.debug("校验视图忽略 pattern: %r", value)
+        return True
+    return False
+
+
+def _strip_for_validation(node: Any) -> Any:
+    """递归 copy-on-write 应用 ``_relax_validation``；不进入数据/扩展载荷。
+
+    纯 / 幂等 / 只放松不新增拒绝。schema 节点重建，不原地改写输入。
+    """
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            if not isinstance(k, str):
+                continue
+            if k in _VALIDATION_VIEW_DATA_KEYS or k.startswith("x-"):
+                out[k] = v            # 数据/扩展载荷：原样保留，不递归
+            elif _relax_validation(k, v):
+                continue
+            else:
+                out[k] = _strip_for_validation(v)
+        return out
+    if isinstance(node, list):
+        return [_strip_for_validation(x) for x in node]
+    return node
+
+
+def _validation_view(node: Any) -> Any:
+    """校验视图：剥离 allOf 与不可编译/非字符串 pattern 的单一入口。
+
+    展示层（get_api）/缓存 doc/离线产物均不经此变换——元数据真值不丢。
+    """
+    return _strip_for_validation(node)
+
+
 def validate_params(doc: dict[str, Any], path: str, op: dict[str, Any],
                     params: dict[str, Any] | None,
                     credentials: Credentials | None) -> str | None:
@@ -195,7 +260,9 @@ def validate_params(doc: dict[str, Any], path: str, op: dict[str, Any],
     排除）；header 协议即字符串故只查必填不查类型，但认证 header
     （x-auth-token/x-security-token/authorization，大小写不敏感）由签名层自动
     注入故跳过——豁免名单（AuthDemotePolicy）只影响元数据归一，不影响本校验层；
-    body 用 jsonschema（Draft4 + doc.definitions resolver）校验。
+    body 用 jsonschema（Draft4 + doc.definitions resolver）校验，但 **allOf 组合
+    与不可编译 pattern 均不强制**（见 `_validation_view`：Explorer 组合不可靠会
+    误拒官方示例；PCRE 方言 pattern 在 Python re 下编译期抛错）。
     路径参数不在此校验：mock URL 不含 path，路径语义仅 real lane 有意义
     （build_request 内守卫）；`path` 形参仅为签名对称保留。
     """
@@ -240,8 +307,13 @@ def validate_params(doc: dict[str, Any], path: str, op: dict[str, Any],
             if body_required:
                 return "缺少必填 body 参数（get_api 可查请求体定义）"
             return None
-        resolver = jsonschema.RefResolver.from_schema(doc)
-        validator = jsonschema.Draft4Validator(body_schema, resolver=resolver)
+        validation_doc = {
+            **doc,
+            "definitions": _validation_view(doc.get("definitions") or {}),
+        }
+        resolver = jsonschema.RefResolver.from_schema(validation_doc)
+        validator = jsonschema.Draft4Validator(_validation_view(body_schema),
+                                               resolver=resolver)
         errors = sorted(validator.iter_errors(body_value),
                         key=lambda e: list(e.absolute_path))
         if errors:

@@ -7,6 +7,7 @@ ok=True 的完整结果；失败态（ToolError）由编排层（service）构�
 import json
 import re
 from collections import Counter
+from collections.abc import Iterator
 from typing import Any
 
 from common.types import (
@@ -124,19 +125,53 @@ def _resolve_schema(obj: Any, doc: dict[str, Any], depth: int = 0,
         collected = set()
     if isinstance(obj, dict):
         ref = obj.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/definitions/") and depth < 2:
+        if isinstance(ref, str) and ref.startswith("#/definitions/"):
             name = ref.split("/")[-1]
             target = (doc.get("definitions") or {}).get(name)
             if target is not None:
+                # 收集所有可达定义名（即使超出内联深度）：保证 get_api 信封的
+                # definitions 自包含，不出现悬空 $ref（allOf 保留后更深 ref 可见）
                 collected.add(name)
-                resolved = _resolve_schema(target, doc, depth + 1, collected)
-                merged = {k: v for k, v in obj.items() if k != "$ref"}
-                merged.update(resolved)
-                return merged
+                if depth < 2:
+                    resolved = _resolve_schema(target, doc, depth + 1, collected)
+                    merged = {k: v for k, v in obj.items() if k != "$ref"}
+                    merged.update(resolved)
+                    return merged
         return {k: _resolve_schema(v, doc, depth, collected) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_resolve_schema(x, doc, depth, collected) for x in obj]
     return obj
+
+
+def _iter_ref_names(node: Any) -> Iterator[str]:
+    """产出 node 子树内所有 ``#/definitions/*`` 引用名。"""
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/definitions/"):
+            yield ref.split("/")[-1]
+        for v in node.values():
+            yield from _iter_ref_names(v)
+    elif isinstance(node, list):
+        for x in node:
+            yield from _iter_ref_names(x)
+
+
+def _expand_collected(definitions: dict[str, Any], collected: set[str]) -> None:
+    """把 collected 扩展为传递闭包（收集到的定义自身引用的定义名也纳入）。
+
+    保证 get_api 信封 ``definitions`` 自包含：深度 >2 的链式 ``$ref`` 不悬空
+    （``_resolve_schema`` 仅在 depth<2 内联，边界处收集到的定义可能再引用更深的
+    定义）。环安全（collected 去重）。
+    """
+    stack = list(collected)
+    while stack:
+        node = definitions.get(stack.pop())
+        if node is None:
+            continue
+        for ref_name in _iter_ref_names(node):
+            if ref_name not in collected:
+                collected.add(ref_name)
+                stack.append(ref_name)
 
 
 def format_api_detail(location: "ApiLocation", product: str) -> ApiDetailResult:
@@ -175,6 +210,7 @@ def format_api_detail(location: "ApiLocation", product: str) -> ApiDetailResult:
             r["schema"] = schema
         responses[code] = r
 
+    _expand_collected(definitions, collected)
     return {
         "ok": True,
         "product": product,

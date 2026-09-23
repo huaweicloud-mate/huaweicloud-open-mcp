@@ -1,0 +1,46 @@
+{
+  "name": "BatchCreatePoolTags",
+  "product_short": "ModelArts",
+  "host": "modelarts.cn-north-4.myhuaweicloud.com",
+  "base_path": "/v1",
+  "schemes": ["HTTPS"],
+  "consumes": ["application/json"],
+  "definitions": {
+    "BatchCreatePoolTagsRequestBody": {
+      "type": "object",
+      "required": ["tags"],
+      "properties": {
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {"type": "string", "pattern": "^([\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]*)$"},
+              "value": {"type": "string", "pattern": "^([\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]*)$"}
+            }
+          }
+        }
+      }
+    },
+    "MountPath": {
+      "type": "object",
+      "properties": {"path": {"type": "string", "pattern": "^[\\w-.]+$"}}
+    }
+  },
+  "parameters": {},
+  "paths": {
+    "/v1/{project_id}/pools/{pool_name}/tags/create": {
+      "post": {
+        "operationId": "BatchCreatePoolTags",
+        "parameters": [
+          {"name": "project_id", "in": "path", "required": true, "type": "string"},
+          {"name": "pool_name", "in": "path", "required": true, "type": "string"},
+          {"name": "BatchCreatePoolTagsRequestBody", "in": "body", "required": true,
+           "schema": {"$ref": "#/definitions/BatchCreatePoolTagsRequestBody"}}
+        ],
+        "responses": {"200": {"description": "OK"}},
+        "x-request-examples-1": {"tags": [{"key": "test", "value": "service-gpu"}]}
+      }
+    }
+  }
+}

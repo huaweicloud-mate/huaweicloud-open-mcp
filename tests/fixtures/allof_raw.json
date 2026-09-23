@@ -1,0 +1,56 @@
+{
+  "name": "CreateApiV2",
+  "product_short": "APIG",
+  "host": "apig.cn-north-4.myhuaweicloud.com",
+  "base_path": "/v2",
+  "schemes": ["HTTPS"],
+  "consumes": ["application/json"],
+  "definitions": {
+    "ApiCreate": {
+      "allOf": [
+        {"$ref": "#/definitions/ApiCreateBase"},
+        {"type": "object", "properties": {"backend_type": {"type": "string"}, "mock_info": {"$ref": "#/definitions/MockInfo"}}}
+      ]
+    },
+    "ApiCreateBase": {
+      "allOf": [
+        {"$ref": "#/definitions/ApiBaseInfo"},
+        {"type": "object", "properties": {"auth_type": {"type": "string"}, "nullable_flag": {"type": "string", "nullable": true}}}
+      ]
+    },
+    "ApiBaseInfo": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "req_uri": {"type": "string"},
+        "enum_only": {"enum": [1, 2]}
+      }
+    },
+    "MockInfo": {"type": "object", "properties": {"result_content": {"type": "string"}}},
+    "ApiInfo": {
+      "allOf": [
+        {"$ref": "#/definitions/ApiBaseInfo"},
+        {"type": "object", "properties": {"id": {"type": "string"}}}
+      ]
+    }
+  },
+  "parameters": {
+    "project_id": {"name": "project_id", "in": "path", "required": true, "type": "string"}
+  },
+  "paths": {
+    "/{project_id}/apigw/instances/{instance_id}/apis": {
+      "post": {
+        "operationId": "CreateApiV2",
+        "parameters": [
+          {"$ref": "#/parameters/project_id"},
+          {"name": "instance_id", "in": "path", "required": true, "type": "string"},
+          {"name": "CreateApiV2RequestBody", "in": "body", "required": true, "schema": {"$ref": "#/definitions/ApiCreate"}}
+        ],
+        "responses": {
+          "201": {"description": "Created", "schema": {"$ref": "#/definitions/ApiInfo"}}
+        }
+      }
+    }
+  }
+}

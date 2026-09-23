@@ -67,8 +67,9 @@ FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 def test_serialize_body_xml_x_xml_root_after_convert():
     """盲区堵点：真实形态 raw fixture（含 xml.name）经转换管线后根元素名必须保留。
 
-    运行时 LiveFallback 走 conv.convert_api，clean_schema 会剥掉 xml 键；
-    回归点是 x-xml-root 提升机制保证 serialize 输出官方根元素而非参数名。
+    运行时 LiveFallback 走 conv.convert_api，schema_normalize 保留 xml 键并
+    提升 x-xml-root；回归点是根元素名经 xml.name/x-xml-root 保留，serialize
+    输出官方根元素而非参数名。
     """
     with open(os.path.join(FIXTURES, "obs_create_bucket_raw.json"),
               encoding="utf-8") as f:
