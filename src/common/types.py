@@ -360,7 +360,22 @@ class McpDisconnectResult(TypedDict):
 # 必填、业务字段可选，失败臂以值 ok=False + reason 表达）；service 层域类型保持
 # ok: Literal[True] 富类型不动。不变量由 tests/test_wire_envelope.py 固化。
 
-class ToolEnvelope(TypedDict):
+class _WireOk(TypedDict):
+    """ok 必填基座（Python 3.10 兼容）。
+
+    不可用 `NotRequired` 表达可选业务字段：Python 3.10 的 stdlib
+    `typing.get_type_hints` 不会剥离 `typing_extensions.NotRequired` 限定符，
+    而 MCP SDK 的 `_create_model_from_typeddict` 用 stdlib get_type_hints 取
+    字段后直接 `create_model`——脱离 TypedDict 上下文的 `NotRequired[...]` 会触发
+    pydantic `PydanticForbiddenQualifier`（3.11+ 的 get_type_hints 会剥离，故仅
+    3.10 暴露）。因此 wire 类型一律不用限定符：必填 `ok` 由本基座提供，可选业务
+    字段由子类 `total=False` 表达（继承键的 required 性不受子类 total 影响）。
+    """
+
+    ok: bool
+
+
+class ToolEnvelope(_WireOk, total=False):
     """wire 信封基座：ok 恒必填，reason 失败臂可选（值语义，非类型臂）。
 
     子类必须显式 `total=False`（TypedDict 继承不传播 total），且每个业务字段
@@ -371,8 +386,7 @@ class ToolEnvelope(TypedDict):
     见 tests/test_wire_envelope.py）。
     """
 
-    ok: bool
-    reason: NotRequired[str | None]
+    reason: str | None
 
 
 class SearchApisWire(ToolEnvelope, total=False):
@@ -412,26 +426,31 @@ class ApiListWire(ToolEnvelope, total=False):
     sops: str | None
 
 
-# 函数式语法：允许非标识符键（x-constraint）；ok 保持必填，业务字段 NotRequired。
-ApiDetailWire = TypedDict(
-    "ApiDetailWire",
+# 函数式语法：允许非标识符键（x-constraint）。可选业务字段经 total=False 基座表达，
+# 必填 ok 由类语法子类补充——不用 NotRequired（见 _WireOk 的 3.10 兼容说明）。
+_ApiDetailWireOptional = TypedDict(
+    "_ApiDetailWireOptional",
     {
-        "ok": bool,
-        "reason": NotRequired[str | None],
-        "product": NotRequired[str | None],
-        "api": NotRequired[str | None],
-        "method": NotRequired[str | None],
-        "path": NotRequired[str | None],
-        "summary": NotRequired[Any],
-        "description": NotRequired[Any],
-        "x-constraint": NotRequired[Any],
-        "deprecated": NotRequired[bool | None],
-        "parameters": NotRequired[list[dict[str, Any]] | None],
-        "responses": NotRequired[dict[str, dict[str, Any]] | None],
-        "definitions": NotRequired[dict[str, Any] | None],
-        "hints": NotRequired[str | None],
+        "reason": str | None,
+        "product": str | None,
+        "api": str | None,
+        "method": str | None,
+        "path": str | None,
+        "summary": Any,
+        "description": Any,
+        "x-constraint": Any,
+        "deprecated": bool | None,
+        "parameters": list[dict[str, Any]] | None,
+        "responses": dict[str, dict[str, Any]] | None,
+        "definitions": dict[str, Any] | None,
+        "hints": str | None,
     },
+    total=False,
 )
+
+
+class ApiDetailWire(_ApiDetailWireOptional):
+    ok: bool
 
 
 class ExamplesWire(ToolEnvelope, total=False):

@@ -10,11 +10,14 @@ wire 与恒扁平的 content[0].text 分叉，agent 消费者翻车）。
 
 import asyncio
 import json
+import typing
+from typing import get_origin
 
 import jsonschema
 import pytest
 from mcp import ClientSession
 from mcp.client._memory import InMemoryTransport
+from typing_extensions import NotRequired, Required
 
 from mcp_data.server import build_data_app
 from mcp_data.service import DataConfig
@@ -53,6 +56,28 @@ def test_all_tools_flat_wire_schema():
                 continue
             jsonschema.validate({"ok": False, "reason": "policy denied"}, schema)
     assert seen == 18, f"预期 18 处注册，实际 {seen}"
+
+
+def test_registered_wire_types_free_of_typing_qualifiers():
+    """注册返回类型不得携带 Required/NotRequired 限定符（Python 3.10 兼容红线）。
+
+    Python 3.10 的 stdlib `typing.get_type_hints` 不剥离限定符，而 MCP SDK 的
+    `_create_model_from_typeddict` 用它取字段后直接 `create_model`——脱离
+    TypedDict 上下文的 `NotRequired[...]` 触发 pydantic.PydanticForbiddenQualifier，
+    整个工具注册在 3.10 上崩（3.11+ 的 get_type_hints 会剥离，故只在 3.10 暴露）。
+    必填 ok 与可选业务字段分别由 `_WireOk` 基座和子类 `total=False` 表达。
+    直接查原始 `__annotations__`（TypedDict 元类已并入继承键），跨版本确定。
+    """
+    qualifiers = (Required, NotRequired)
+    seen = 0
+    for mode, app in _apps().items():
+        for name, tool in app._tool_manager._tools.items():
+            ret = typing.get_type_hints(tool.fn)["return"]
+            for field, ann in getattr(ret, "__annotations__", {}).items():
+                assert get_origin(ann) not in qualifiers, (
+                    f"{mode}:{name} 字段 {field!r} 携带类型限定符：{ann!r}")
+            seen += 1
+    assert seen == 18
 
 
 def test_failure_arm_flat_end_to_end():
