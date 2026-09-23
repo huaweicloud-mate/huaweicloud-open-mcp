@@ -17,14 +17,16 @@ from common.deployment import (
 )
 from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
 from common.types import (
+    ManagePolicyWire,
     McpCallResult,
     McpConnectResult,
+    McpConnectWire,
     McpDisconnectResult,
-    McpServerListResult,
-    McpServerResult,
-    ServerToolResult,
-    ServerToolsResult,
-    ToolError,
+    McpServerListWire,
+    McpServerWire,
+    ServerToolsWire,
+    ServerToolWire,
+    as_wire,
 )
 from safety.policy_store import PolicyStore
 
@@ -140,27 +142,28 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
 
     @server.tool()
     def list_mcp_servers(category: str | None = None,
-                         keyword: str | None = None) -> McpServerListResult | ToolError:
+                         keyword: str | None = None) -> McpServerListWire:
         """第一步：列出华为云 MCP server 目录（含中文名/分类/认证模型）。
 
         根据用户任务语义用 keyword 按 server 名/中文名/描述搜索；
         不确定时先不加过滤全量浏览。
         """
         logger.info("list_mcp_servers category=%s keyword=%s", category or "-", keyword or "-")
-        return ds.list_servers(category=category, keyword=keyword)
+        return as_wire(ds.list_servers(category=category, keyword=keyword),
+                       McpServerListWire)
 
     @server.tool()
-    def get_mcp_server(server: str) -> McpServerResult | ToolError:
+    def get_mcp_server(server: str) -> McpServerWire:
         """第二步：确认单个 MCP server 详情（endpoint/传输层/认证方式/描述）。
 
         选定后调用 connect_mcp_server 建立连接。
         """
         logger.info("get_mcp_server server=%s", server)
-        return ds.get_server(server)
+        return as_wire(ds.get_server(server), McpServerWire)
 
     @server.tool()
     async def connect_mcp_server(server: str, ctx: Context | None = None
-                                 ) -> McpConnectResult | ToolError:
+                                 ) -> McpConnectWire:
         """第三步：连接指定 MCP server（过 safety policy）。
 
         policy 匹配 server 连接规则：server:serverId=allow|deny；
@@ -177,12 +180,12 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
             if offer is not None:
                 result = cast(McpConnectResult,
                               await _consent(ctx).offer_grant(offer, result))
-        return result
+        return as_wire(result, McpConnectWire)
 
     @server.tool()
     async def list_server_tools(server: str, search: str | None = None,
                                 limit: int = 20, offset: int = 0
-                                ) -> ServerToolsResult | ToolError:
+                                ) -> ServerToolsWire:
         """第四步：已连接 MCP server 的工具摘要列表（两级读取第一步）。
 
         返回工具名+首行描述+必填参数名；用 search/limit/offset 收窄；
@@ -190,16 +193,17 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
         """
         logger.info("list_server_tools server=%s search=%s limit=%d offset=%d",
                     server, search or "-", limit, offset)
-        return await ds.list_tools(server, search=search, limit=limit, offset=offset)
+        return as_wire(await ds.list_tools(server, search=search, limit=limit,
+                                           offset=offset), ServerToolsWire)
 
     @server.tool()
-    async def get_server_tool(server: str, tool: str) -> ServerToolResult | ToolError:
+    async def get_server_tool(server: str, tool: str) -> ServerToolWire:
         """第五步：获取单个工具的完整 schema（两级读取第二步）。
 
         仅取调用目标一个工具，防上下文暴涨；超 16KB 自动截断。
         """
         logger.info("get_server_tool server=%s tool=%s", server, tool)
-        return await ds.get_tool(server, tool)
+        return as_wire(await ds.get_tool(server, tool), ServerToolWire)
 
     @server.tool()
     async def call_server_tool(server: str, tool: str,
@@ -241,7 +245,7 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
         async def manage_policy(action: str, line: str | list[str] | None = None,
                                 scope: str | None = None,
                                 ttl_seconds: int | None = None,
-                                ctx: Context | None = None) -> dict[str, Any]:
+                                ctx: Context | None = None) -> ManagePolicyWire:
             """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
 
             四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
@@ -262,6 +266,6 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
             客户端不支持时由调用方自行完成问询确认。
             未配置 policy 文件时本工具拒绝执行（不创建文件）。
             """
-            return await gated_manage_policy(
+            return as_wire(await gated_manage_policy(
                 _consent(ctx), ds.manage_policy, action, line=line,
-                scope=scope, ttl_seconds=ttl_seconds)
+                scope=scope, ttl_seconds=ttl_seconds), ManagePolicyWire)

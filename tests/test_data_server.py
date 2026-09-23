@@ -16,14 +16,10 @@ from mcp_data.service import DataConfig
 
 
 def result_dict(res):
-    """CallToolResult → dict（优先 structured_content，回退 text JSON）。"""
+    """CallToolResult → dict（structured_content 优先，回退 text JSON）。"""
     data = res.structured_content
     if isinstance(data, dict):
-        if "ok" in data:
-            return data
-        inner = data.get("result")
-        if isinstance(inner, dict) and "ok" in inner:
-            return inner
+        return data
     return json.loads(res.content[0].text)
 
 

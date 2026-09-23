@@ -247,6 +247,8 @@ Embedding (ASGI): `build_app(...).streamable_http_app()` returns a Starlette app
 
 ## Tools (openapi mode)
 
+All tools return one flat envelope — `ok` plus tool-specific fields, failures as `{"ok": false, "reason": ...}` — on both the text content and the structured content channels (absent optional fields may appear as `null` in structured content).
+
 | Tool | Purpose |
 | --- | --- |
 | `search_apis` | Entity-graph cross-product search (workflow step 0): when the user intent doesn't name a product, returns candidate products + representative APIs + `matched_via` evidence (aliases / colloquial keywords / tags); ranking = tantivy BM25 over API text (in-RAM index built at startup) + hand-tuned identity signals; deprecated-API governance mirrors `list_apis` (annotate / hide); build-time snapshot, mounted via `--entity-index` |

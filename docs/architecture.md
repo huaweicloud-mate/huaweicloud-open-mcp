@@ -132,8 +132,9 @@ graph LR
 
 - 共享 TypedDict 词表（`common/types.py`）：`ClientResponse` / `ExecuteResult` / `ToolError` + 六工具结果信封（均含 `ok: Literal[True]`）
 - 纯函数直接产出完整信封；失败态 `ToolError(ok: Literal[False], reason)` 由编排层构造——服务方法返回 `X | ToolError` 联合
-- `ApiDetailResult` 用函数式 TypedDict 承载非标识符键 `x-constraint`
-- mypy 全量检查：`disallow_untyped_defs`，41 个源文件 0 错误
+- **wire 信封统一为扁平（S-W，2026-09 起）**：MCP SDK 依据 `@server.tool()` 返回注解决定 `structuredContent` 形状——Union（`X | ToolError`）被包成 `{"result": ...}`，单 TypedDict 则扁平；而 `content[0].text` 恒为原始扁平信封，故 union 注解会让两通道分叉。注册处改用 `*Wire` 类型（`ToolEnvelope` 基座 `ok: bool` 必填 + 业务字段可空可选），失败臂以值 `ok=False + reason` 表达；service 层域类型保持 `ok: Literal[True]` 富类型与 `X | ToolError` 联合不动，注册缝经 `as_wire` 做类型级适配（TypedDict 值不变性）。structuredContent 对缺失可选字段由 SDK model_dump null-fill（同 `ExecuteResult` 先例）；不变量由 `tests/test_wire_envelope.py` 固化
+- `ApiDetailResult` 用函数式 TypedDict 承载非标识符键 `x-constraint`（其 wire 类型 `ApiDetailWire` 同法）
+- mypy 全量检查：`disallow_untyped_defs`，72 个源文件 0 错误
 
 ## 3. 可观测性（日志）
 

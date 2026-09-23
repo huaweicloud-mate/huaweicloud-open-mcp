@@ -1,6 +1,6 @@
 """跨模块共享的类型定义。"""
 
-from typing import Any, Literal
+from typing import Any, Literal, Mapping, TypeVar, cast
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -112,6 +112,8 @@ class ApiItem(TypedDict):
     tags: str
     info_version: str
     hints: NotRequired[str]  # 部署侧提示注入（Hints 配置命中 API 时附加）
+    deprecated: NotRequired[bool]   # 废弃治理 annotate 标注（service 层附加）
+    replacement: NotRequired[str]   # 废弃替代接口名（仅索引有值时附加）
 
 
 class TagGroup(TypedDict):
@@ -347,3 +349,171 @@ class McpDisconnectResult(TypedDict):
     ok: Literal[True]
     server: str
     released: bool
+
+
+# ---------- wire 信封（MCP 注册缝 adapter 类型，S-W，2026-09 起）----------
+#
+# MCP SDK（mcp/server/mcpserver/utilities/func_metadata.py）依据 @server.tool()
+# 的返回注解决定 structuredContent 形状：Union（如 X | ToolError）会被自动包成
+# {"result": ...}，而单一 TypedDict 则扁平。为让全部工具的 wire 形状统一为扁平
+# 信封（与恒扁平的 content[0].text 一致），注册处改用本节 *Wire 类型（ok: bool
+# 必填、业务字段可选，失败臂以值 ok=False + reason 表达）；service 层域类型保持
+# ok: Literal[True] 富类型不动。不变量由 tests/test_wire_envelope.py 固化。
+
+class ToolEnvelope(TypedDict):
+    """wire 信封基座：ok 恒必填，reason 失败臂可选（值语义，非类型臂）。
+
+    子类必须显式 `total=False`（TypedDict 继承不传播 total），且每个业务字段
+    必须声明为可空（`X | None`）——MCP SDK 对单 TypedDict 走 model_dump 会把
+    缺失的可选字段填成 null，outputSchema 若不允许 null 则客户端严格校验报错
+    （同 ExecuteResult 先例）。失败臂 {ok: false, reason} 因此通过校验且不触发
+    isError；成功臂缺失字段在 structuredContent 上为 null（text 不含，键集关系
+    见 tests/test_wire_envelope.py）。
+    """
+
+    ok: bool
+    reason: NotRequired[str | None]
+
+
+class SearchApisWire(ToolEnvelope, total=False):
+    query: str | None
+    total: int | None
+    limit: int | None
+    products: list[SearchProductHit] | None
+    truncated: bool | None
+
+
+class ProductListWire(ToolEnvelope, total=False):
+    total: int | None
+    products: list[ProductItem] | None
+
+
+class ProductWire(ToolEnvelope, total=False):
+    product: str | None
+    name: str | None
+    category: str | None
+    is_global: bool | None
+    link: str | None
+    api_count: int | None
+    hints: str | None
+    sops_index: list[SopIndexEntry] | None
+    sops: str | None
+
+
+class ApiListWire(ToolEnvelope, total=False):
+    product: str | None
+    total: int | None
+    offset: int | None
+    limit: int | None
+    apis: list[ApiItem] | None
+    tag_groups: list[TagGroup] | None
+    hints: str | None
+    sops_index: list[SopIndexEntry] | None
+    sops: str | None
+
+
+# 函数式语法：允许非标识符键（x-constraint）；ok 保持必填，业务字段 NotRequired。
+ApiDetailWire = TypedDict(
+    "ApiDetailWire",
+    {
+        "ok": bool,
+        "reason": NotRequired[str | None],
+        "product": NotRequired[str | None],
+        "api": NotRequired[str | None],
+        "method": NotRequired[str | None],
+        "path": NotRequired[str | None],
+        "summary": NotRequired[Any],
+        "description": NotRequired[Any],
+        "x-constraint": NotRequired[Any],
+        "deprecated": NotRequired[bool | None],
+        "parameters": NotRequired[list[dict[str, Any]] | None],
+        "responses": NotRequired[dict[str, dict[str, Any]] | None],
+        "definitions": NotRequired[dict[str, Any] | None],
+        "hints": NotRequired[str | None],
+    },
+)
+
+
+class ExamplesWire(ToolEnvelope, total=False):
+    product: str | None
+    api: str | None
+    examples: list[ApiExample] | None
+
+
+class McpServerListWire(ToolEnvelope, total=False):
+    total: int | None
+    servers: list[McpServerItem] | None
+
+
+class McpServerWire(ToolEnvelope, total=False):
+    server: str | None
+    name: str | None
+    display_name: str | None
+    category: str | None
+    description: str | None
+    auth: str | None
+    version: str | None
+    endpoint: str | None
+
+
+class McpConnectWire(ToolEnvelope, total=False):
+    server: str | None
+    endpoint: str | None
+    protocol_version: str | None
+    server_info: dict[str, Any] | None
+    granted_rule: str | None
+
+
+class ServerToolsWire(ToolEnvelope, total=False):
+    server: str | None
+    total: int | None
+    offset: int | None
+    limit: int | None
+    tools: list[ServerToolSummary] | None
+
+
+class ServerToolWire(ToolEnvelope, total=False):
+    server: str | None
+    tool: str | None
+    description: str | None
+    inputSchema: Any
+    truncated: bool | None
+
+
+class QueryDataWire(ToolEnvelope, total=False):
+    columns: list[QueryColumn] | None
+    rows: list[dict[str, Any]] | None
+    total_rows: int | None
+    returned_rows: int | None
+    truncated: bool | None
+    tables: list[str] | None
+
+
+class TransformDataWire(ToolEnvelope, total=False):
+    path: str | None
+    format: str | None
+    rows: int | None
+    bytes: int | None
+    columns: list[QueryColumn] | None
+    preview: list[dict[str, Any]] | None
+
+
+class ManagePolicyWire(ToolEnvelope, total=False):
+    action: str | None
+    policy: str | None
+    rules: list[dict[str, Any]] | None
+    results: list[dict[str, Any]] | None
+    scope: str | None
+
+
+_W = TypeVar("_W", bound=ToolEnvelope)
+
+
+def as_wire(envelope: Mapping[str, Any], wire: type[_W]) -> _W:
+    """注册缝上的类型级 wire 适配：service 域信封 → wire 注解视图。
+
+    运行时二者是同一个扁平 dict（值面零转换）；仅因 TypedDict 值不变性
+    （域字段 int 不可赋给 wire 字段 int | None），mypy 需要一个显式转换点。
+    wire 参数即注册函数声明的返回类型，保证 outputSchema 由 *Wire 派生。
+    """
+    return cast(_W, envelope)

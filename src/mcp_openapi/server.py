@@ -33,14 +33,15 @@ from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
 from common.hotconf import HotFile
 from common.optconf import watch_opt_file
 from common.types import (
-    ApiDetailResult,
-    ApiListResult,
-    ExamplesResult,
+    ApiDetailWire,
+    ApiListWire,
+    ExamplesWire,
     ExecuteResult,
-    ProductListResult,
-    ProductResult,
-    SearchApisResult,
-    ToolError,
+    ManagePolicyWire,
+    ProductListWire,
+    ProductWire,
+    SearchApisWire,
+    as_wire,
 )
 from safety.policy_store import PolicyStore
 
@@ -321,7 +322,7 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
     @server.tool()
     def search_apis(query: str, limit: int = 8,
-                    category: str | None = None) -> SearchApisResult | ToolError:
+                    category: str | None = None) -> SearchApisWire:
         """第 0 步：跨产品全局检索（实体图谱）。用户意图未指明产品/API 时先用本工具。
 
         返回候选产品（中文名/分类/link）+ 每产品代表 API + matched_via 匹配证据
@@ -330,31 +331,33 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         废弃接口治理同 list_apis（--deprecated-mode annotate 标注 / hide 隐藏）。
         图谱为构建期快照（非实时）；未配置实体索引时返回拒绝。
         """
-        return svc.search_apis(query, limit=limit, category=category)
+        return as_wire(svc.search_apis(query, limit=limit, category=category),
+                       SearchApisWire)
 
     @server.tool()
     def list_products(category: str | None = None,
-                      keyword: str | None = None) -> ProductListResult | ToolError:
+                      keyword: str | None = None) -> ProductListWire:
         """第一步：列出华为云产品（分类、中文名、是否全局级服务）。
 
         基于用户任务语义选择目标产品；不确定时用 keyword 按产品名/中文名搜索。
         选定产品后用 list_apis 浏览其 API 目录。
         """
-        return svc.list_products(category=category, keyword=keyword)
+        return as_wire(svc.list_products(category=category, keyword=keyword),
+                       ProductListWire)
 
     @server.tool()
-    def get_product(product: str, include_sops: bool = False) -> ProductResult | ToolError:
+    def get_product(product: str, include_sops: bool = False) -> ProductWire:
         """确认单个产品详情（分类/是否全局级服务）。全局级服务（is_global=true）认证模型不同。
 
         sops_index 恒为 SOP 轻量索引（名称+描述）；include_sops=true 且部署配置了
         SOP 时附加 sops 全文（渲染文本，含步骤）。
         """
-        return svc.get_product(product, include_sops=include_sops)
+        return as_wire(svc.get_product(product, include_sops=include_sops), ProductWire)
 
     @server.tool()
     def list_apis(product: str, tag: str | None = None, search: str | None = None,
                   limit: int = 20, offset: int = 0,
-                  include_sops: bool = False) -> ApiListResult | ToolError:
+                  include_sops: bool = False) -> ApiListWire:
         """第二步：列出产品的 API 目录。
 
         结果含 tag_groups（产品全量 tag 概览，不受过滤影响）：先用 tag 收窄目录，
@@ -362,27 +365,28 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         sops_index 恒为 SOP 轻量索引（名称+描述）；include_sops=true 且部署配置了
         SOP 时每页附加 sops 全文（渲染文本，含步骤）。
         """
-        return svc.list_apis(product, tag=tag, search=search, limit=limit,
-                             offset=offset, include_sops=include_sops)
+        return as_wire(svc.list_apis(product, tag=tag, search=search, limit=limit,
+                                     offset=offset, include_sops=include_sops),
+                       ApiListWire)
 
     @server.tool()
-    def get_api(product: str, api: str, region: str | None = None) -> ApiDetailResult | ToolError:
+    def get_api(product: str, api: str, region: str | None = None) -> ApiDetailWire:
         """第三步：获取接口完整文档（方法/路径/参数必填性/类型/枚举/x-constraint 约束/响应结构）。
 
         执行前必读；x-constraint 描述调用前置条件与限制。
         region 可选，缺省部署默认（cn-north-4）；返回文档含该 region 端点与
         参数上下文，须与 execute_api 使用同一 region。
         """
-        return svc.get_api(product, api, region=region)
+        return as_wire(svc.get_api(product, api, region=region), ApiDetailWire)
 
     @server.tool()
     def get_api_examples(product: str, api: str,
-                         region: str | None = None) -> ExamplesResult | ToolError:
+                         region: str | None = None) -> ExamplesWire:
         """获取接口的官方请求示例（x-request-examples），用于指导参数填写。
 
         region 语义同 get_api，与 execute_api 保持一致。
         """
-        return svc.get_api_examples(product, api, region=region)
+        return as_wire(svc.get_api_examples(product, api, region=region), ExamplesWire)
 
     @server.tool()
     async def execute_api(product: str, api: str, region: str | None = None,
@@ -442,7 +446,7 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         async def manage_policy(action: str, line: str | list[str] | None = None,
                                 scope: str | None = None,
                                 ttl_seconds: int | None = None,
-                                ctx: Context | None = None) -> dict[str, Any]:
+                                ctx: Context | None = None) -> ManagePolicyWire:
             """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
 
             四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
@@ -462,9 +466,9 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
             客户端不支持时由调用方自行完成问询确认。
             未配置 policy 文件时本工具拒绝执行（不创建文件）。
             """
-            return await gated_manage_policy(
+            return as_wire(await gated_manage_policy(
                 _consent(ctx), svc.manage_policy, action, line=line,
-                scope=scope, ttl_seconds=ttl_seconds)
+                scope=scope, ttl_seconds=ttl_seconds), ManagePolicyWire)
 
 build_config = build_openapi_config
 build_app = build_openapi_app

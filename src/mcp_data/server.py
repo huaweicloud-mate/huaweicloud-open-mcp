@@ -11,7 +11,7 @@ from mcp.server.mcpserver import MCPServer
 
 from common.audit import AuditSink, sink_from_path
 from common.deployment import Deployment, resolve_deployment
-from common.types import QueryDataResult, ToolError, TransformDataResult
+from common.types import QueryDataWire, TransformDataWire, as_wire
 
 from .service import DataConfig, DataService
 
@@ -63,7 +63,7 @@ def register_data_tools(server: MCPServer, ds: DataService) -> None:
 
     @server.tool()
     def query_data(sql: str, tables: dict[str, dict] | None = None,
-                   max_rows: int | None = None) -> QueryDataResult | ToolError:
+                   max_rows: int | None = None) -> QueryDataWire:
         """对临时注册的表执行只读 SQL 分析（DataFusion 引擎，本地计算）。
 
         tables 约定：表名 → {"data": [对象数组]}（inline 小数据）或
@@ -73,12 +73,12 @@ def register_data_tools(server: MCPServer, ds: DataService) -> None:
         max_rows 控制返回行数（默认 100，上限 1000），超限标记 truncated。
         本工具不访问云、不需要凭证、不受 safety policy 约束。
         """
-        return ds.query_data(sql, tables=tables, max_rows=max_rows)
+        return as_wire(ds.query_data(sql, tables=tables, max_rows=max_rows), QueryDataWire)
 
     @server.tool()
     def transform_data(sql: str, out: dict, tables: dict[str, dict] | None = None,
                        overwrite: bool = False,
-                       preview_rows: int | None = None) -> TransformDataResult | ToolError:
+                       preview_rows: int | None = None) -> TransformDataWire:
         """把只读 SQL 变换结果落盘为新数据文件（转换/清洗/格式互转，本地计算）。
 
         out 约定：{"path": "输出文件路径", "format"?: "csv|parquet|ndjson"}——
@@ -90,8 +90,8 @@ def register_data_tools(server: MCPServer, ds: DataService) -> None:
         上限 100），大结果不进上下文。本工具不访问云、不需要凭证、
         不受 safety policy 约束（写路径经审计 NDJSON 记录）。
         """
-        return ds.transform_data(sql, tables=tables, out=out, overwrite=overwrite,
-                                 preview_rows=preview_rows)
+        return as_wire(ds.transform_data(sql, tables=tables, out=out, overwrite=overwrite,
+                                         preview_rows=preview_rows), TransformDataWire)
 
 
 def build_data_app(config: DataConfig | None = None, *,

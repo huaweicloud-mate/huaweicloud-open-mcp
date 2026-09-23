@@ -137,7 +137,9 @@ def test_openapi_data_policy_roundtrip_and_data_isolation(tmp_path, monkeypatch)
 
     denied, data_ok, granted, allowed = run(_run())
     assert denied["ok"] is False and denied.get("reason")
-    assert data_ok == {"ok": True, "columns": [{"name": "one", "type": "int64"}],
+    # wire 扁平信封：SDK 对可选字段 null-fill（reason 在成功臂为 None），同 ExecuteResult 先例
+    assert data_ok == {"ok": True, "reason": None,
+                       "columns": [{"name": "one", "type": "int64"}],
                        "rows": [{"one": 1}], "total_rows": 1, "returned_rows": 1,
                        "truncated": False, "tables": []}
     assert granted["ok"] is True
