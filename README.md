@@ -12,54 +12,62 @@
 
 **Open Connect. Explore What's Next.**
 
-One open, local [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents — opencode, Codex, Cursor, or any other MCP-capable client — to Huawei Cloud in natural language. No per-service wrappers: the agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrowing down to one concrete API call, then executes it with a locally signed request. This is a personal, local deployment: the gateway runs entirely on your machine, and your AK/SK never leave it.
+One open, local [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents to Huawei Cloud in natural language. It works with opencode, Codex, Cursor, or any other MCP-capable client. There are no per-service wrappers. The agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrows down to one concrete API call, then executes it with a locally signed request. This is a personal, local deployment. The gateway runs entirely on your machine, and your AK/SK never leave it.
 
-Three composable modes via `--mode` (comma-separated, e.g. `openapi,data`): `openapi` (default) talks to Huawei Cloud OpenAPI, `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet), and `data` runs read-only SQL analytics and transformations over inline/local data with DataFusion — pure local compute that needs no credentials and is not governed by the safety policy. The typical closed loop (`openapi,data`): pull a large dataset via `execute_api`, save it to a file, then aggregate it with `query_data` or reshape it into a new dataset with `transform_data` — only the aggregated results or artifact metadata enter the model context. The gateway serves **stdio** by default (the form your code agent launches); `--transport http` adds **Streamable HTTP** for multi-client deployments — see [HTTP transport](#http-transport-multi-session).
+Three composable modes, selected with `--mode` (comma-separated, e.g. `openapi,data`):
+
+- `openapi` (default) talks to Huawei Cloud OpenAPI.
+- `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet).
+- `data` runs read-only SQL analytics and transformations over inline/local data with DataFusion, pure local compute that needs no credentials and is not governed by the safety policy.
+
+A typical `openapi,data` workflow pulls a large dataset with `execute_api`, saves it to a file, then aggregates it with `query_data` or reshapes it into a new dataset with `transform_data`. Only the aggregated results or artifact metadata enter the model context.
+
+The gateway serves stdio by default, the form your code agent launches. `--transport http` adds Streamable HTTP for multi-client deployments; see [HTTP transport](#http-transport-multi-session).
 
 ## How it works
 
-- **Progressive workflow** — the agent explores step by step: `search_apis` (entity-graph cross-product search when the intent doesn't name a product) → `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`, narrowing 17,000+ APIs to one concrete call. Each step keeps the LLM context bounded; the full guide is baked into the server instructions.
-- **Metadata-driven, zero SDK** — API metadata is fetched live from Huawei Cloud API Explorer and cached in memory; requests are signed locally (SDK-HMAC-SHA256, self-implemented) and sent straight to Huawei Cloud.
-- **Secure by default** — every `execute_api` must pass a safety policy (allowlist/denylist); with no policy configured, everything is denied. Rules hot-reload, and the agent can request minimal grants via `manage_policy`.
+- **Progressive workflow.** The agent explores step by step: `search_apis` (entity-graph cross-product search when the intent doesn't name a product) → `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`, narrowing 17,000+ APIs to one concrete call. Each step keeps the LLM context bounded; the full guide ships in the server instructions.
+- **Metadata-driven, zero SDK.** API metadata is fetched live from Huawei Cloud API Explorer and cached in memory. Requests are signed locally (SDK-HMAC-SHA256, self-implemented) and sent straight to Huawei Cloud.
+- **Secure by default.** Every `execute_api` must pass a safety policy (allowlist/denylist); with no policy configured, everything is denied. Rules hot-reload, and the agent can request minimal grants via `manage_policy`.
 
 ## Quick start
 
-Connect once — your agent explores the rest.
+Connect once, and your agent explores the rest.
 
 ### Prerequisites
 
-- Python 3.10+ and [uv](https://docs.astral.sh/uv/) on your PATH (or `pip`) — see [Compatibility](#compatibility)
-- A code agent: [opencode](https://opencode.ai) or [Codex](https://developers.openai.com/codex/) — any MCP-capable client works
-- A Huawei Cloud Access Key (AK/SK) from a **minimal-privilege IAM sub-user** (recommended: read-only permissions for what you plan to query)
+- Python 3.10+ and [uv](https://docs.astral.sh/uv/) on your PATH (or `pip`); see [Compatibility](#compatibility)
+- A code agent: [opencode](https://opencode.ai) or [Codex](https://developers.openai.com/codex/); any MCP-capable client works
+- A Huawei Cloud Access Key (AK/SK) from a minimal-privilege IAM sub-user (recommended: read-only permissions for what you plan to query)
 - Network access to `apiexplorer.cn-north-4.myhuaweicloud.com`
 
 ### Compatibility
 
-**Supported** — per package metadata:
+**Supported**, per package metadata:
 
-- **OS**: Windows, macOS, Linux — the base package is pure Python plus `tantivy` (search_apis BM25 engine), which ships native wheels for the major platforms; the optional `[datafusion]` extra (data mode) ships native wheels for Windows x86_64, macOS x86_64/arm64, and Linux x86_64/aarch64 (manylinux)
+- **OS**: Windows, macOS, Linux. The base package is pure Python plus `tantivy` (search_apis BM25 engine), which ships native wheels for the major platforms; the optional `[datafusion]` extra (data mode) ships native wheels for Windows x86_64, macOS x86_64/arm64, and Linux x86_64/aarch64 (manylinux)
 - **Python**: 3.10+ (`requires-python = ">=3.10"`); the `[datafusion]` extra covers the same range
 
-**Tested** — full unit + integration suite (`uv run pytest`, e2e excluded; data-mode tests included via the dev dependency group), Linux x86_64:
+**Tested**, full unit + integration suite (`uv run pytest`, e2e excluded; data-mode tests included via the dev dependency group), Linux x86_64:
 
 | Python | 3.10 | 3.11 | 3.12 | 3.13 |
 |---|---|---|---|---|
 | Full suite (incl. data mode) | pass | pass | pass | pass |
 
-Windows and macOS are expected to work — dependency resolution for those platforms is verified and the code has no OS-specific branches — but they are not machine-tested; there is no CI matrix yet.
+Windows and macOS are expected to work. Dependency resolution for those platforms is verified, and the code has no OS-specific branches, but they are not machine-tested; there is no CI matrix yet.
 
 ### Install
 
-The quick start runs the gateway via [uvx](https://docs.astral.sh/uv/) — no install step: the first invocation fetches the package automatically. For a persistent install:
+The quick start runs the gateway via [uvx](https://docs.astral.sh/uv/), so there is no install step; the first invocation fetches the package automatically. For a persistent install:
 
 ```bash
 pip install huaweicloud-open-mcp                  # or: uv tool install / pipx install — then replace `uvx huaweicloud-open-mcp` with `huaweicloud-open-mcp` in Step 3
 pip install "huaweicloud-open-mcp[datafusion]"    # optional extra: data-mode SQL engine
 ```
 
-### Step 1 — Provide credentials
+### Step 1: Provide credentials
 
-The gateway reads your AK/SK from `~/.huaweicloud/credentials` (INI format, `[basic]` section) — on Windows that is `%USERPROFILE%\.huaweicloud\credentials`. See [Credentials](#credentials) for the inline environment-variable alternative.
+The gateway reads your AK/SK from `~/.huaweicloud/credentials` (INI format, `[basic]` section); on Windows that is `%USERPROFILE%\.huaweicloud\credentials`. See [Credentials](#credentials) for the inline environment-variable alternative.
 
 Create a `.huaweicloud` directory in your home directory, then a `credentials` file inside it with the following content:
 
@@ -74,13 +82,13 @@ sk = your-secret-access-key
 # domain_id = <domain-id>
 ```
 
-Optional keys (uncomment as needed): `security_token` (temporary credentials — IAM temporary AK/SK + securitytoken, 15 min–24 h validity; attached automatically and included in the request signature), `project_id` (optional static value; substituted into `{project_id}` path parameters and the `X-Project-Id` header), `domain_id` (global-level services; full support in progress). Keep the file private — it holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default. The server reads this file at startup; the log line `server start: ... credentials=configured` (see `--log-file`) confirms it was picked up.
+Optional keys (uncomment as needed): `security_token` (temporary credentials, IAM temporary AK/SK + securitytoken, valid for 15 minutes to 24 hours; attached automatically and included in the request signature), `project_id` (optional static value; substituted into `{project_id}` path parameters and the `X-Project-Id` header), `domain_id` (global-level services; full support in progress). Keep the file private; it holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default. The server reads this file at startup; the log line `server start: ... credentials=configured` (see `--log-file`) confirms it was picked up.
 
-### Step 2 — Create a read-only safety policy
+### Step 2: Create a read-only safety policy
 
-The gateway refuses every `execute_api` call unless a policy file explicitly allows it — with no policy configured, everything is denied.
+The gateway refuses every `execute_api` call unless a policy file explicitly allows it. With no policy configured, everything is denied.
 
-Create a policy file — e.g. `hwc-policy.json` in your home directory — with the following content:
+Create a policy file, for example `hwc-policy.json` in your home directory, with the following content:
 
 ```json
 [
@@ -89,11 +97,11 @@ Create a policy file — e.g. `hwc-policy.json` in your home directory — with 
 ]
 ```
 
-Each rule reads `product:apiPattern=allow|deny` — fnmatch-style wildcards, case-insensitive, `#` lines are comments. Rules are evaluated top-down and the first match wins, so this file allows every ECS API whose name contains `List` and denies everything else. Clients need the **absolute** path to this file — e.g. `/home/you/hwc-policy.json` on macOS/Linux or `C:\Users\you\hwc-policy.json` on Windows — because they spawn the server with their own working directory.
+Each rule has the form `product:apiPattern=allow|deny`, with fnmatch-style wildcards and case-insensitive matching; lines starting with `#` are comments. The gateway evaluates rules top-down and the first match wins, so this file allows every ECS API whose name contains `List` and denies everything else. Clients need the absolute path to this file, for example `/home/you/hwc-policy.json` on macOS/Linux or `C:\Users\you\hwc-policy.json` on Windows, because they spawn the server with their own working directory.
 
-### Step 3 — Register the gateway with your code agent
+### Step 3: Register the gateway with your code agent
 
-**opencode** — add to `opencode.json` (project-level, works on every OS) or the global config (`~/.config/opencode/opencode.json` on macOS/Linux; on Windows, prefer the project-level file or the `OPENCODE_CONFIG` environment variable pointing to an absolute path):
+**opencode**: add to `opencode.json` (project-level, works on every OS) or the global config (`~/.config/opencode/opencode.json` on macOS/Linux; on Windows, prefer the project-level file or the `OPENCODE_CONFIG` environment variable pointing to an absolute path):
 
 ```json
 {
@@ -110,7 +118,7 @@ Each rule reads `product:apiPattern=allow|deny` — fnmatch-style wildcards, cas
 }
 ```
 
-**Codex** — add to `~/.codex/config.toml` (on Windows: `%USERPROFILE%\.codex\config.toml`) or run (single line, works in any shell):
+**Codex**: add to `~/.codex/config.toml` (on Windows: `%USERPROFILE%\.codex\config.toml`) or run (single line, works in any shell):
 
 ```
 codex mcp add huaweicloud -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
@@ -124,11 +132,11 @@ args = ["huaweicloud-open-mcp", "--policy", "/home/you/hwc-policy.json"]
 
 Replace the example path with your own absolute path from Step 2 (on Windows, e.g. `C:\Users\you\hwc-policy.json`; inside JSON/TOML strings write it with escaped backslashes: `"C:\\Users\\you\\hwc-policy.json"`).
 
-**Output:** start your agent — the eight gateway tools appear, prefixed with your server name (`huaweicloud_search_apis`, `huaweicloud_list_products`, `huaweicloud_get_product`, `huaweicloud_list_apis`, `huaweicloud_get_api`, `huaweicloud_get_api_examples`, `huaweicloud_execute_api`, `huaweicloud_manage_policy`). In Codex, `codex mcp list` shows the server and `/mcp` in the TUI confirms it is connected.
+**Output**: start your agent. The eight gateway tools appear, prefixed with your server name (`huaweicloud_search_apis`, `huaweicloud_list_products`, `huaweicloud_get_product`, `huaweicloud_list_apis`, `huaweicloud_get_api`, `huaweicloud_get_api_examples`, `huaweicloud_execute_api`, `huaweicloud_manage_policy`). In Codex, `codex mcp list` shows the server and `/mcp` in the TUI confirms it is connected.
 
-Credentials come from Step 1 — no secrets in the client config. If you prefer inline environment variables instead, see [Credentials](#credentials).
+Credentials come from Step 1, so no secrets live in the client config. If you prefer inline environment variables instead, see [Credentials](#credentials).
 
-### Step 4 — Browse the catalog (first real call)
+### Step 4: Browse the catalog (first real call)
 
 **Input** (say to your agent):
 
@@ -151,13 +159,13 @@ The agent calls `list_products`, which fetches live metadata from Huawei Cloud A
 }
 ```
 
-### Step 5 — Execute a real read-only API
+### Step 5: Execute a real read-only API
 
 **Input** (say to your agent):
 
 > List my ECS servers in cn-north-4.
 
-The agent runs the progressive workflow — `list_apis(ECS)` to find the API, `get_api` to read its parameters, then `execute_api`, which signs the request with your AK/SK and sends it to real Huawei Cloud.
+The agent runs the progressive workflow: `list_apis(ECS)` to find the API, `get_api` to read its parameters, then `execute_api`, which signs the request with your AK/SK and sends it to real Huawei Cloud.
 
 **Output** (abridged):
 
@@ -176,19 +184,19 @@ The agent runs the progressive workflow — `list_apis(ECS)` to find the API, `g
 }
 ```
 
-`"count": 0` with an empty `servers` list is also a success — your account simply has no instances in that region; ask again with another `region` (for example `cn-east-3`).
+`"count": 0` with an empty `servers` list is also a success. Your account simply has no instances in that region; ask again with another `region` (for example `cn-east-3`).
 
-On security: requests are signed locally and your SK never leaves your machine; the policy file confines the agent to read-only ECS `List*` APIs. Widen it deliberately, one pattern at a time — see [Safety policy](#safety-policy).
+On security: requests are signed locally and your SK never leaves your machine; the policy file confines the agent to read-only ECS `List*` APIs. Widen it deliberately, one pattern at a time; see [Safety policy](#safety-policy).
 
 ### No account yet? Mock mode
 
 Run the same flow without credentials: skip Step 1, and add `--mock` to the server command in Step 3 (`uvx huaweicloud-open-mcp --mock --policy <policy-path>`, e.g. `/home/you/hwc-policy.json` or `C:\Users\you\hwc-policy.json`).
 
-**Output:** Step 4 works identically — the product catalog is real metadata. Step 5 returns simulated server data shaped exactly like the real response (mock endpoint, no Huawei Cloud account involved).
+**Output**: Step 4 works identically; the product catalog is real metadata. Step 5 returns simulated server data shaped exactly like the real response (mock endpoint, no Huawei Cloud account involved).
 
 ## OBS uploads & downloads
 
-OBS object APIs (`PutObject` / `GetObject` / `AppendObject` / `UploadPart`) never stream data through the gateway. In real mode, `execute_api` **always** answers with a presigned-URL envelope — no flag needed — and the client moves the bytes directly to/from OBS, with no size limit:
+OBS object APIs (`PutObject` / `GetObject` / `AppendObject` / `UploadPart`) never stream data through the gateway. In real mode, `execute_api` always answers with a presigned-URL envelope, no flag needed, and the client moves the bytes directly to or from OBS, with no size limit:
 
 ```json
 {
@@ -203,7 +211,7 @@ OBS object APIs (`PutObject` / `GetObject` / `AppendObject` / `UploadPart`) neve
 }
 ```
 
-Pick up the URL with any HTTP client — the gateway never sees the data:
+Use the URL with any HTTP client; the gateway never sees the data:
 
 ```bash
 curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-stream'
@@ -211,14 +219,14 @@ curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-st
 
 Rules that matter:
 
-- Content-Type is part of the signature. For uploads, pass `_presign_content_type` to lock it and send exactly the headers listed in `headers`; if you don't lock it, the signature assumes no Content-Type — the direct request must not send one (`curl -H 'Content-Type:'`). The envelope's `note` field warns about this case.
+- Content-Type is part of the signature. For uploads, pass `_presign_content_type` to lock it and send exactly the headers listed in `headers`; if you don't lock it, the signature assumes no Content-Type, and the direct request must not send one (`curl -H 'Content-Type:'`). The envelope's `note` field warns about this case.
 - `_presign_expires` tunes validity in seconds (default 900).
-- `GetObject` presigns run one `HEAD` metadata pre-check first (object bytes still never pass the gateway). The envelope then carries `expected_size` / `expected_etag` for post-download verification; a 404 (bucket/object gone — e.g. a deleted FunctionGraph source bucket) denies the presign outright instead of handing out a URL that downloads an XML error page; other pre-check failures degrade gracefully (no expected fields, note explains).
+- `GetObject` presigns run one `HEAD` metadata pre-check first (object bytes still never pass the gateway). The envelope then carries `expected_size` / `expected_etag` for post-download verification; a 404 (bucket or object gone, for example a deleted FunctionGraph source bucket) denies the presign outright instead of returning a URL that downloads an XML error page; other pre-check failures degrade gracefully (no expected fields, note explains).
 - All other OBS APIs (bucket management, tagging, ACL, …) execute through the gateway as usual; pass `_presign=true` explicitly if you want a URL for one of them. Non-OBS products reject `_presign`. Mock mode keeps hitting the mock endpoint.
 
 ## HTTP transport (multi-session)
 
-By default the gateway speaks **stdio** — the local form your code agent launches. It can also serve **Streamable HTTP** from a single process for multiple concurrent MCP client sessions:
+By default the gateway speaks stdio, the local form your code agent launches. It can also serve Streamable HTTP from a single process for multiple concurrent MCP client sessions:
 
 ```bash
 uvx huaweicloud-open-mcp --transport http                  # listens on http://127.0.0.1:8000/mcp
@@ -231,23 +239,23 @@ Point any MCP-capable client at the endpoint:
 { "mcpServers": { "huaweicloud": { "type": "http", "url": "http://127.0.0.1:8000/mcp" } } }
 ```
 
-What changes over HTTP — session semantics:
+What changes over HTTP:
 
 - Every client connection gets its own policy session. `session`-scope rules granted via `manage_policy` (directly or through elicitation) are visible only to that connection and invisible to every other; reconnecting starts a fresh session with no inherited grants; `once` rules burn within the granting session. `permanent` rules land in the policy file and stay shared across sessions and restarts, as always.
-- Requests without MCP session identity (the modern single-exchange protocol) cannot write session-scoped grants — they get a structured rejection instead of silently sharing state.
+- Requests without MCP session identity (the modern single-exchange protocol) cannot write session-scoped grants; they get a structured rejection instead of silently sharing state.
 - `GET /healthz` serves probes. Audit events (with `--audit-file`) carry a `session` field attributing each call to its MCP session; over stdio the audit output is byte-identical to before.
-- Idle sessions are recycled: a session bucket untouched for 30 minutes is reclaimed and any grant dies at 24h of absolute age — a session that keeps working keeps its grants alive.
+- Idle sessions are recycled: a session bucket untouched for 30 minutes is reclaimed, and any grant dies after 24 hours. A session that keeps working keeps its grants alive.
 
 Security posture:
 
-- By default the gateway binds `127.0.0.1` (loopback also auto-enables the SDK's DNS-rebinding protection). For containers, set `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0` in the image or run command — exposing the port is already an explicit decision. Binding a non-loopback address prints a warning: anyone who can reach the port can act with this deployment's AK/SK; beyond a trusted network, put a reverse proxy with TLS/auth in front. v1 ships no built-in HTTP authentication.
+- By default the gateway binds `127.0.0.1` (loopback also auto-enables the SDK's DNS-rebinding protection). For containers, set `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0` in the image or run command; exposing the port is already an explicit decision. Binding a non-loopback address prints a warning, because anyone who can reach the port can act with this deployment's AK/SK. Beyond a trusted network, put a reverse proxy with TLS and auth in front. v1 ships no built-in HTTP authentication.
 - Multiple worker processes are not supported (session state lives in the process).
 
-Embedding (ASGI): `build_app(...).streamable_http_app()` returns a Starlette app whose lifespan runs the MCP session manager — drive it with any ASGI runner (uvicorn/gunicorn). If you compose the HTTP serving yourself, declare it in the args passed to `build_app` (`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`) so per-session isolation is wired in; composing HTTP on a stdio-declared deployment would let session-scoped grants from session-less requests share one namespace.
+Embedding (ASGI): `build_app(...).streamable_http_app()` returns a Starlette app whose lifespan runs the MCP session manager. Drive it with any ASGI runner (uvicorn/gunicorn). If you compose the HTTP serving yourself, declare it in the args passed to `build_app` (`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`) so per-session isolation is wired in. Composing HTTP on a stdio-declared deployment would let session-scoped grants from session-less requests share one namespace.
 
 ## Tools (openapi mode)
 
-All tools return one flat envelope — `ok` plus tool-specific fields, failures as `{"ok": false, "reason": ...}` — on both the text content and the structured content channels (absent optional fields may appear as `null` in structured content).
+All tools return one flat envelope, `ok` plus tool-specific fields, failures as `{"ok": false, "reason": ...}`, on both the text content and the structured content channels (absent optional fields may appear as `null` in structured content).
 
 | Tool | Purpose |
 | --- | --- |
@@ -269,11 +277,11 @@ Local analytics and transformation on DataFusion (optional extra: `pip install "
 | `query_data` | Read-only SQL over named tables: `{"name": {"data": [objects]}}` (inline) or `{"name": {"path": "file"}}` (local csv/parquet/jsonl/json-array, format auto-detected by extension); returns column schema + JSON-safe rows with row-count/char-budget truncation |
 | `transform_data` | Persist a read-only SQL transformation to a new data file: `out = {"path", "format"?}` (csv/parquet/jsonl), atomic write, refuse-overwrite by default (`overwrite=true` to allow); returns artifact metadata (path/format/rows/bytes) + a small preview |
 
-Strictly read-only SQL: only `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`DESCRIBE` statements pass the guard; multi-statement and write statements (`INSERT`/`CREATE`/`COPY TO`/…) are rejected — in `transform_data` the write is applied by the engine *after* the guard, via the structured `out` parameter (audit NDJSON records the write path), never via SQL. Both tools touch no cloud APIs, need no credentials and are **not** subject to the safety policy — deploy them only where the agent session is trusted to read (and, for `transform_data`, write) local files.
+Strictly read-only SQL: only `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`DESCRIBE` statements pass the guard; multi-statement and write statements (`INSERT`/`CREATE`/`COPY TO`/…) are rejected. In `transform_data` the engine applies the write *after* the guard, via the structured `out` parameter (audit NDJSON records the write path), never via SQL. Both tools touch no cloud APIs, need no credentials and are not subject to the safety policy. Deploy them only where the agent session is trusted to read (and, for `transform_data`, write) local files.
 
 ## Safety policy
 
-A policy file is a JSON array (or plain text) of rules, evaluated top-down, first match wins:
+A policy file is a JSON array (or plain text) of rules. The gateway evaluates rules top-down; the first match wins:
 
 ```json
 [
@@ -283,18 +291,28 @@ A policy file is a JSON array (or plain text) of rules, evaluated top-down, firs
 ]
 ```
 
-- Rule format `product:apiPattern=allow|deny` — fnmatch-style wildcards, case-insensitive product/API, `#` lines are comments.
-- No `--policy` configured → every execution denied.
-- Grant scopes (via `manage_policy` add): `once` (single execution, burned after use) · `session` (default; this agent session only) · `temporary` (TTL) · `permanent` (written to the policy file).
-- Batch grants: `line` also accepts an array of rules — the whole batch shares one scope; batch `add` is all-or-nothing (any invalid line rejects the entire batch, nothing applied); batch `remove` is per-rule best-effort (misses are reported per item). The batch envelope carries per-rule `results`; top-level `ok` = all succeeded.
-- Hot everywhere: external edits to the file apply immediately; add/remove via `manage_policy` too. Grant minimal rules first (`once`/`session`), product-wide only when justified.
-- Denials return an actionable reason; with `--elicitation auto|required` the server proposes a grant over MCP elicitation (five choices: `api` = minimal rule, one-shot / `api_session` = minimal rule, session-scoped / `product` = product-wide, session-scoped / `readonly` = product read-only rule set (`*List*/*Show*/*Get*/*Query*`, session-scoped — preferred for browsing tasks) / `none`). Default is `off` for predictable cross-client behavior.
+- Rules have the form `product:apiPattern=allow|deny`. Matching uses fnmatch-style wildcards, is case-insensitive for product and API, and lines starting with `#` are comments.
+- With no `--policy` configured, every execution is denied.
+- Grant scopes (via `manage_policy` add):
+  - `once`: single execution, burned after use
+  - `session` (default): this agent session only
+  - `temporary`: TTL-based expiry
+  - `permanent`: written to the policy file
+- Batch grants: `line` also accepts an array of rules. The whole batch shares one scope; batch `add` is all-or-nothing (any invalid line rejects the entire batch, nothing applied); batch `remove` is per-rule best-effort (misses are reported per item). The batch envelope carries per-rule `results`; top-level `ok` is true only when every rule succeeded.
+- Everything hot-reloads: external edits to the file apply immediately, and so do add/remove via `manage_policy`. Grant minimal rules first (`once`/`session`), product-wide only when justified.
+- Denials return an actionable reason. With `--elicitation auto|required`, the server proposes a grant over MCP elicitation. Five choices:
+  - `api`: minimal rule, one-shot
+  - `api_session`: minimal rule, session-scoped
+  - `product`: product-wide, session-scoped
+  - `readonly`: product read-only rule set (`*List*/*Show*/*Get*/*Query*`, session-scoped; preferred for browsing tasks)
+  - `none`: no grant
+- The default is `off` for predictable cross-client behavior.
 
 A richer example ships with the package: `configs/safety-policy.example.json`.
 
 ## Custom hints (optional)
 
-A hints file lets a deployment inject its own guidance into the discovery chain: a global `instructions` block appended to the server instructions, plus per-product `notes` and per-API texts attached to discovery results (`list_products` / `get_product` / `list_apis` / `get_api`); a product-level SOP rides on the `get_product` / `list_apis` top-level envelopes as `sops_index` — a lightweight index (task name + description only) — while the full rendered `sops` text (with steps) is attached only when the caller passes `include_sops=true`.
+A hints file lets a deployment inject its own guidance into the discovery chain: a global `instructions` block appended to the server instructions, plus per-product `notes` and per-API texts attached to discovery results (`list_products` / `get_product` / `list_apis` / `get_api`). A product-level SOP appears on the `get_product` / `list_apis` top-level envelopes as `sops_index`, a lightweight index (task name and description only), while the full rendered `sops` text (with steps) is attached only when the caller passes `include_sops=true`.
 
 ```json
 {
@@ -318,21 +336,21 @@ A hints file lets a deployment inject its own guidance into the discovery chain:
 }
 ```
 
-- Official metadata is never replaced — hints ride along in an extra `hints` field (product + API notes are merged, product first).
-- Product-level SOP (`sops`, optional): mapping-only (tasks must be named); a task value is a string (verbatim), an array of strings (auto-numbered `1. x`, blank steps dropped and numbering compacted), or a dict `{"description"?: str, "steps"?: string | array[string]}` (key whitelist `{description, steps}`, unknown keys fail fast; a task without `steps` is description-only). Discovery envelopes (`get_product` / `list_apis` top-level) always carry `sops_index` — a lightweight `[{name, description?}]` list (no steps); the full rendered text (`Task:\ncontent`, description first, blank line between tasks) rides as the extra `sops` string field only when the tool is called with `include_sops=true` (default `false`; no-op when the product has no SOP configured). List items and `get_api` / `get_api_examples` / `execute_api` are never annotated.
+- Official metadata is never replaced; hints are returned in an extra `hints` field (product and API notes merged, product first).
+- Product-level SOP (`sops`, optional): mapping-only (tasks must be named); a task value is a string (verbatim), an array of strings (auto-numbered `1. x`, blank steps dropped and numbering compacted), or a dict `{"description"?: str, "steps"?: string | array[string]}` (key whitelist `{description, steps}`, unknown keys fail fast; a task without `steps` is description-only). Discovery envelopes (`get_product` / `list_apis` top-level) always carry `sops_index`, a lightweight `[{name, description?}]` list (no steps); the full rendered text (`Task:\ncontent`, description first, blank line between tasks) comes as the extra `sops` string field, attached only when the tool is called with `include_sops=true` (default `false`; no-op when the product has no SOP configured). List items and `get_api` / `get_api_examples` / `execute_api` are never annotated.
 - Injected only on successful discovery results, never on denials (policy rejections stay untouched); `get_api_examples` and `execute_api` are never annotated.
 - Product keys and `apis` keys are case-insensitive; a product value may be a plain string (product note only) or an object with `notes` / `apis` / `sops`.
-- Optional top-level boolean `api_notes_in_list_apis` (default `true`): when `false`, `list_apis` items carry no API-level notes (top-level product notes and `get_api` merged notes are unaffected) — the generated help-center completion file sets this to `false` so `get_api` stays the only enriched surface.
+- Optional top-level boolean `api_notes_in_list_apis` (default `true`): when `false`, `list_apis` items carry no API-level notes (top-level product notes and `get_api` merged notes are unaffected). The generated help-center completion file sets this to `false`, so `get_api` remains the only response that carries these notes.
 - Loaded at startup and hot-reloaded from the config file at runtime (no restart needed); invalid configs fail fast at startup.
 - Default file: with no `--hints` and no `HUAWEICLOUD_MCP_OPENAPI_HINTS`, `configs/help-docs-hints.json` (repo-root copy first, then the one bundled in the installed package) is loaded automatically; if absent it is skipped silently. Pass `--hints off` (or an empty env value) to disable explicitly. Explicit paths/bare names keep fail-fast semantics on a missing file.
-- The file path supports a bare filename: an existing explicit path (absolute or cwd-relative) is used as-is; otherwise it resolves as `configs/<name>` (repo-root `configs/` first, then the copy bundled in the installed package — handy for `uvx`/`pip` installs).
+- The file path supports a bare filename: an existing explicit path (absolute or cwd-relative) is used as-is; otherwise it resolves as `configs/<name>` (repo-root `configs/` first, then the copy bundled in the installed package, handy for `uvx`/`pip` installs).
 - Curated seed: product entries in `configs/help-docs-hints-curation.json` may carry `sops` (passed through as a raw mapping); curated entries survive `api-refresh helphints` regeneration.
 
 Example: `configs/openapi-hints.example.json` (loadable as `--hints openapi-hints.example.json`).
 
 ### Help-center description completion (optional, build-time)
 
-`api-refresh` ships two extra stages (not part of the default refresh range) that harvest the richer "功能介绍" sections from the official help center and turn them into a hints file:
+`api-refresh` ships two extra stages (not part of the default refresh range) that collect the richer "功能介绍" sections from the official help center and turn them into a hints file:
 
 ```bash
 uv run api-refresh helpdocs    # crawl + parse help-center pages (sitemap seeds + same-docset link BFS, resumable)
@@ -342,7 +360,7 @@ uv run huaweicloud-open-mcp --hints data/hints/help-docs-hints.json
 
 ### Entity graph and `search_apis` (build-time)
 
-`api-refresh graph` deterministically builds the entity association graph from `apis_docs.json` + `huawei_products.json` (product/API/tag nodes, same-name twins, attributions, tag coverage), merged with the `configs/entity-knowledge.json` knowledge base; `--llm` additionally runs build-time LLM extraction of colloquial aliases, product semantic relations and per-API query keywords (`ENTITY_LLM_BASE_URL/API_KEY/MODEL`, fingerprint-incremental reruns touch only changed products, curated entries are never overwritten):
+`api-refresh graph` deterministically builds the entity association graph from `apis_docs.json` and `huawei_products.json` (product/API/tag nodes, same-name twins, attributions, tag coverage), merged with the `configs/entity-knowledge.json` knowledge base. With `--llm`, the build also runs LLM extraction of colloquial aliases, product semantic relations and per-API query keywords (`ENTITY_LLM_BASE_URL/API_KEY/MODEL`; fingerprint-incremental reruns touch only changed products; curated entries are never overwritten):
 
 ```bash
 uv run api-refresh graph            # deterministic build (data/graph/entity-index.json + configs copy shipped in wheel)
@@ -350,23 +368,23 @@ uv run api-refresh graph --llm      # build-time LLM extraction (~150 calls, res
 uv run huaweicloud-open-mcp         # runtime defaults to configs/entity-index.json (silently disabled if missing)
 ```
 
-At runtime `search_apis` feeds the snapshot through a tantivy BM25 engine: the ~18k API texts are tokenized (ASCII words + camelCase splits; CJK 2-grams) into an in-RAM index built once at startup (~0.6s), queries run in a few ms, and a hand-tuned identity layer (aliases, product names, discriminative tags, product-breadth prior) is merged with the BM25 scores. Ranking quality is pinned by a human-labeled golden set (`tests/fixtures/entity_eval.json`, 45 cases) that runs as part of the test suite.
+At runtime `search_apis` feeds the snapshot through a tantivy BM25 engine. The engine tokenizes the ~18k API texts (ASCII words and camelCase splits; CJK 2-grams) into an in-RAM index built once at startup (~0.6s), answers queries in a few ms, and merges a hand-tuned identity layer (aliases, product names, discriminative tags, product-breadth prior) with the BM25 scores. A human-labeled golden set (`tests/fixtures/entity_eval.json`, 45 cases) guards ranking quality and runs as part of the test suite.
 
 - Diff-only: an API enters the file only when the help-center intro is materially richer than the API Explorer description (`--min-gain`, default 20 chars).
 - Each note carries the full intro (capped via `--cap`, default 2000 chars, `…` marker) plus the official doc URL.
 - Rate-limited crawl (0.4s/page) with bot-verification backoff and resumable checkpoints; artifacts are rebuildable and not committed. See [AGENTS.md](AGENTS.md) for the full pipeline rules.
 - `--hints` / `--deprecated-index` accept bare filenames resolved against `configs/` (repo root first, then the bundled package copy).
 
-The same pipeline emits a deprecated-API index (`data/help_completions/deprecated.json`) sourced from the help center's own `（废弃）` titles (API Explorer's `op.deprecated` metadata is unreliable — ECS pilot: 45 vs 1 flags). Mount it to govern the discovery surface:
+The same pipeline emits a deprecated-API index (`data/help_completions/deprecated.json`) sourced from the help center's own `（废弃）` titles. API Explorer's `op.deprecated` metadata is unreliable here: in the ECS pilot, the help center surfaces 45 deprecated ECS APIs while API Explorer flags only 1. Mount the index to govern the `list_apis` discovery surface:
 
 ```bash
 uv run huaweicloud-open-mcp --deprecated-index data/help_completions/deprecated.json                 # annotate (default): list_apis items carry deprecated: true + replacement
 uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide                            # hide: deprecated APIs are filtered from list_apis (counts stay coherent)
 ```
 
-- `annotate`/`hide` only affect the `list_apis` discovery surface; `get_api`/`execute_api` always work (narrowed discovery ≠ refused detail).
+- `annotate`/`hide` only affect the `list_apis` discovery surface; `get_api`/`execute_api` always work. A narrowed discovery list does not refuse detail.
 - `off`: no governance even with the index mounted. Passing an explicit mode without `--deprecated-index` fails fast at startup.
-- Without `--deprecated-index`, behavior is byte-for-byte unchanged (no mode → no governance).
+- Without `--deprecated-index`, behavior is byte-for-byte unchanged (no mode means no governance).
 
 ## Configuration
 
@@ -424,11 +442,11 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 ## Credentials
 
-The gateway loads AK/SK from two sources, checked in order: **environment variables → `~/.huaweicloud/credentials`** (on Windows: `%USERPROFILE%\.huaweicloud\credentials`) — when both are set, environment variables win.
+The gateway loads AK/SK from two sources, checked in order: environment variables first, then `~/.huaweicloud/credentials` (on Windows: `%USERPROFILE%\.huaweicloud\credentials`). When both are set, environment variables win.
 
-### Option A — Profile file (quick-start main path)
+### Option A: Profile file (quick-start main path)
 
-`~/.huaweicloud/credentials` — exactly what [Step 1](#step-1--provide-credentials) creates:
+`~/.huaweicloud/credentials`, exactly what [Step 1](#step-1-provide-credentials) creates:
 
 ```ini
 [basic]
@@ -442,14 +460,14 @@ sk = your-secret-access-key
 ```
 
 - `[basic]` section with `ak` and `sk` is required; the three optional keys mirror the environment variables below.
-- A missing file is silently skipped — the server simply runs without credentials (metadata tools keep working; see below).
-- Keep it private — the file holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default.
+- A missing file is silently skipped; the server simply runs without credentials (metadata tools keep working; see below).
+- Keep it private; the file holds your secret: run `chmod 600 ~/.huaweicloud/credentials` on macOS/Linux; on Windows a file in your user profile is only readable by your account by default.
 
-### Option B — Environment variables (inline in client registration)
+### Option B: Environment variables (inline in client registration)
 
 Set them in the client registration instead of the profile file:
 
-**opencode** — add an `environment` block next to `command`:
+**opencode**: add an `environment` block next to `command`:
 
 ```json
 "environment": {
@@ -458,7 +476,7 @@ Set them in the client registration instead of the profile file:
 }
 ```
 
-**Codex** — add `--env` flags before `--` (single line, works in any shell):
+**Codex**: add `--env` flags before `--` (single line, works in any shell):
 
 ```
 codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAWEICLOUD_SDK_SK=your-secret-access-key -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
@@ -473,8 +491,8 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 
 ### Behavior notes
 
-- Without credentials, metadata tools (`list_products`, `list_apis`, `get_api`, …) keep working — their data comes from the public API Explorer. Only `execute_api` needs credentials.
-- Use a dedicated minimal-privilege IAM sub-user's AK/SK — the gateway can then only do what that user could do anyway.
+- Without credentials, metadata tools (`list_products`, `list_apis`, `get_api`, …) keep working; their data comes from the public API Explorer. Only `execute_api` needs credentials.
+- Use a dedicated minimal-privilege IAM sub-user's AK/SK. The gateway can then only do what that user could do anyway.
 - Signing happens locally; the SK never leaves your machine, and credentials never appear in logs.
 
 ## Troubleshooting
@@ -490,7 +508,7 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | `"count": 0` but you have servers | Resources live in another region | Ask again with an explicit `region`, e.g. `cn-east-3` |
 | Mock calls hang or time out | No network route to the API Explorer endpoint | Check proxy/firewall access to `apiexplorer.cn-north-4.myhuaweicloud.com` |
 
-For deeper diagnosis, add `--log-level DEBUG --log-file <log>` to the registration command — e.g. `/tmp/hwc-mcp.log` on macOS/Linux or `%TEMP%\hwc-mcp.log` on Windows — and inspect the log file.
+For deeper diagnosis, add `--log-level DEBUG --log-file <log>` to the registration command, for example `/tmp/hwc-mcp.log` on macOS/Linux or `%TEMP%\hwc-mcp.log` on Windows, and inspect the log file.
 
 ## Documentation
 
@@ -514,7 +532,7 @@ uv run ruff check src tests              # lint
 uv run mypy src                          # type check
 ```
 
-Companion CLIs: `api-refresh` (offline APIE pipeline: fetch API Explorer → OpenAPI 2.0 docs; `graph` entity-graph build with `--llm` semantic extraction; help-center completion stages `helpdocs`/`helphints`) and `api-docs` (metadata queries from the terminal). Details in [AGENTS.md](AGENTS.md).
+Companion CLIs: `api-refresh` (offline APIE pipeline that turns API Explorer data into OpenAPI 2.0 docs; `graph` builds the entity graph with `--llm` semantic extraction; help-center completion stages `helpdocs`/`helphints`) and `api-docs` (metadata queries from the terminal). Details in [AGENTS.md](AGENTS.md).
 
 ## License
 

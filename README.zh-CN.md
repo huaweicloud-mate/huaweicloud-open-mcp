@@ -13,15 +13,23 @@
 **Open Connect. Explore What's Next.**
 **开放连接，探索下一个可能**
 
-一个开放的本地 [Model Context Protocol](https://modelcontextprotocol.io) 网关，让 code agent——opencode、Codex、Cursor 以及任何支持 MCP 的客户端——用自然语言连接华为云。无需逐服务手写封装：Agent 逐步探索全量目录（300+ 产品、17000+ API），层层收窄到一次具体调用再执行，请求全程在本地签名。这是一套面向个人的本地部署方案：网关完全运行在你自己的机器上，AK/SK 永不出本机。
+一个开放的本地 [Model Context Protocol](https://modelcontextprotocol.io) 网关，让 code agent 用自然语言连接华为云。opencode、Codex、Cursor 以及任何支持 MCP 的客户端均可接入。无需逐服务手写封装，Agent 逐步探索全量目录（300+ 产品、17000+ API），层层收窄到一次具体调用再执行，请求全程在本地签名。这是一套面向个人的本地部署方案：网关完全运行在你自己的机器上，AK/SK 永不出本机。
 
-三种模式可通过 `--mode` 逗号组合混用（如 `openapi,data`）：`openapi`（默认）直连华为云 OpenAPI；`discover` 发现并连接云端华为云 MCP server（实验性，暂无文档）；`data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘——纯本地计算，不需要凭证，也不受 safety policy 约束。典型闭环（`openapi,data` 混装）：execute_api 拉取大数据 → 落地文件 → query_data 聚合 / transform_data 整形落盘，仅聚合结果或产物元数据进入模型上下文。网关默认走 **stdio**（MCP 客户端拉起的本地形态）；`--transport http` 另提供 **Streamable HTTP**，适配多客户端部署——见 [HTTP 传输（多会话）](#http-传输多会话)。
+三种模式可通过 `--mode` 逗号组合混用（如 `openapi,data`）：
+
+- `openapi`（默认）直连华为云 OpenAPI。
+- `discover` 发现并连接云端华为云 MCP server（实验性，暂无文档）。
+- `data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘，纯本地计算，不需要凭证，也不受 safety policy 约束。
+
+典型 `openapi,data` 工作流：经 `execute_api` 拉取大数据落地文件，再用 `query_data` 聚合或 `transform_data` 整形落盘为新数据集，仅聚合结果或产物元数据进入模型上下文。
+
+网关默认走 stdio，即 MCP 客户端拉起的本地形态；`--transport http` 另提供 Streamable HTTP，适配多客户端部署，见 [HTTP 传输（多会话）](#http-传输多会话)。
 
 ## 工作原理
 
-- **渐进式工作流** —— Agent 逐步探索：`search_apis`（意图未指明产品时，实体图谱跨产品检索）→ `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`，从 17000+ API 收窄到一次具体调用。每一步都把 LLM 上下文控制在有界范围；完整工作流指引已内置于 server instructions。
-- **元数据驱动、零 SDK** —— API 元数据从华为云 API Explorer 实时拉取并缓存在内存；请求在本地签名（自实现 SDK-HMAC-SHA256）后直连华为云。
-- **默认安全** —— 每次 `execute_api` 必须通过 safety policy（allowlist/denylist）；未配置 policy 时全部拒绝。规则热更新，Agent 可经 `manage_policy` 申请最小授予。
+- **渐进式工作流**：Agent 逐步探索，`search_apis`（意图未指明产品时，实体图谱跨产品检索）→ `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`，从 17000+ API 收窄到一次具体调用。每一步都把 LLM 上下文控制在有界范围；完整工作流指引已内置于 server instructions。
+- **元数据驱动、零 SDK**：API 元数据从华为云 API Explorer 实时拉取并缓存在内存。请求在本地签名（自实现 SDK-HMAC-SHA256）后直连华为云。
+- **默认安全**：每次 `execute_api` 必须通过 safety policy（allowlist/denylist）；未配置 policy 时全部拒绝。规则热更新，Agent 可经 `manage_policy` 申请最小授予。
 
 ## 快速开始
 
@@ -29,25 +37,25 @@
 
 ### 前置要求
 
-- Python 3.10+，[uv](https://docs.astral.sh/uv/) 在 PATH 上（或 `pip`）—— 见[兼容性](#兼容性)
-- 一个 code agent：[opencode](https://opencode.ai) 或 [Codex](https://developers.openai.com/codex/) —— 任何支持 MCP 的客户端均可
-- 一对华为云 AK/SK，来自**最小权限 IAM 子用户**（推荐：仅授予计划查询所需的只读权限）
+- Python 3.10+，[uv](https://docs.astral.sh/uv/) 在 PATH 上（或 `pip`），见[兼容性](#兼容性)
+- 一个 code agent：[opencode](https://opencode.ai) 或 [Codex](https://developers.openai.com/codex/)，任何支持 MCP 的客户端均可
+- 一对华为云 AK/SK，来自最小权限 IAM 子用户（推荐：仅授予计划查询所需的只读权限）
 - 可访问 `apiexplorer.cn-north-4.myhuaweicloud.com` 的网络
 
 ### 兼容性
 
-**支持范围** —— 依包元数据：
+**支持范围**（依包元数据）：
 
-- **操作系统**：Windows、macOS、Linux —— 基础包为纯 Python + `tantivy`（search_apis 的 BM25 引擎，各大平台提供原生 wheel）；可选 `[datafusion]` extra（data 模式）提供 Windows x86_64、macOS x86_64/arm64、Linux x86_64/aarch64（manylinux）原生 wheel
+- **操作系统**：Windows、macOS、Linux。基础包为纯 Python + `tantivy`（search_apis 的 BM25 引擎，各大平台提供原生 wheel）；可选 `[datafusion]` extra（data 模式）提供 Windows x86_64、macOS x86_64/arm64、Linux x86_64/aarch64（manylinux）原生 wheel
 - **Python**：3.10+（`requires-python = ">=3.10"`）；`[datafusion]` extra 覆盖同一范围
 
-**实测** —— 完整单测 + 集成套件（`uv run pytest`，e2e 默认排除；经 dev 依赖组包含 data 模式测试），Linux x86_64：
+**实测**：完整单测 + 集成套件（`uv run pytest`，e2e 默认排除；经 dev 依赖组包含 data 模式测试），Linux x86_64：
 
 | Python | 3.10 | 3.11 | 3.12 | 3.13 |
 |---|---|---|---|---|
 | 完整套件（含 data 模式） | 通过 | 通过 | 通过 | 通过 |
 
-Windows 与 macOS 预期可用——两平台的依赖解析已验证、代码无 OS 特定分支——但未经实机测试；目前尚无 CI 矩阵。
+Windows 与 macOS 预期可用。两平台的依赖解析已验证，代码无 OS 特定分支，但未经实机测试；目前尚无 CI 矩阵。
 
 ### 安装
 
@@ -60,7 +68,7 @@ pip install "huaweicloud-open-mcp[datafusion]"    # 可选 extra：data 模式 S
 
 ### 步骤 1：提供凭证
 
-网关从 `~/.huaweicloud/credentials`（INI 格式，`[basic]` 节）读取你的 AK/SK —— Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`。想改用环境变量内联方式，见[凭证](#凭证)。
+网关从 `~/.huaweicloud/credentials`（INI 格式，`[basic]` 节）读取你的 AK/SK，Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`。想改用环境变量内联方式，见[凭证](#凭证)。
 
 在你的用户主目录创建 `.huaweicloud` 目录，再在其中创建 `credentials` 文件，内容如下：
 
@@ -75,11 +83,11 @@ sk = your-secret-access-key
 # domain_id = <domain-id>
 ```
 
-可选键（按需取消注释）：`security_token`（临时凭证——IAM 临时 AK/SK + securitytoken，有效期 15 分钟~24 小时；网关自动携带并参与请求签名）、`project_id`（可选静态值，用于 `{project_id}` 路径参数填充与 `X-Project-Id` 头）、`domain_id`（全局级服务，完整支持开发中）。妥善保管该文件 —— 里面有你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。server 启动时读取该文件；日志行 `server start: ... credentials=configured`（见 `--log-file`）可确认已加载。
+可选键（按需取消注释）：`security_token`（临时凭证，IAM 临时 AK/SK + securitytoken，有效期 15 分钟至 24 小时；网关自动携带并参与请求签名）、`project_id`（可选静态值，用于 `{project_id}` 路径参数填充与 `X-Project-Id` 头）、`domain_id`（全局级服务，完整支持开发中）。妥善保管该文件，里面有你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。server 启动时读取该文件；日志行 `server start: ... credentials=configured`（见 `--log-file`）可确认已加载。
 
 ### 步骤 2：创建只读 safety policy
 
-除非 policy 文件显式允许，网关会拒绝每一次 `execute_api`——未配置 policy 时全部拒绝。
+除非 policy 文件显式允许，网关会拒绝每一次 `execute_api`。未配置 policy 时全部拒绝。
 
 在你的主目录创建一个 policy 文件（例如 `hwc-policy.json`），内容如下：
 
@@ -90,11 +98,11 @@ sk = your-secret-access-key
 ]
 ```
 
-每条规则形如 `product:apiPattern=allow|deny` —— fnmatch 风格通配、大小写不敏感、`#` 开头为注释。规则自上而下评估、首个命中生效：本文件允许所有名字含 `List` 的 ECS API，其余全部拒绝。客户端需要该文件的**绝对路径** —— macOS/Linux 如 `/home/you/hwc-policy.json`，Windows 如 `C:\Users\you\hwc-policy.json` —— 因为客户端用自己的工作目录拉起 server。
+每条规则形如 `product:apiPattern=allow|deny`，fnmatch 风格通配、大小写不敏感、`#` 开头为注释。网关自上而下评估规则，首个命中生效：本文件允许所有名字含 `List` 的 ECS API，其余全部拒绝。客户端需要该文件的绝对路径，macOS/Linux 如 `/home/you/hwc-policy.json`，Windows 如 `C:\Users\you\hwc-policy.json`，因为客户端用自己的工作目录拉起 server。
 
 ### 步骤 3：将网关注册到你的 code agent
 
-**opencode** —— 添加到 `opencode.json`（项目级，所有 OS 通用）或全局配置（macOS/Linux：`~/.config/opencode/opencode.json`；Windows 建议用项目级文件，或经 `OPENCODE_CONFIG` 环境变量指向绝对路径）：
+**opencode**：添加到 `opencode.json`（项目级，所有 OS 通用）或全局配置（macOS/Linux：`~/.config/opencode/opencode.json`；Windows 建议用项目级文件，或经 `OPENCODE_CONFIG` 环境变量指向绝对路径）：
 
 ```json
 {
@@ -111,7 +119,7 @@ sk = your-secret-access-key
 }
 ```
 
-**Codex** —— 添加到 `~/.codex/config.toml`（Windows：`%USERPROFILE%\.codex\config.toml`），或执行（单行命令，任意 shell 通用）：
+**Codex**：添加到 `~/.codex/config.toml`（Windows：`%USERPROFILE%\.codex\config.toml`），或执行（单行命令，任意 shell 通用）：
 
 ```
 codex mcp add huaweicloud -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
@@ -125,9 +133,9 @@ args = ["huaweicloud-open-mcp", "--policy", "/home/you/hwc-policy.json"]
 
 把示例路径换成步骤 2 里你自己的绝对路径（Windows 形如 `C:\Users\you\hwc-policy.json`；JSON/TOML 字符串中需写成转义反斜杠形式 `"C:\\Users\\you\\hwc-policy.json"`）。
 
-**输出：** 启动你的 Agent —— 八个网关工具出现，以 server 名为前缀（`huaweicloud_search_apis`、`huaweicloud_list_products`、`huaweicloud_get_product`、`huaweicloud_list_apis`、`huaweicloud_get_api`、`huaweicloud_get_api_examples`、`huaweicloud_execute_api`、`huaweicloud_manage_policy`）。Codex 中 `codex mcp list` 可见该 server，TUI 内 `/mcp` 确认已连接。
+**输出**：启动你的 Agent。八个网关工具出现，以 server 名为前缀（`huaweicloud_search_apis`、`huaweicloud_list_products`、`huaweicloud_get_product`、`huaweicloud_list_apis`、`huaweicloud_get_api`、`huaweicloud_get_api_examples`、`huaweicloud_execute_api`、`huaweicloud_manage_policy`）。Codex 中 `codex mcp list` 可见该 server，TUI 内 `/mcp` 确认已连接。
 
-凭证来自步骤 1 —— 客户端配置中不含任何密钥。若偏好环境变量内联，见[凭证](#凭证)。
+凭证来自步骤 1，客户端配置中不含任何密钥。若偏好环境变量内联，见[凭证](#凭证)。
 
 ### 步骤 4：浏览产品目录（首次真实调用）
 
@@ -158,7 +166,7 @@ Agent 调用 `list_products`，从华为云 API Explorer 实时拉取元数据�
 
 > 列出我在 cn-north-4 的 ECS 云服务器。
 
-Agent 走渐进式工作流 —— `list_apis(ECS)` 找到 API、`get_api` 读参数，随后 `execute_api` 用你的 AK/SK 本地签名、直连真实华为云。
+Agent 走渐进式工作流：`list_apis(ECS)` 找到 API、`get_api` 读参数，随后 `execute_api` 用你的 AK/SK 本地签名、直连真实华为云。
 
 **输出**（节选）：
 
@@ -177,19 +185,19 @@ Agent 走渐进式工作流 —— `list_apis(ECS)` 找到 API、`get_api` 读�
 }
 ```
 
-`"count": 0` 且 `servers` 为空同样是成功 —— 该 region 下账号没有实例；换个 `region` 再问（例如 `cn-east-3`）。
+`"count": 0` 且 `servers` 为空同样是成功。该 region 下账号没有实例，换个 `region` 再问（例如 `cn-east-3`）。
 
-安全说明：请求在本地签名，SK 永不出本机；policy 文件把 Agent 限定在只读 ECS `List*` API 内。如需放宽限制，请一次一条、审慎添加 —— 见 [Safety policy](#safety-policy)。
+安全说明：请求在本地签名，SK 永不出本机；policy 文件把 Agent 限定在只读 ECS `List*` API 内。如需放宽限制，请一次一条、审慎添加，见 [Safety policy](#safety-policy)。
 
 ### 还没有账号？Mock 模式
 
 同一流程无需凭证即可体验：跳过步骤 1，并在步骤 3 的 server 命令中加 `--mock`（`uvx huaweicloud-open-mcp --mock --policy <policy路径>`，如 `/home/you/hwc-policy.json` 或 `C:\Users\you\hwc-policy.json`）。
 
-**输出：** 步骤 4 完全一致 —— 产品目录仍是真实元数据；步骤 5 返回与真实响应同构的模拟数据（mock 端点，不涉及华为云账号）。
+**输出**：步骤 4 完全一致，产品目录仍是真实元数据；步骤 5 返回与真实响应同构的模拟数据（mock 端点，不涉及华为云账号）。
 
 ## OBS 上传与下载
 
-OBS 对象类 API（`PutObject` / `GetObject` / `AppendObject` / `UploadPart`）的字节流从不经过网关。真实模式下 `execute_api` **恒**返回预签名 URL 信封——无需任何标志——客户端直连 OBS 收发字节，不限大小：
+OBS 对象类 API（`PutObject` / `GetObject` / `AppendObject` / `UploadPart`）的字节流从不经过网关。真实模式下 `execute_api` 恒返回预签名 URL 信封，无需任何标志，客户端直连 OBS 收发字节，不限大小：
 
 ```json
 {
@@ -204,7 +212,7 @@ OBS 对象类 API（`PutObject` / `GetObject` / `AppendObject` / `UploadPart`）
 }
 ```
 
-用任意 HTTP 客户端消费该 URL——网关不经手数据：
+用任意 HTTP 客户端使用该 URL，网关不经手数据：
 
 ```bash
 curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-stream'
@@ -214,12 +222,12 @@ curl -X PUT --upload-file big.dat '<url>' -H 'Content-Type: application/octet-st
 
 - Content-Type 参与签名。上传建议传 `_presign_content_type` 锁定类型，并按 `headers` 清单原样携带；未锁定时签名按空 Content-Type 计算，直连请求不得携带该头（`curl -H 'Content-Type:'`）。命中该情形时信封的 `note` 字段会给出警示。
 - `_presign_expires` 调整有效期（秒，默认 900）。
-- `GetObject` 预签发前执行一次 `HEAD` 元数据预检（对象字节仍不过网关）：信封附带 `expected_size` / `expected_etag` 供下载后核对；404（桶/对象不存在——如 FunctionGraph 函数源桶已删除）直接拒签并指引核对部署副本，避免签出一个只会下载 XML 错误页的 URL；其它预检异常降级放行（无预期字段，note 说明）。
+- `GetObject` 预签发前执行一次 `HEAD` 元数据预检（对象字节仍不过网关）：信封附带 `expected_size` / `expected_etag` 供下载后核对；404（桶或对象不存在，如 FunctionGraph 函数源桶已删除）直接拒签并指引核对部署副本，避免签出一个只会下载 XML 错误页的 URL；其它预检异常降级放行（无预期字段，note 说明）。
 - 其余 OBS 接口（桶管理、tagging、ACL 等）照常经网关执行；需要 URL 时可显式传 `_presign=true`。非 OBS 产品传 `_presign` 会被拒绝。mock 模式继续走 mock 端点。
 
 ## HTTP 传输（多会话）
 
-网关默认走 **stdio**——MCP 客户端拉起的本地形态。也可用单进程对外提供 **Streamable HTTP**，并发服务多个 MCP 客户端会话：
+网关默认走 stdio，即 MCP 客户端拉起的本地形态。也可用单进程对外提供 Streamable HTTP，并发服务多个 MCP 客户端会话：
 
 ```bash
 uvx huaweicloud-open-mcp --transport http                  # 监听 http://127.0.0.1:8000/mcp
@@ -235,20 +243,20 @@ uvx huaweicloud-open-mcp --transport http --http-host 0.0.0.0 --http-port 9000
 HTTP 档带来的变化集中在会话语义：
 
 - 每个客户端连接拥有独立的 policy 会话。经 `manage_policy`（直接或经 elicitation）授予的 `session` 档规则仅对本连接可见、对其它连接不可见；断开重连即新会话，不继承原授予；`once` 规则在授予会话内焚毁。`permanent` 规则照旧落策略文件，跨会话、跨重启共享。
-- 无 MCP 会话身份的请求（modern 单交换协议）无法写入 session 档授予——收到结构化拒绝，而非静默共享状态。
+- 无 MCP 会话身份的请求（modern 单交换协议）无法写入 session 档授予，只会收到结构化拒绝而非静默共享状态。
 - `GET /healthz` 供探针使用。审计事件（配置 `--audit-file` 时）携带 `session` 字段，把每次调用归因到其 MCP 会话；stdio 下审计输出与此前逐字节一致。
-- 闲置会话回收：30 分钟无活动的会话桶被回收，任何授予超过 24 小时绝对年龄即失效——持续工作的会话，其授予持续存活。
+- 闲置会话回收：30 分钟无活动的会话桶被回收，任何授予超过 24 小时即失效。持续工作的会话，其授予持续存活。
 
 安全口径：
 
-- 默认绑定 `127.0.0.1`（loopback 同时自动启用 SDK 的 DNS rebinding 防护）。容器部署在镜像或运行命令里置 `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0`——开放端口本身已是显式动作。绑定非 loopback 地址会打印告警：能达端口者即可用本部署的 AK/SK 身份执行操作；跨出可信网段时请置于带 TLS/认证的反代之后。v1 不内置 HTTP 认证。
+- 默认绑定 `127.0.0.1`（loopback 同时自动启用 SDK 的 DNS rebinding 防护）。容器部署在镜像或运行命令里置 `HUAWEICLOUD_MCP_HTTP_HOST=0.0.0.0`，开放端口本身已是显式动作。绑定非 loopback 地址会打印告警，因为能达端口者即可用本部署的 AK/SK 身份执行操作；跨出可信网段时请置于带 TLS 与认证的反代之后。v1 不内置 HTTP 认证。
 - 不支持多 worker 进程（会话状态在进程内）。
 
 嵌入（ASGI）：`build_app(...).streamable_http_app()` 返回 Starlette app（lifespan 已接线 MCP session manager），可交给任意 ASGI runner（uvicorn/gunicorn）驱动。自行组合 HTTP 服务时，请在传给 `build_app` 的 args 里声明（`--transport http` / `HUAWEICLOUD_MCP_TRANSPORT=http`），按会话隔离才会正确接线；若以 stdio 声明的装配去组合 HTTP，无会话身份请求的 session 档授予会落入同一共享命名空间。
 
 ## 工具（openapi 模式）
 
-所有工具返回统一的扁平信封——`ok` + 工具专属字段，失败形如 `{"ok": false, "reason": ...}`——文本内容与结构化内容两个通道一致（结构化内容中缺失的可选字段可能为 `null`）。
+所有工具返回统一的扁平信封，`ok` 加工具专属字段，失败形如 `{"ok": false, "reason": ...}`，文本内容与结构化内容两个通道一致（结构化内容中缺失的可选字段可能为 `null`）。
 
 | 工具 | 职责 |
 | --- | --- |
@@ -270,7 +278,7 @@ HTTP 档带来的变化集中在会话语义：
 | `query_data` | 对命名表执行只读 SQL：`{"表名": {"data": [对象数组]}}`（inline）或 `{"表名": {"path": "文件"}}`（本地 csv/parquet/jsonl/json 数组，按扩展名自动识别）；返回列 schema + JSON-safe 行，行数与字符预算双重截断 |
 | `transform_data` | 把只读 SQL 变换结果落盘为新数据文件：`out = {"path", "format"?}`（csv/parquet/jsonl），原子写盘，默认拒绝覆盖（`overwrite=true` 显式放行）；返回产物元数据（path/format/rows/bytes）+ 小预览 |
 
-严格只读 SQL：仅 `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`DESCRIBE` 通过守卫，多语句与写型语句（`INSERT`/`CREATE`/`COPY TO`/…）一律拒绝——`transform_data` 的写盘动作由引擎在守卫**之后**经结构化 `out` 参数施加（审计 NDJSON 记录写路径），SQL 无写语法可达。两工具均不访问云、不需要凭证、**不受** safety policy 约束——仅应在信任该 Agent 会话读写本地文件的部署中启用。
+严格只读 SQL：仅 `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`DESCRIBE` 通过守卫，多语句与写型语句（`INSERT`/`CREATE`/`COPY TO`/…）一律拒绝。`transform_data` 的写盘动作由引擎在守卫**之后**经结构化 `out` 参数施加（审计 NDJSON 记录写路径），SQL 无写语法可达。两工具均不访问云、不需要凭证、不受 safety policy 约束，仅应在信任该 Agent 会话读写本地文件的部署中启用。
 
 ## Safety policy
 
@@ -284,18 +292,28 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 ]
 ```
 
-- 规则格式 `product:apiPattern=allow|deny` —— fnmatch 风格通配、product/API 大小写不敏感、`#` 行为注释。
-- 未配置 `--policy` → 全部执行被拒。
-- `manage_policy` add 的授予档位：`once`（一次性，用后即焚）· `session`（缺省；仅本次 Agent 会话）· `temporary`（TTL 自动过期）· `permanent`（写入 policy 文件）。
-- 批量授予：`line` 亦支持传规则数组——整批共享同一 scope；批量 add 为全有或全无（任一行非法则整批不应用）；批量 remove 逐条尽力而为（未命中逐条回报）。批量信封附加逐条 `results`，顶层 `ok` = 全部成功。
-- 一切热生效：外部编辑文件即时生效；经 `manage_policy` 增删亦然。优先授予最小规则（`once`/`session`），产品级仅在确有必要时使用。
-- 拒绝结果附可操作原因；开启 `--elicitation auto|required` 后，server 会经 MCP elicitation 提议授予（五选一：api=最小规则（一次性）/ api_session=最小规则（会话内）/ product=产品级规则（会话内）/ readonly=产品级只读规则集（`*List*/*Show*/*Get*/*Query*` 四条，会话内，浏览类任务首选）/ none=不授予）。默认 `off`，保证跨客户端行为可预期。
+- 规则形如 `product:apiPattern=allow|deny`，fnmatch 风格通配，product/API 大小写不敏感，`#` 开头为注释。
+- 未配置 `--policy` 时，全部执行被拒绝。
+- `manage_policy` add 的授予档位：
+  - `once`：一次性，用后即焚
+  - `session`（缺省）：仅本次 Agent 会话
+  - `temporary`：按 TTL 自动过期
+  - `permanent`：写入 policy 文件
+- 批量授予：`line` 亦支持传规则数组，整批共享同一 scope；批量 add 为全有或全无（任一行非法则整批不应用）；批量 remove 逐条尽力而为（未命中逐条回报）。批量信封附加逐条 `results`，顶层 `ok` 仅在全部成功时为 true。
+- 全部热生效：外部编辑文件即时生效，经 `manage_policy` 增删亦然。优先授予最小规则（`once`/`session`），产品级仅在确有必要时使用。
+- 拒绝结果附可操作原因。开启 `--elicitation auto|required` 后，server 会经 MCP elicitation 提议授予，五选一：
+  - `api`：最小规则（一次性）
+  - `api_session`：最小规则（会话内）
+  - `product`：产品级规则（会话内）
+  - `readonly`：产品级只读规则集（`*List*/*Show*/*Get*/*Query*` 四条，会话内，浏览类任务首选）
+  - `none`：不授予
+- 默认 `off`，保证跨客户端行为可预期。
 
 包内附带更丰富的示例：`configs/safety-policy.example.json`。
 
 ## 自定义提示注入（可选）
 
-hints 配置文件允许部署方向发现链注入自有指引：全局 `instructions` 追加到 server instructions 末尾，产品级 `notes` 与 API 级文案附加到发现结果（`list_products` / `get_product` / `list_apis` / `get_api`）；产品级 SOP 挂在 `get_product` / `list_apis` 顶层——`sops_index` 恒为轻量索引（仅任务名+描述），完整渲染全文 `sops`（含步骤）仅在调用方传 `include_sops=true` 时附加。
+hints 配置文件允许部署方向发现链注入自有指引：全局 `instructions` 追加到 server instructions 末尾，产品级 `notes` 与 API 级文案附加到发现结果（`list_products` / `get_product` / `list_apis` / `get_api`）。产品级 SOP 以 `sops_index` 形式出现在 `get_product` / `list_apis` 顶层信封中（轻量索引，仅任务名与描述），完整渲染全文 `sops`（含步骤）仅在调用方传 `include_sops=true` 时附加。
 
 ```json
 {
@@ -319,14 +337,14 @@ hints 配置文件允许部署方向发现链注入自有指引：全局 `instru
 }
 ```
 
-- 官方元数据永不被替换 —— 提示以独立 `hints` 字段伴随返回（产品级 + API 级合并，产品在前）。
-- 产品级 SOP（`sops`，可选）：mapping-only（任务必须命名），任务值为字符串（原文）、字符串数组（自动编号 `1. x`，空步骤丢弃且编号压实）或 dict `{"description"?: str, "steps"?: string | array[string]}`（键白名单 `{description, steps}`，未知键快速失败；缺 `steps` 即纯描述任务）。发现信封（`get_product` / `list_apis` 顶层）恒携带 `sops_index`——轻量 `[{name, description?}]` 列表（不含步骤）；完整渲染文本（`任务名：\n内容`，description 并入正文首行，任务间空行）仅在工具调用传 `include_sops=true` 时以独立 `sops` 字符串字段附加（缺省 `false`；产品无 SOP 配置时恒 no-op 不加字段）。条目级与 `get_api` / `get_api_examples` / `execute_api` 恒不注入。
+- 官方元数据永不被替换，提示以独立 `hints` 字段返回（产品级与 API 级合并，产品在前）。
+- 产品级 SOP（`sops`，可选）：mapping-only（任务必须命名），任务值为字符串（原文）、字符串数组（自动编号 `1. x`，空步骤丢弃且编号压实）或 dict `{"description"?: str, "steps"?: string | array[string]}`（键白名单 `{description, steps}`，未知键快速失败；缺 `steps` 即纯描述任务）。发现信封（`get_product` / `list_apis` 顶层）恒携带 `sops_index`，即轻量 `[{name, description?}]` 列表（不含步骤）；完整渲染文本（`任务名：\n内容`，description 并入正文首行，任务间空行）仅在工具调用传 `include_sops=true` 时以独立 `sops` 字符串字段附加（缺省 `false`；产品无 SOP 配置时恒 no-op 不加字段）。条目级与 `get_api` / `get_api_examples` / `execute_api` 恒不注入。
 - 仅注入成功发现结果，拒绝路径（policy 拒绝）永不注入；`get_api_examples` 与 `execute_api` 恒不注入。
 - 产品键与 `apis` 键均大小写不敏感；产品值可以是纯字符串（仅产品提示）或含 `notes` / `apis` / `sops` 的对象。
-- 可选顶层布尔键 `api_notes_in_list_apis`（缺省 `true`）：为 `false` 时 `list_apis` 条目不携带 API 级提示（顶层产品级与 `get_api` 合并提示不受影响）——帮助中心补全生成文件显式置 `false`，使 `get_api` 成为唯一增强面。
+- 可选顶层布尔键 `api_notes_in_list_apis`（缺省 `true`）：为 `false` 时 `list_apis` 条目不携带 API 级提示（顶层产品级与 `get_api` 合并提示不受影响）。帮助中心补全生成文件显式置 `false`，因此只有 `get_api` 携带这些提示。
 - 启动时加载（运行期跟随配置文件热刷新，无需重启）；配置非法启动即快速失败。
-- 缺省文件：未传 `--hints` 且未设置 `HUAWEICLOUD_MCP_OPENAPI_HINTS` 时，自动加载 `configs/help-docs-hints.json`（仓库根副本优先 → 安装包内置副本）；文件缺失静默跳过。传 `--hints off`（或环境变量置空）显式禁用。显式路径/裸名缺失仍快速失败。
-- 文件路径支持裸文件名：存在的显式路径（绝对或 cwd 相对）原样使用；否则按 `configs/<名字>` 解析（仓库根 `configs/` 优先 → 安装包内置副本——`uvx`/`pip` 安装态免写全路径）。
+- 缺省文件：未传 `--hints` 且未设置 `HUAWEICLOUD_MCP_OPENAPI_HINTS` 时，自动加载 `configs/help-docs-hints.json`（仓库根副本优先，其次安装包内置副本）；文件缺失静默跳过。传 `--hints off`（或环境变量置空）显式禁用。显式路径/裸名缺失仍快速失败。
+- 文件路径支持裸文件名：存在的显式路径（绝对或 cwd 相对）原样使用；否则按 `configs/<名字>` 解析（仓库根 `configs/` 优先，其次安装包内置副本，`uvx`/`pip` 安装态免写全路径）。
 - curated 种子：`configs/help-docs-hints-curation.json` 的产品条目可带 `sops`（mapping 原样透传），`api-refresh helphints` 再生时 curated 条目永不丢失。
 
 示例：`configs/openapi-hints.example.json`（可经 `--hints openapi-hints.example.json` 裸名加载）。
@@ -343,7 +361,7 @@ uv run huaweicloud-open-mcp --hints data/hints/help-docs-hints.json
 
 ### 实体图谱与 search_apis（构建期）
 
-`api-refresh graph` 从 `apis_docs.json` + `huawei_products.json` 确定性构建实体关联图谱（产品/API/tag 节点、同名孪生、归属、tag 覆盖计数），并与 `configs/entity-knowledge.json` 知识库合并；`--llm` 额外用构建期 LLM 抽取口语别名、产品语义关联与每 API 口语查询关键词（`ENTITY_LLM_BASE_URL/API_KEY/MODEL`，指纹增量重跑只抽变化产品，curated 条目永不覆盖）：
+`api-refresh graph` 从 `apis_docs.json` 与 `huawei_products.json` 确定性构建实体关联图谱（产品/API/tag 节点、同名孪生、归属、tag 覆盖计数），并与 `configs/entity-knowledge.json` 知识库合并。加 `--llm` 时额外执行构建期 LLM 抽取，产出口语别名、产品语义关联与每 API 口语查询关键词（`ENTITY_LLM_BASE_URL/API_KEY/MODEL`；指纹增量重跑只抽变化产品；curated 条目永不覆盖）：
 
 ```bash
 uv run api-refresh graph            # 确定性构建（产物 data/graph/entity-index.json + configs 副本随 wheel）
@@ -351,22 +369,22 @@ uv run api-refresh graph --llm      # 构建期 LLM 语义抽取（约 150 次�
 uv run huaweicloud-open-mcp         # 运行时缺省加载 configs/entity-index.json（缺失静默禁用）
 ```
 
-运行时 `search_apis` 把快照喂给 tantivy BM25 引擎：约 1.8 万条 API 文本经 token 化（ASCII 词 + 驼峰切分；CJK 2-gram）构建内存索引（启动一次性约 0.6s），查询亚毫秒级完成，再与手调身份层（别名/产品名/判别 tag/产品广度先验）合并排序。排序质量由人工标注金评集（`tests/fixtures/entity_eval.json`，45 例）在测试套件中固化门禁。
+运行时 `search_apis` 把快照交给 tantivy BM25 引擎。引擎把约 1.8 万条 API 文本经 token 化（ASCII 词与驼峰切分；CJK 2-gram）构建内存索引（启动一次性约 0.6s），查询亚毫秒级完成，再把手调身份层（别名/产品名/判别 tag/产品广度先验）合并进 BM25 排序。人工标注金评集（`tests/fixtures/entity_eval.json`，45 例）守护排序质量，随测试套件运行。
 
 - 差集口径：只有当帮助中心的功能介绍明显比 API Explorer 描述更完善时才补全（`--min-gain`，默认 20 字符）。
-- 每条 note 为功能介绍全文（`--cap` 截断，默认 2000 字符，超长加 …）+ 官方文档 URL。
-- 限速爬取（0.4s/页）+ 人机验证退避 + 断点续传；产物可重建不入库。完整管线规则见 [AGENTS.md](AGENTS.md)。
-- `--hints` / `--deprecated-index` 支持裸文件名，按 `configs/` 解析（仓库根优先 → 安装包内置副本）。
+- 每条 note 为功能介绍全文（`--cap` 截断，默认 2000 字符，超长加 …）加官方文档 URL。
+- 限速爬取（0.4s/页）、人机验证退避、断点续传；产物可重建不入库。完整管线规则见 [AGENTS.md](AGENTS.md)。
+- `--hints` / `--deprecated-index` 支持裸文件名，按 `configs/` 解析（仓库根优先，其次安装包内置副本）。
 
-同一管线顺带产出废弃接口索引（`data/help_completions/deprecated.json`），信号取自帮助中心自身的 `（废弃）` 标题（apiexplorer 的 `op.deprecated` 元数据不可靠——ECS 试点：45 vs 1）。挂载后治理发现面：
+同一管线顺带产出废弃接口索引（`data/help_completions/deprecated.json`），信号取自帮助中心自身的 `（废弃）` 标题。apiexplorer 的 `op.deprecated` 元数据在这里不可靠：ECS 试点中帮助中心识别出 45 个废弃 API，API Explorer 只标记了 1 个。挂载索引以治理 `list_apis` 发现面：
 
 ```bash
 uv run huaweicloud-open-mcp --deprecated-index data/help_completions/deprecated.json                 # annotate（缺省）：list_apis 条目带 deprecated: true + replacement
 uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide                            # hide：list_apis 直接过滤废弃条目（计数同口径）
 ```
 
-- `annotate`/`hide` 仅影响 `list_apis` 发现面；`get_api`/`execute_api` 恒可用（发现面收窄 ≠ 详情拒绝）。
-- `off`：即使挂载索引也不治理。显式传 mode 而未配置 `--deprecated-index` → 启动快速失败。
+- `annotate`/`hide` 仅影响 `list_apis` 发现面；`get_api`/`execute_api` 恒可用，发现面收窄不等于拒绝详情。
+- `off`：即使挂载索引也不治理。显式传 mode 而未配置 `--deprecated-index` 时启动快速失败。
 - 未配置 `--deprecated-index` 时行为逐字段不变（无 mode 即不治理）。
 
 ## 配置
@@ -425,11 +443,11 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 ## 凭证
 
-网关按顺序从两个来源加载 AK/SK：**环境变量 → `~/.huaweicloud/credentials`**（Windows：`%USERPROFILE%\.huaweicloud\credentials`）——两者同时配置时环境变量优先。
+网关按顺序从两个来源加载 AK/SK：先环境变量，后 `~/.huaweicloud/credentials`（Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`）；两者同时配置时环境变量优先。
 
-### 方式 A —— Profile 文件（快速开始主路径）
+### 方式 A：Profile 文件（快速开始主路径）
 
-`~/.huaweicloud/credentials` —— 即[步骤 1](#步骤-1提供凭证)创建的文件：
+`~/.huaweicloud/credentials`，即[步骤 1](#步骤-1提供凭证)创建的文件：
 
 ```ini
 [basic]
@@ -443,14 +461,14 @@ sk = your-secret-access-key
 ```
 
 - `[basic]` 节含 `ak` 与 `sk` 为必需；三个可选键与下方环境变量一一对应。
-- 文件缺失会被静默跳过 —— server 照常启动但没有凭证（元数据工具仍可用，见下）。
-- 妥善保管 —— 文件里是你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。
+- 文件缺失会被静默跳过，server 照常启动但没有凭证（元数据工具仍可用，见下）。
+- 妥善保管，文件里是你的密钥：macOS/Linux 执行 `chmod 600 ~/.huaweicloud/credentials`；Windows 下用户主目录中的文件默认仅本账户可读。
 
-### 方式 B —— 环境变量（客户端注册内联）
+### 方式 B：环境变量（客户端注册内联）
 
 改为在客户端注册中设置环境变量：
 
-**opencode** —— 在 `command` 旁加 `environment` 块：
+**opencode**：在 `command` 旁加 `environment` 块：
 
 ```json
 "environment": {
@@ -459,7 +477,7 @@ sk = your-secret-access-key
 }
 ```
 
-**Codex** —— 在 `--` 前加 `--env` 参数（单行命令，任意 shell 通用）：
+**Codex**：在 `--` 前加 `--env` 参数（单行命令，任意 shell 通用）：
 
 ```
 codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAWEICLOUD_SDK_SK=your-secret-access-key -- uvx huaweicloud-open-mcp --policy /home/you/hwc-policy.json
@@ -474,8 +492,8 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 
 ### 行为要点
 
-- 无凭证时元数据工具（`list_products`、`list_apis`、`get_api` 等）照常工作 —— 数据来自公开的 API Explorer；只有 `execute_api` 需要凭证。
-- 使用专用最小权限 IAM 子用户的 AK/SK —— 网关能做的事不会超出该用户本身的权限。
+- 无凭证时元数据工具（`list_products`、`list_apis`、`get_api` 等）照常工作，数据来自公开的 API Explorer；只有 `execute_api` 需要凭证。
+- 使用专用最小权限 IAM 子用户的 AK/SK，网关能做的事不会超出该用户本身的权限。
 - 签名在本地完成；SK 永不出本机，凭证永不入日志。
 
 ## 故障排查
@@ -515,7 +533,7 @@ uv run ruff check src tests              # lint
 uv run mypy src                          # 类型检查
 ```
 
-配套 CLI：`api-refresh`（离线 APIE 管道：抓取 API Explorer → OpenAPI 2.0 文档；`graph` 实体图谱构建含 `--llm` 语义抽取；帮助中心补全阶段 `helpdocs`/`helphints`）与 `api-docs`（终端元数据查询）。详见 [AGENTS.md](AGENTS.md)。
+配套 CLI：`api-refresh`（离线 APIE 管道：抓取 API Explorer 数据生成 OpenAPI 2.0 文档；`graph` 实体图谱构建含 `--llm` 语义抽取；帮助中心补全阶段 `helpdocs`/`helphints`）与 `api-docs`（终端元数据查询）。详见 [AGENTS.md](AGENTS.md)。
 
 ## 许可证
 
