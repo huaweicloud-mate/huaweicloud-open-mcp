@@ -31,5 +31,23 @@
         "replace": "^[a-zA-Z]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$"
       }
     }
+  },
+  "APIG:AssociateAppsForAppQuota": {
+    "evidence": "凭据配额绑定凭据列表（app_ids：绑定的凭据编号列表，32 位十六进制 ID）——Explorer 元数据 pattern='[0-9a-f](32)' 圆括号为捕获组非量词，re.search 语义下合法 32 位十六进制 app_id（实测 13ba79776bc941ac9707090d9b1cc8ff）被 execute_api body 校验误拒，且含 hex+\"32\" 子串的非法串反而放行；全语料 17,963 接口规范形 [0-9a-f]{32} 已有 169 处、畸形 (32) 仅 APIG/ROMA 本接口 2 处（2026-09-28）",
+    "verified": "2026-09-28",
+    "patches": {
+      "/definitions/CreateAppQuotaBindingApp/properties/app_ids/items/pattern": {
+        "replace": "[0-9a-f]{32}"
+      }
+    }
+  },
+  "ROMA:AssociateAppsForAppQuota": {
+    "evidence": "客户端配额绑定客户端应用列表（ROMA 孪生接口，与 APIG AssociateAppsForAppQuota 同源元数据缺陷）——Explorer 元数据 pattern='[0-9a-f](32)' 圆括号为捕获组非量词，合法 32 位十六进制 app_id 被 execute_api body 校验误拒；全语料规范形 [0-9a-f]{32} 已有 169 处、畸形 (32) 仅 APIG/ROMA 本接口 2 处（2026-09-28）",
+    "verified": "2026-09-28",
+    "patches": {
+      "/definitions/CreateAppQuotaBindingApp/properties/app_ids/items/pattern": {
+        "replace": "[0-9a-f]{32}"
+      }
+    }
   }
 }

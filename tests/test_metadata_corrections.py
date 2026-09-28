@@ -356,6 +356,87 @@ def test_correct_doc_pointer_and_op_level_combined():
             == DOC_PATTERN_TRUTH)
 
 
+# ---------- R5：app_ids 畸形 quantifier（[0-9a-f](32) → [0-9a-f]{32}） ----------
+
+BROKEN_HEX_PATTERN = "[0-9a-f](32)"
+HEX32_TRUTH = "[0-9a-f]{32}"
+
+R5_RAW = {
+    "APIG:AssociateAppsForAppQuota": {
+        "evidence": "app_ids 元素为 32 位十六进制 ID；语料规范形 [0-9a-f]{32} 共 169 处，"
+                    "畸形 [0-9a-f](32) 全语料仅 APIG/ROMA 本接口 2 处（2026-09-28）",
+        "patches": {
+            "/definitions/CreateAppQuotaBindingApp/properties/app_ids/items/pattern": {
+                "replace": HEX32_TRUTH},
+        },
+    },
+}
+
+R5_APP_IDS = ["13ba79776bc941ac9707090d9b1cc8ff",
+              "1245b16d17a347afb4cef65ef18be71d"]
+
+
+def _apig_doc() -> dict:
+    return {
+        "definitions": {
+            "CreateAppQuotaBindingApp": {
+                "required": ["app_ids"],
+                "properties": {
+                    "app_ids": {"type": "array", "items": {
+                        "type": "string", "pattern": BROKEN_HEX_PATTERN}},
+                },
+            },
+        },
+        "paths": {"/v2/{project_id}/apigw/app-quota-bind": {"post": {
+            "operationId": "AssociateAppsForAppQuota",
+            "summary": "凭据配额绑定凭据列表",
+            "parameters": [],
+        }}},
+    }
+
+
+def test_correct_doc_app_quota_pattern_replace():
+    c = parse_metadata_corrections(R5_RAW)
+    doc = _apig_doc()
+    out = correct_doc(doc, "APIG", "AssociateAppsForAppQuota", c)
+    assert out is doc  # 离线 in-place
+    items = (out["definitions"]["CreateAppQuotaBindingApp"]
+             ["properties"]["app_ids"]["items"])
+    assert items["pattern"] == HEX32_TRUTH
+
+
+def test_correct_doc_app_quota_pattern_idempotent():
+    c = parse_metadata_corrections(R5_RAW)
+    doc = _apig_doc()
+    correct_doc(doc, "APIG", "AssociateAppsForAppQuota", c)
+    snap = json.dumps(doc, sort_keys=True)
+    correct_doc(doc, "APIG", "AssociateAppsForAppQuota", c)
+    assert json.dumps(doc, sort_keys=True) == snap
+
+
+def test_app_quota_incident_body_jsonschema():
+    """事故编码（独立真值=用户实测 app_ids）：坏 pattern 误拒合法 32 位十六进制
+    （且过松：hex+'32' 子串反而放行）；纠偏后合法串放行、31 字符仍拒绝。"""
+    import jsonschema
+
+    def _schema(pattern: str) -> dict:
+        return {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "type": "object",
+            "required": ["app_ids"],
+            "properties": {"app_ids": {"type": "array", "items": {
+                "type": "string", "pattern": pattern}}},
+        }
+
+    body = {"app_ids": R5_APP_IDS}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(body, _schema(BROKEN_HEX_PATTERN))
+    jsonschema.validate(body, _schema(HEX32_TRUTH))
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"app_ids": ["13ba79776bc941ac9707090d9b1cc8f"]},
+                            _schema(HEX32_TRUTH))
+
+
 def test_load_file(tmp_path):
     p = tmp_path / "c.json"
     p.write_text(json.dumps(RAW, ensure_ascii=False), encoding="utf-8")
@@ -439,6 +520,14 @@ def test_load_real_repo_shipped_file(monkeypatch):
     assert ptr == ("definitions", "CreateEventRequestBody",
                    "properties", "name", "pattern")
     assert patch.replace == "^[a-zA-Z]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$"
+    # R5：APIG/ROMA AssociateAppsForAppQuota 的 app_ids 畸形 pattern（(32)→{32}）
+    for prod in ("APIG", "ROMA"):
+        e = c.for_api(prod, "AssociateAppsForAppQuota")
+        assert e is not None, prod
+        (ptr, patch), = e.doc_patches.items()
+        assert ptr == ("definitions", "CreateAppQuotaBindingApp",
+                       "properties", "app_ids", "items", "pattern")
+        assert patch.replace == HEX32_TRUTH
 
 
 # ---------- 离线管道组合根：convert main() 组合 correct_doc ----------
