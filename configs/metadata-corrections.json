@@ -49,5 +49,17 @@
         "replace": "[0-9a-f]{32}"
       }
     }
+  },
+  "DCS:CreateCustomTemplate": {
+    "evidence": "官方帮助文档（DCS API 参考 5.14.2 创建自定义模板，版本 01 2026-09-24）type 描述为「模板类型，取值范围：sys：系统默认模板；user：用户自定义模板」，请求示例传 type=\"sys\"（来源 template_id=\"11\"，同体 template_id 即「来源系统模板ID」）；Explorer 元数据仅存「模板类型」且 example='user'，与其自身内嵌请求示例（sys）相悖——实测 type=user 被服务端 DCS.4988 拒绝（2026-09-28）",
+    "verified": "2026-09-28",
+    "patches": {
+      "/definitions/CreateCustomTemplateBody/properties/type/description": {
+        "replace": "模板类型，取值范围：\n- sys：系统默认模板\n- user：用户自定义模板"
+      },
+      "/definitions/CreateCustomTemplateBody/properties/type/example": {
+        "replace": "sys"
+      }
+    }
   }
 }

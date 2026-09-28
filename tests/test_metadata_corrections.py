@@ -437,6 +437,74 @@ def test_app_quota_incident_body_jsonschema():
                             _schema(HEX32_TRUTH))
 
 
+# ---------- R9：DCS CreateCustomTemplate type 语义（恢复官方取值范围 + 对齐官方示例） ----------
+
+R9_TYPE_DESC = "模板类型，取值范围：\n- sys：系统默认模板\n- user：用户自定义模板"
+
+R9_RAW = {
+    "DCS:CreateCustomTemplate": {
+        "evidence": "官方帮助文档（DCS API 参考 5.14.2 创建自定义模板，版本 01 "
+                    "2026-09-24）type 描述为「模板类型，取值范围：sys：系统默认模板；"
+                    "user：用户自定义模板」，请求示例传 type=\"sys\"（来源 "
+                    "template_id=\"11\"，同体 template_id 即「来源系统模板ID」）；"
+                    "Explorer 元数据仅存「模板类型」且 example='user'，与其自身内嵌"
+                    "请求示例（sys）相悖——实测 type=user 被服务端 DCS.4988 拒绝"
+                    "（2026-09-28）",
+        "patches": {
+            "/definitions/CreateCustomTemplateBody/properties/type/description": {
+                "replace": R9_TYPE_DESC},
+            "/definitions/CreateCustomTemplateBody/properties/type/example": {
+                "replace": "sys"},
+        },
+    },
+}
+
+
+def _dcs_doc() -> dict:
+    return {
+        "definitions": {
+            "CreateCustomTemplateBody": {
+                "required": ["name", "template_id", "type", "params"],
+                "properties": {
+                    "template_id": {"type": "string",
+                                    "description": "来源系统模板ID",
+                                    "example": "9"},
+                    "type": {"type": "string", "description": "模板类型",
+                             "example": "user"},
+                    "name": {"type": "string", "description": "模板名称"},
+                },
+            },
+        },
+        "paths": {"/v2/{project_id}/config-templates": {"post": {
+            "operationId": "CreateCustomTemplate", "summary": "创建自定义模板",
+            "parameters": [],
+        }}},
+    }
+
+
+def test_correct_doc_custom_template_type_official_range_and_example():
+    c = parse_metadata_corrections(R9_RAW)
+    doc = _dcs_doc()
+    out = correct_doc(doc, "DCS", "CreateCustomTemplate", c)
+    assert out is doc  # 离线 in-place
+    t = out["definitions"]["CreateCustomTemplateBody"]["properties"]["type"]
+    assert t["description"] == R9_TYPE_DESC
+    assert t["example"] == "sys"
+    assert t["type"] == "string"
+    # 兄弟字段原样
+    assert (out["definitions"]["CreateCustomTemplateBody"]["properties"]
+            ["template_id"]["description"] == "来源系统模板ID")
+
+
+def test_correct_doc_custom_template_idempotent():
+    c = parse_metadata_corrections(R9_RAW)
+    doc = _dcs_doc()
+    correct_doc(doc, "DCS", "CreateCustomTemplate", c)
+    snap = json.dumps(doc, sort_keys=True)
+    correct_doc(doc, "DCS", "CreateCustomTemplate", c)
+    assert json.dumps(doc, sort_keys=True) == snap
+
+
 def test_load_file(tmp_path):
     p = tmp_path / "c.json"
     p.write_text(json.dumps(RAW, ensure_ascii=False), encoding="utf-8")
@@ -528,6 +596,18 @@ def test_load_real_repo_shipped_file(monkeypatch):
         assert ptr == ("definitions", "CreateAppQuotaBindingApp",
                        "properties", "app_ids", "items", "pattern")
         assert patch.replace == HEX32_TRUTH
+    # R9：DCS CreateCustomTemplate 的 type 语义混淆（恢复官方取值范围 + 对齐官方示例）
+    dcs = c.for_api("DCS", "CreateCustomTemplate")
+    assert dcs is not None
+    assert set(dcs.doc_patches) == {
+        ("definitions", "CreateCustomTemplateBody", "properties", "type",
+         "description"),
+        ("definitions", "CreateCustomTemplateBody", "properties", "type",
+         "example"),
+    }
+    assert dcs.doc_patches[
+        ("definitions", "CreateCustomTemplateBody", "properties", "type",
+         "example")].replace == "sys"
 
 
 # ---------- 离线管道组合根：convert main() 组合 correct_doc ----------
