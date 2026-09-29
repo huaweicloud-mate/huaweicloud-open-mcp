@@ -1141,3 +1141,167 @@ def test_execute_audit_snapshot_contains_jsonpath(tmp_path):
                               params={"limit": 1, "_jsonpath": "$.total"})
     assert out["ok"] is True
     assert sink_calls[0]["input"]["params"]["_jsonpath"] == "$.total"
+
+
+# ---------- declared default 自动填充（P1：service 接线） ----------
+
+DNS_DOC = {
+    "swagger": "2.0",
+    "host": "dns.cn-north-4.myhuaweicloud.com",
+    "basePath": "/",
+    "paths": {
+        "/v2/zones": {
+            "get": {
+                "operationId": "ListPrivateZones",
+                "summary": "查询内网域名列表",
+                "parameters": [
+                    {"name": "type", "in": "query", "type": "string",
+                     "required": True, "default": "private",
+                     "enum": ["private", "public"]},
+                    {"name": "limit", "in": "query", "type": "integer"},
+                ],
+                "responses": {"200": {"description": "OK"}},
+            }
+        }
+    },
+    "definitions": {},
+}
+
+
+def _dns_store():
+    store = MemoryStore()
+    store.set_api_cache(
+        ("dns", "ListPrivateZones", "cn-north-4"),
+        ApiLocation(DNS_DOC, "/v2/zones", "get",
+                    DNS_DOC["paths"]["/v2/zones"]["get"]),
+    )
+    return store
+
+
+def _dns_service(store, client):
+    return ToolService(store=store, config=ServiceConfig(
+        policy_rules=_policy("DNS:*=allow"),
+        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"),
+        http_client_factory=lambda: client))
+
+
+def test_execute_fills_required_default_query_param():
+    """P1 主链：不传 type → 填充 default 进 query，信封披露 applied_defaults。"""
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": {"zones": []}})
+    service = _dns_service(_dns_store(), client)
+    out = service.execute_api("DNS", "ListPrivateZones")
+    assert out["ok"] is True
+    assert client.calls[0][3] == {"type": "private"}   # 请求 query 含填充值
+    assert out["applied_defaults"] == {"type": "private"}
+
+
+def test_execute_explicit_value_not_filled():
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": {"zones": []}})
+    service = _dns_service(_dns_store(), client)
+    out = service.execute_api("DNS", "ListPrivateZones", params={"type": "public"})
+    assert out["ok"] is True
+    assert client.calls[0][3] == {"type": "public"}    # 显式值原样透传
+    assert "applied_defaults" not in out
+
+
+def test_execute_fill_mock_lane():
+    """mock lane 共享填充（填充先于校验——否则 mock 亦被必填拒绝）。"""
+    store = _dns_store()
+
+    class _Mock:
+        def mock_request(self, product, api_name, region, status_code=200, number=1):
+            return {"status": 200, "headers": {}, "body": {"zones": []}}
+
+    service = ToolService(store=store, config=ServiceConfig(
+        mock=True, policy_rules=_policy("DNS:*=allow"),
+        mock_client_factory=lambda: _Mock()))
+    out = service.execute_api("DNS", "ListPrivateZones")
+    assert out["ok"] is True
+    assert out["applied_defaults"] == {"type": "private"}
+
+
+def test_execute_rejection_envelope_has_no_applied_defaults():
+    """拒绝路径（校验在另一参数上失败）不携带 applied_defaults。"""
+    doc = json.loads(json.dumps(DNS_DOC))   # deepcopy
+    doc["paths"]["/v2/zones"]["get"]["parameters"].append(
+        {"name": "marker", "in": "query", "type": "string", "required": True})
+    store = MemoryStore()
+    store.set_api_cache(("dns", "ListPrivateZones", "cn-north-4"),
+                        ApiLocation(doc, "/v2/zones", "get",
+                                    doc["paths"]["/v2/zones"]["get"]))
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": {}})
+    service = _dns_service(store, client)
+    out = service.execute_api("DNS", "ListPrivateZones")
+    assert out["ok"] is False
+    assert "marker" in (out.get("reason") or "")
+    assert "applied_defaults" not in out
+    assert client.calls == []                          # 未触网
+
+
+def test_execute_policy_denial_no_applied_defaults(tmp_path):
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": {}})
+    service = ToolService(store=_dns_store(), config=ServiceConfig(
+        policy_store=PolicyStore(str(p)),
+        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"),
+        http_client_factory=lambda: client))
+    out = service.execute_api("DNS", "ListPrivateZones")
+    assert out["ok"] is False
+    assert "applied_defaults" not in out
+    assert client.calls == []
+
+
+def test_execute_non_get_keeps_today_reject():
+    """回归红线：非 GET 不填充，保持既有必填拒绝（破坏性默认语料门）。"""
+    doc = json.loads(json.dumps(DNS_DOC))
+    op = doc["paths"]["/v2/zones"].pop("get")
+    op["operationId"] = "CreatePrivateZone"
+    doc["paths"]["/v2/zones"]["post"] = op
+    store = MemoryStore()
+    store.set_api_cache(("dns", "CreatePrivateZone", "cn-north-4"),
+                        ApiLocation(doc, "/v2/zones", "post",
+                                    doc["paths"]["/v2/zones"]["post"]))
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": {}})
+    service = _dns_service(store, client)
+    out = service.execute_api("DNS", "CreatePrivateZone")
+    assert out["ok"] is False
+    assert "缺少必填" in (out.get("reason") or "")
+    assert client.calls == []
+
+
+def test_execute_audit_snapshot_excludes_fill(tmp_path):
+    """入口拷贝（service 首行 dict(params)）契约：审计 input 快照不含填充值。"""
+    store = _dns_store()
+    sink_calls: list[dict] = []
+
+    class _Sink:
+        def record(self, event):
+            sink_calls.append(event)
+
+    client = _FixedHttpClient({"status": 200, "headers": {}, "body": {"zones": []}})
+    service = ToolService(store=store, config=ServiceConfig(
+        policy_rules=_policy("DNS:*=allow"),
+        credentials=Credentials(ak="AK", sk="SK", project_id="proj123"),
+        http_client_factory=lambda: client,
+        audit_sink=_Sink()))
+    out = service.execute_api("DNS", "ListPrivateZones", params={"limit": 1})
+    assert out["ok"] is True
+    assert sink_calls[0]["input"]["params"] == {"limit": 1}   # 显式入参快照纯净（无填充值）
+    assert out["applied_defaults"] == {"type": "private"}
+    assert client.calls[0][3] == {"type": "private", "limit": 1}
+
+
+def test_execute_obs_lane_untouched_by_fill():
+    """位置不变量：填充住在非 OBS 分支——presign 信封无 applied_defaults。"""
+    obs_client = StubObsClient()
+    svc = ToolService(store=_object_data_store("GetObject", "get"),
+                      config=ServiceConfig(
+                          policy_rules=_policy("OBS:*=allow"),
+                          credentials=Credentials(ak="DATA-AK", sk="SK-DATA"),
+                          obs_client_factory=lambda: obs_client))
+    out = svc.execute_api("OBS", "GetObject",
+                          params={"bucket_name": "bkt", "object_key": "k.bin"})
+    assert out["ok"] is True
+    assert "applied_defaults" not in out

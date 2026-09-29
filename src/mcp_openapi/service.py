@@ -489,6 +489,9 @@ class ToolService:
                 "manage_policy 是 server 内置控制面工具，请直接调用 manage_policy 工具"
                 "（不经 execute_api 路由）")}
         region = region or self.config.region
+        # 入口拷贝为承重边界：审计 input 快照绑定调用方 dict（_audited 调用时
+        # 绑定），后续一切变更（_spill/_jsonpath 剥离、declared default 填充）
+        # 均落在本拷贝上——移除该行会污染审计 NDJSON。
         params = dict(params or {})
         spill_cfg = self.config.spill
         if params.pop("_spill", None) is False:
@@ -539,9 +542,16 @@ class ToolService:
                 params, credentials=self.config.credentials,
                 client=None if self.config.mock else self._make_obs_client())
 
-        # OpenAPI 元数据 schema 校验（policy 接缝）：mock/real 共享；
-        # OBS lane（XML body/自身参数切分）不适用，跳过
+        # declared default 填充（P1）→ OpenAPI 元数据 schema 校验（policy 接缝）：
+        # 均为 mock/real 共享；OBS lane（XML body/自身参数切分）不适用，跳过。
+        # 填充先于校验（缺省 required 参数补默认值后才可能过校验）；GET-only +
+        # deny 名单 + 类型/enum 守卫见 apply_declared_defaults。
+        applied: dict[str, Any] = {}
         if not is_obs_op:
+            params, applied = execute.apply_declared_defaults(
+                hit.op, product, api, hit.method, params)
+            if applied:
+                logger.info("execute %s:%s defaults=%s", product, api, applied)
             err = execute.validate_params(hit.doc, hit.path, hit.op, params,
                                           self.config.credentials)
             if err:
@@ -567,7 +577,8 @@ class ToolService:
         if lane == "mock":
             return execute.execute_api(hit, product, api, region, params,
                                        executor=self._mock_executor(),
-                                       spill=spill_cfg, extract=extract_spec)
+                                       spill=spill_cfg, extract=extract_spec,
+                                       applied_defaults=applied or None)
 
         if lane == "obs":
             if execute_obs.is_object_data_api(api, hit.op):
@@ -584,4 +595,5 @@ class ToolService:
 
         return execute.execute_api(hit, product, api, region, params,
                                    executor=self._real_executor(),
-                                   spill=spill_cfg, extract=extract_spec)
+                                   spill=spill_cfg, extract=extract_spec,
+                                   applied_defaults=applied or None)

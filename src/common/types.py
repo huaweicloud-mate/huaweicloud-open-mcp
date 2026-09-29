@@ -39,6 +39,7 @@ class ExecuteResult(TypedDict, total=False):
     presign: "PresignInfo | None"
     spill: "SpillInfo | None"  # 超限响应/信封完整落盘（S12）
     extract: "ExtractInfo | None"  # _jsonpath 投影抽取信封（命中/未命中/降级说明）
+    applied_defaults: dict[str, Any] | None  # required query 缺省时填充的 declared default（P1；拒绝路径恒无）
     granted_rule: str | None  # policy 拒绝经用户 elicitation 确认后授予的规则（最小或产品级）
 
 

@@ -40,6 +40,37 @@ _AUTH_HEADERS = frozenset({
     "authorization",
 })
 
+# declared default 自动填充 deny 名单（P1，2026-09 起）：(product, api, param)
+# 键 casefold 归一。语料审计（17,963 接口，GET 档 99 个 required+default 候选）
+# 中 default 为伪造/工件值、填充会静默发出错误请求的案例——保持既有拒绝迫使
+# agent 有意识选择：
+# - CodeArtsBuild ShowJobSuccessRatio / ShowListPeriodHistory start_time/end_time：
+#   过期示例日期（2022-01-04 等）成为伪造查询窗口；
+# - LTS ShowStructTemplate logGroupId/logStreamId：字符串化 Python None 工件；
+# - HSS ListDockerPlugins name / ListPluginInstallScript plugin：钉死单一插件
+#   （'opa-docker-authz'）；
+# - eiHealth ShowJobLog task_name：示例任务名 'task0'；
+# - Workspace Export* language：导出语言为用户选择（en_US/zh_CN），不该静默钉死。
+# 新案例按同口径增补（语料证据写入行注释）。
+_FILL_DENYLIST: frozenset[tuple[str, str, str]] = frozenset(
+    (p.casefold(), a.casefold(), n.casefold())
+    for p, a, n in (
+        ("CodeArtsBuild", "ShowJobSuccessRatio", "start_time"),
+        ("CodeArtsBuild", "ShowJobSuccessRatio", "end_time"),
+        ("CodeArtsBuild", "ShowListPeriodHistory", "start_time"),
+        ("CodeArtsBuild", "ShowListPeriodHistory", "end_time"),
+        ("LTS", "ShowStructTemplate", "logGroupId"),
+        ("LTS", "ShowStructTemplate", "logStreamId"),
+        ("HSS", "ListDockerPlugins", "name"),
+        ("HSS", "ListPluginInstallScript", "plugin"),
+        ("eiHealth", "ShowJobLog", "task_name"),
+        ("Workspace", "ExportDesktopListNew", "language"),
+        ("Workspace", "ExportDesktopVersionList", "language"),
+        ("Workspace", "ExportHostsDetail", "language"),
+        ("Workspace", "ExportTerminalsBindingDesktopsInfoNew", "language"),
+    )
+)
+
 # 全局默认 Content-Type（2026-09 起）：real lane 全部请求（含无 body 的 GET/DELETE）
 # setdefault application/json——官方 SDK 全局携带 CT 且从不注入 body 为既成先例；
 # SDK-HMAC-SHA256 签名排除 content-type，加头对签名输出逐字节不变；显式传入不覆盖，
@@ -247,6 +278,60 @@ def _validation_view(node: Any) -> Any:
     展示层（get_api）/缓存 doc/离线产物均不经此变换——元数据真值不丢。
     """
     return _strip_for_validation(node)
+
+
+def apply_declared_defaults(op: dict[str, Any], product: str, api_name: str,
+                            method: str,
+                            params: dict[str, Any] | None) \
+        -> tuple[dict[str, Any], dict[str, Any]]:
+    """required query 参数缺省且元数据声明 default 时填充该默认值（P1）。
+
+    触发条件（全部满足才填充）：
+    - ``method`` 为 GET（安全方法门——错在响应中可见、可重查；语料实测
+      12 个非 GET required+default 案例含硬删/强制覆盖语义，一律不填）；
+    - ``in=query`` ∧ ``required`` 真值 ∧ ``default`` 非 None 且非空/纯空白
+      字符串（空串为「无默认」占位工件）∧ 用户值为 None（未传或显式 null）；
+    - ``(product, api, param)`` 不在 ``_FILL_DENYLIST``（伪造/钉死值案例）。
+
+    守卫：default 须过声明类型检查（``_TYPE_CHECKS``）与 enum（若有）——
+    不过则跳过填充（保持既有拒绝行为，绝不报错；守卫与 validate_params
+    同表 ``_TYPE_CHECKS``，口径共享）。显式传值永不覆盖；幂等。
+
+    copy-on-write：无填充返回原对象（identity 可断言）；有填充返回新 dict，
+    不变更调用方 dict（可组合性；审计快照纯净另由 service 入口拷贝保证——
+    service.execute_api 首行 ``dict(params)`` 是承重边界）。
+    """
+    params = params or {}
+    if method.upper() != "GET":
+        return params, {}
+    deny_key_base = (product.casefold(), api_name.casefold())
+    applied: dict[str, Any] = {}
+    for p in op.get("parameters") or []:
+        if not isinstance(p, dict) or p.get("in") != "query":
+            continue
+        name = p.get("name")
+        if not isinstance(name, str):
+            continue
+        default = p.get("default")
+        if (not p.get("required") or default is None
+                or params.get(name) is not None):
+            continue
+        if isinstance(default, str) and not default.strip():
+            continue                     # 空串/纯空白 = 「无默认」占位
+        if (*deny_key_base, name.casefold()) in _FILL_DENYLIST:
+            continue
+        ptype = p.get("type")
+        check = _TYPE_CHECKS.get(ptype) if isinstance(ptype, str) else None
+        if check is not None and not check(default):
+            continue
+        enum = p.get("enum")
+        if isinstance(enum, list) and default not in enum:
+            continue
+        if not applied:
+            params = dict(params)         # copy-on-write：首次填充才复制
+        params[name] = default
+        applied[name] = default
+    return params, applied
 
 
 def validate_params(doc: dict[str, Any], path: str, op: dict[str, Any],
@@ -559,7 +644,8 @@ def execute_api(location: ApiLocation, product: str, api_name: str,
                 region: str, params: dict[str, Any], *,
                 executor: ApiExecutor,
                 spill: SpillConfig | None = None,
-                extract: ExtractSpec | None = None) -> ExecuteResult:
+                extract: ExtractSpec | None = None,
+                applied_defaults: dict[str, Any] | None = None) -> ExecuteResult:
     """经执行接缝发出操作：executor adapter 请求 → 响应规范化 → 信封包装。
 
     safety 已由 ToolService 完成；lane 决策（mock/obs/real）在 service 单点
@@ -567,6 +653,9 @@ def execute_api(location: ApiLocation, product: str, api_name: str,
     RequestRefusal（真实 lane 的路径参数/host 拒绝）转 {ok: false, reason}。
     spill 配置透传响应规范化：超限 body 完整落盘（S12 层级 1）。
     extract（_jsonpath 投影）透传响应规范化：全命中替换 body，未命中保 body（自纠面）。
+    applied_defaults（P1）：service 层 declared default 填充的 {name: value}，
+    成功臂附加（mock/real 单一 merge 点）；拒绝路径（RequestRefusal）不携带
+    ——对齐「拒绝不注入 hints」约定。
     """
     try:
         resp = executor.request(location, product, api_name, region, params)
@@ -575,4 +664,6 @@ def execute_api(location: ApiLocation, product: str, api_name: str,
     out = normalize_response(resp, spill, stem=f"{product}-{api_name}",
                              extract=extract)
     out.update({"ok": True, "product": product, "api": api_name})
+    if applied_defaults:
+        out["applied_defaults"] = applied_defaults
     return out

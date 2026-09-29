@@ -399,6 +399,9 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         region 决定目标端点，与 get_api 使用同一 region；路径含 `{project_id}`
         或依赖 `X-Project-Id` 头的 API 跨 region 执行时，在 params 显式提供目标
         region 的 project_id；无效 region 时元数据静默回退默认 region 文档。
+        GET 请求的 required query 参数未传而元数据声明了 default 时，网关自动
+        填充该默认值（如 DNS ListPrivateZones 不传 type 自动补 private），
+        结果信封 applied_defaults 披露实际填充值；显式传值永不覆盖。
         OBS 对象上传/下载（PutObject/GetObject/AppendObject/UploadPart）恒走预签发：
         直接返回 presign 信封（url/method/expires_in + signed_content_type +
         headers 照抄清单），客户端凭 URL 直连 OBS 完成字节流，不经 gateway、

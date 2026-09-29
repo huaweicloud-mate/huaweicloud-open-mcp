@@ -865,3 +865,169 @@ def test_execute_api_passes_extract(mini_detail):
                               extract=_extract("$.total"))
     assert out["ok"] is True
     assert out["body"] == 1
+
+
+# ---------- apply_declared_defaults（P1：required query 参数 declared default 填充） ----------
+
+def _dns_type_op(default="private", enum=None, ptype="string", required=True):
+    """DNS:ListPrivateZones 形状的 op（手写字面量，独立真值）。"""
+    decl = {"name": "type", "in": "query", "type": ptype, "required": required,
+            "description": "待查询域名的类型"}
+    if default is not ...:
+        decl["default"] = default
+    if enum is not None:
+        decl["enum"] = enum
+    return {"operationId": "ListPrivateZones",
+            "parameters": [decl, {"name": "limit", "in": "query", "type": "integer"}],
+            "responses": {"200": {"description": "OK"}}}
+
+
+def _apply(op, params, method="get", product="DNS", api="ListPrivateZones"):
+    return execute.apply_declared_defaults(op, product, api, method, params)
+
+
+def test_fill_applies_declared_default_and_copies():
+    op = _dns_type_op()
+    params = {}
+    out, applied = _apply(op, params)
+    assert out == {"type": "private"}
+    assert applied == {"type": "private"}
+    assert params == {}                       # 调用方 dict 不变（copy-on-write）
+
+
+def test_fill_explicit_value_never_overridden():
+    op = _dns_type_op(enum=["private", "public"])
+    out, applied = _apply(op, {"type": "public"})
+    assert out == {"type": "public"}
+    assert applied == {}
+
+
+def test_fill_identity_when_no_candidate():
+    op = _dns_type_op(default=None)           # default 缺失（None）
+    params = {"limit": 1}
+    out, applied = _apply(op, params)
+    assert out is params                      # 无填充恒等返回原对象
+    assert applied == {}
+
+
+def test_fill_get_only():
+    """安全方法门：非 GET 不填充（语料 12 个非 GET required+default 含破坏性默认）。"""
+    op = _dns_type_op()
+    for method in ("post", "put", "delete", "patch"):
+        out, applied = _apply(op, {}, method=method)
+        assert out == {} and applied == {}, method
+
+
+def test_fill_skips_empty_or_whitespace_default():
+    """空/纯空白 default 为「无默认」占位（语料 COC::ListSubTickets 等 2 例）。"""
+    for d in ("", "  "):
+        op = _dns_type_op(default=d)
+        out, applied = _apply(op, {})
+        assert out == {} and applied == {}, repr(d)
+
+
+def test_fill_skips_type_mismatch_default():
+    op = _dns_type_op(default=500, ptype="integer")   # int 声明 vs int 值：合法
+    assert _apply(op, {})[1] == {"type": 500}
+    op = _dns_type_op(default="500", ptype="integer")  # str 值 vs int 声明：跳过
+    out, applied = _apply(op, {})
+    assert out == {} and applied == {}
+
+
+def test_fill_skips_enum_mismatch_default():
+    op = _dns_type_op(default="private", enum=["public"])
+    out, applied = _apply(op, {})
+    assert out == {} and applied == {}
+
+
+def test_fill_skips_denylisted_param():
+    """deny 名单（语料伪造值）：过期日期/字符串化 None/钉死选择——保持今日拒绝。"""
+    op = {
+        "operationId": "ShowJobSuccessRatio",
+        "parameters": [
+            {"name": "start_time", "in": "query", "type": "string",
+             "required": True, "default": "2022-01-04"},
+        ],
+        "responses": {"200": {"description": "OK"}},
+    }
+    out, applied = _apply(op, {}, product="CodeArtsBuild", api="ShowJobSuccessRatio")
+    assert out == {} and applied == {}
+
+
+def test_fill_skips_denylist_case_insensitive():
+    op = _dns_type_op()
+    out, applied = _apply(op, {}, product="dns", api="listprivatezones")
+    assert out == {"type": "private"}         # DNS 不在名单——正常填充（反例锚定）
+
+
+def test_fill_skips_non_query_and_non_required():
+    op = {"operationId": "X", "parameters": [
+        {"name": "h", "in": "header", "type": "string", "required": True,
+         "default": "v"},
+        {"name": "opt", "in": "query", "type": "string", "required": False,
+         "default": "v"},
+    ], "responses": {"200": {"description": "OK"}}}
+    out, applied = _apply(op, {})
+    assert out == {} and applied == {}        # 仅 query ∧ required
+
+
+def test_fill_idempotent():
+    op = _dns_type_op()
+    once, applied = _apply(op, {})
+    twice, applied2 = _apply(op, once)
+    assert once == twice == {"type": "private"}
+    assert applied2 == {}                     # 二次调用无新填充
+    assert twice is once                      # 已显式在场 → 恒等
+
+
+def test_fill_none_params_treated_as_empty():
+    op = _dns_type_op()
+    out, applied = _apply(op, None)
+    assert out == {"type": "private"}
+    assert applied == {"type": "private"}
+
+
+def test_fill_multiple_params_one_pass():
+    op = {"operationId": "X", "parameters": [
+        {"name": "type", "in": "query", "type": "string", "required": True,
+         "default": "private"},
+        {"name": "engine", "in": "query", "type": "string", "required": True,
+         "default": "kafka", "enum": ["kafka"]},
+    ], "responses": {"200": {"description": "OK"}}}
+    out, applied = _apply(op, {})
+    assert out == {"type": "private", "engine": "kafka"}
+    assert applied == {"type": "private", "engine": "kafka"}
+
+
+def test_fill_explicit_null_treated_as_absent():
+    op = _dns_type_op()
+    out, applied = _apply(op, {"type": None})
+    assert out == {"type": "private"}
+    assert applied == {"type": "private"}
+
+
+def test_execute_api_envelope_carries_applied_defaults(mini_detail):
+    """信封单一 merge 点：execute_api 成功臂附加 applied_defaults。"""
+    op = _dns_type_op()
+    doc = {"swagger": "2.0", "host": "h.example.com", "basePath": "/",
+           "paths": {"/v2/zones": {"get": op}}, "definitions": {}}
+    loc = ApiLocation.find(doc, "ListPrivateZones")
+    client = StubClient([{"status": 200, "headers": {}, "body": {"zones": []}}])
+    # 填充由 service 层完成（apply_declared_defaults），本接缝消费其产物
+    out = execute.execute_api(loc, "DNS", "ListPrivateZones", "cn-north-4",
+                              {"type": "private"},
+                              executor=execute.RealApiExecutor(client, CRED),
+                              applied_defaults={"type": "private"})
+    assert out["ok"] is True
+    assert out["applied_defaults"] == {"type": "private"}
+    assert client.calls[0][3] == {"type": "private"}   # 填充值进 query
+
+
+def test_execute_api_without_applied_defaults_unchanged(mini_detail):
+    """回归红线：未传 applied_defaults 的信封不出现该字段。"""
+    loc = _get_op(mini_detail)
+    client = StubClient([{"status": 200, "headers": {}, "body": {}}])
+    out = execute.execute_api(loc, "ECS", "ListServers", "cn-north-4", {"limit": 1},
+                              executor=execute.RealApiExecutor(client, CRED))
+    assert out["ok"] is True
+    assert "applied_defaults" not in out
