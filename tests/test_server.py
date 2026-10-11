@@ -110,21 +110,22 @@ def test_discover_mode_tools_exclude_openapi():
         assert tool not in _tool_names(app)
 
 
-def test_manage_policy_description_notes_hot_reload_and_confirm():
+def test_manage_policy_description_notes_list_only_and_operator_path():
     app = build_app()
     desc = app._tool_manager._tools["manage_policy"].description
-    assert "无需重启" in desc
-    assert "向用户确认" in desc
-    assert "session" in desc and "temporary" in desc and "permanent" in desc
+    assert "action=list" in desc
+    assert "操作员" in desc and "policy 文件" in desc
+    assert "热生效" in desc and "无需重启" in desc
+    assert "confirm=true" in desc            # 单次执行确认路径指引
 
 
-def test_discover_manage_policy_description_notes_confirm():
+def test_discover_manage_policy_description_notes_list_only():
     from mcp_discover.config import DiscoverConfig
     from mcp_discover.server import build_discover_app
     app = build_discover_app(DiscoverConfig())
     desc = app._tool_manager._tools["manage_policy"].description
-    assert "向用户确认" in desc
-    assert "session" in desc and "temporary" in desc and "permanent" in desc
+    assert "action=list" in desc
+    assert "操作员" in desc and "policy 文件" in desc
 
 
 # ---------- 提示注入（hints） ----------

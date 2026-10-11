@@ -1,18 +1,29 @@
 """PolicyConsent：safety policy 变更的 MCP elicitation 交互语义（深模块）。
 
 Interface（调用者需知的全部）：
-- ``PolicyConsent(mode, elicit, grant)`` + ``offer_grant`` / ``gate_change`` 两方法；
+- ``PolicyConsent(mode, elicit, grant)`` + ``offer_grant`` / ``confirm_grant``
+  两方法；
+- ``offer_grant`` 返回 ``GrantOutcome``：GrantRefused（未授予，envelope 为
+  返回调用方的 denial）| GrantAccepted（已授予，rules 为规则清单，调用方经
+  ``offer_grant_and_retry`` 以原参数重放原操作）；
+- ``offer_grant_and_retry(consent, offer, denial, retry)``：授予成功后重放
+  恰一次并返回执行结果（三个工具包装层共用编排）；
+- ``confirmed_grant_and_retry(consent, offer, denial, retry)``：off 模式
+  confirm 快路径——调用方断言用户已确认，不经问询直接授予并重放恰一次；
+- ``manage_policy_list_only(manage, action, ...)``：manage_policy 工具体
+  （两模式共享，list-only——add/remove 结构化拒绝，防 agent 绕过用户自授）；
 - ``ElicitFn`` adapter 契约：发送 elicitation 并归一化为 ``ElicitOutcome``，
   返回 None 表示客户端不支持 elicitation（capability 缺失 / 请求失败）；
 - ``parse_elicit_mode`` 解析 --elicitation / HUAWEICLOUD_MCP_ELICIT。
 
 mode 语义（implementation 内聚，不外泄）：
 - off      从不 elicit：offer_grant 保持拒绝，reason 追加 fallback_hint
-           （prompt 兜底指引：经交互式问询确认后 manage_policy 授予）；
+           （prompt 兜底指引：confirm 快路径 + 操作员 policy 文件）；
 - auto     尝试 elicit；客户端不支持 → 降级为 prompt 兜底（WARNING，
            reason 追加 fallback_hint，语义同 off）；
-- required 客户端不支持 → gate_change 返回可操作 reason（fail-closed），
-           offer_grant 拒绝路径不问询、reason 追加 fallback_hint。
+- required 与 auto 行为一致（其曾有的差异——manage_policy 写面 fail-closed
+           ——已随 2026-10 工具面 list-only 收敛消失；保留枚举值兼容既有
+           部署启动参数）。
 
 缺省 off（2026-09 起）：各 code agent 对 elicitation 支持参差，auto 的降级路径使
 确认门语义随客户端漂移；默认关闭保持跨客户端行为一致（fail-safe），需要交互
@@ -23,6 +34,7 @@ mode 语义（implementation 内聚，不外泄）：
 Protocol 接收 MCP Context；规则文本知识在 ``safety.policy.grant_rule``。
 """
 
+import inspect
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -35,7 +47,7 @@ logger = logging.getLogger("common.elicit")
 ElicitMode = Literal["auto", "required", "off"]
 ELICIT_MODES: tuple[ElicitMode, ...] = ("auto", "required", "off")
 
-GrantChoice = Literal["api", "api_session", "product", "readonly", "none"]
+GrantChoice = Literal["api_session", "readonly", "product", "api", "none"]
 
 
 class PolicyChangeConfirm(BaseModel):
@@ -45,12 +57,14 @@ class PolicyChangeConfirm(BaseModel):
 
 
 class GrantChoiceConfirm(BaseModel):
-    """拒绝提议五选一表单 schema：api=最小规则（一次性）/ api_session=最小规则
-    （会话内）/ product=产品级规则（会话内）/ readonly=产品级只读规则集
-    （会话内，offer.readonly_rules 存在时可用）/ none=不授予。
+    """拒绝提议五选一表单 schema：api_session=最小规则（会话内）/ readonly=
+    产品级只读规则集（会话内，offer.readonly_rules 存在时可用）/ product=
+    产品级规则（会话内）/ api=最小规则（一次性）/ none=不授予。
 
+    枚举顺序与弹窗/兜底指引文案同序（首次问询即推荐会话档，api 一次性殿后）；
+    按值校验（pydantic Literal + ctx_elicit_fn 成员归一），重排 wire 兼容。
     仅 primitive 枚举字段（MCP spec 限制）；拒绝路径独用，
-    manage_policy 确认门仍用 PolicyChangeConfirm。
+    connect 单一确认（无 coarse_rule 的最小确认）仍用 PolicyChangeConfirm。
     """
 
     choice: GrantChoice
@@ -86,6 +100,40 @@ class ElicitOutcome:
     choice: GrantChoice | None = None
 
 
+@dataclass(frozen=True)
+class GrantRefused:
+    """未发生任何授予：envelope 为返回给调用方的 denial（可能已增强——
+    off 档/客户端不支持路径追加 fallback_hint，授予失败附失败原因）。
+
+    防御路径（非 denial 形状输入）原样透传入参，故类型为 Any 而非
+    Mapping——调用方对 envelope 只做透传，不做键访问。"""
+
+    envelope: Any
+
+
+@dataclass(frozen=True)
+class GrantAccepted:
+    """发生授予：rules 为已授予规则文本（readonly 规则集为已成功子集）；
+    failed 为 readonly 规则集授予失败的子集（非 readonly 路径恒空）——
+    ``offer_grant_and_retry`` 在重试成功信封 reason 披露回执、重试仍被
+    policy 拒绝时并入上下文（均可再次调用重新提议或由操作员编辑 policy 文件
+    补授）。调用方应经
+    ``offer_grant_and_retry`` 以原参数重放原操作。"""
+
+    rules: tuple[str, ...]
+    failed: tuple[str, ...] = ()
+
+
+GrantOutcome: TypeAlias = GrantRefused | GrantAccepted
+
+
+# policy 拒绝 reason 形态前缀（safety/policy.py check/check_server 三态同前缀：
+# 拒绝执行 {product}:{api} / 拒绝调用 {server}:{tool} / 拒绝连接 {server}）——
+# offer_grant_and_retry 的重试上下文门控判据。elicit 不 import safety（common
+# 公共底座边界），此前缀是两模块间的文档化字符串契约。
+_POLICY_DENIAL_PREFIX = "safety policy 拒绝"
+
+
 ElicitFn: TypeAlias = Callable[[str, type[BaseModel]], Awaitable[ElicitOutcome | None]]
 GrantFn: TypeAlias = Callable[[str, str | None], dict[str, Any]]
 
@@ -104,89 +152,86 @@ def parse_elicit_mode(raw: str | None) -> ElicitMode:
     return "off"
 
 
-def change_message(action: str, line: str | list[str]) -> str:
-    """manage_policy add/remove 确认弹窗文案（line 为数组时整批一次确认）。"""
-    if isinstance(line, list):
-        lines = [str(x) for x in line if str(x).strip()]
-        joined = "、".join(f"'{x}'" for x in lines)
-        if action == "add":
-            return (f"确认新增 {len(lines)} 条 safety policy 规则：{joined}？"
-                    "整批共享同一 scope，缺省仅在当前会话内生效（重启即失，无需回收）；"
-                    '需跨重启持久时显式传 scope="permanent"（写入策略文件）。')
-        if action == "remove":
-            return f"确认移除 {len(lines)} 条 safety policy 规则：{joined}？"
-        return f"确认对 safety policy 执行 {action}（{len(lines)} 条）：{joined}？"
-    if action == "add":
-        return (f"确认新增 safety policy 规则 '{line}'？"
-                "缺省仅在当前会话内生效（重启即失，无需回收）；"
-                '需跨重启持久时显式传 scope="permanent"（写入策略文件）。')
-    if action == "remove":
-        return f"确认移除 safety policy 规则 '{line}'？"
-    return f"确认对 safety policy 执行 {action}：'{line}'？"
+def _minimal_scope_note(scope: str) -> str:
+    """minimal_scope 档位的弹窗语义（connect 注入 session 档时如实渲染）。"""
+    if scope == "session":
+        return "会话内授权：本次会话内持续放行该目标"
+    return "一次性授权：仅放行下一次执行，用后即焚"
 
 
-def denial_message(offer: DenialOffer) -> str:
+def denial_message(offer: DenialOffer, minimal_scope: str = "once") -> str:
     """拒绝路径提议授予弹窗文案。
 
-    有 coarse_rule：并列 api/api_session/product/none 四选项（api=一次性最小规则，
-    api_session=会话内最小规则，product=会话内产品级规则，none=不授予）；
-    offer.readonly_rules 存在时在 none 前并列 readonly=产品级只读规则集；
-    无 coarse_rule：单一最小规则二选一确认（一次性语义，与历史文案一致）。
+    有 coarse_rule：选项按推荐度排序（api_session/readonly?/product/api/none，
+    首次问询即推荐会话档；api 一次性档仅明确单次使用时选择——枚举顺序与
+    文案顺序解耦）；无 coarse_rule：单一最小规则二选一确认，scope 语义按
+    minimal_scope 渲染（connect 注入 session 档时弹窗如实陈述实际授予档位）。
     """
     if offer.coarse_rule:
         readonly = ""
         if offer.readonly_rules:
             readonly = (f"- readonly：授予产品级只读规则集 "
                         f"（{'/'.join(offer.readonly_rules)}，"
-                        "会话内生效，重启即失）\n")
+                        "会话内生效，重启即失；浏览/多步任务首选）\n")
+        api_qualifier = "" if minimal_scope == "session" else "；仅明确单次使用时选择"
         return (f"{offer.reason}\n\n"
                 f"是否授予规则放行 {offer.subject}？\n"
-                f"- api：仅授予最小规则 '{offer.rule}'"
-                "（一次性：仅放行下一次执行，用后即焚）\n"
                 f"- api_session：授予最小规则 '{offer.rule}'"
-                "（会话内：本次会话内持续放行该目标，重启即失）\n"
+                "（会话内：本次会话内持续放行该目标，重启即失；同一目标重复使用首选）\n"
+                f"{readonly}"
                 f"- product：授予产品级规则 '{offer.coarse_rule}'"
                 "（会话内生效，覆盖该产品全部 API，重启即失；"
-                "需持久授权请经 manage_policy 显式授予）\n"
-                f"{readonly}"
+                "需持久授权请由操作员编辑 policy 文件）\n"
+                f"- api：仅授予最小规则 '{offer.rule}'"
+                f"（{_minimal_scope_note(minimal_scope)}{api_qualifier}）\n"
                 "- none：不授予")
     return (f"{offer.reason}\n\n"
             f"是否授予最小规则 '{offer.rule}' 放行 {offer.subject}？"
-            "规则为一次性授权：仅放行下一次执行，用后即焚"
-            "（重启即失，无需回收；需持久授权请经 manage_policy 显式授予）。")
+            f"规则为{_minimal_scope_note(minimal_scope)}"
+            "（重启即失，无需回收；需持久授权请由操作员编辑 policy 文件）。")
 
 
-def fallback_hint(offer: DenialOffer) -> str:
+def fallback_hint(offer: DenialOffer, *,
+                  confirm_available: bool = False) -> str:
     """未发生问询路径（off 档 / 客户端不支持）的拒绝兜底指引。
 
-    prompt 约定（软兜底）：引导调用方 LLM 经对话/交互式问询（如 question 工具）
-    向用户确认后经 manage_policy 授予；选项语义与 elicitation 五选一表单一致
-    （coarse 存在时 api/api_session/product/readonly?/none，否则仅最小规则），
-    不提及协议级 elicitation。
+    confirm_available（调用方按 consent mode 传入，仅 off 档为 true）：指引含
+    confirm 快路径（同次调用完成授予与执行）；false（auto/required 降级路径——
+    confirm 在这些模式被包装层静态忽略）不指引快路径——避免 agent 照做
+    confirm=true 后落入逐字节相同的拒绝循环。两分支的持久/批量/更宽档位统一
+    指向操作员 policy 文件编辑（agent 工具面无写路径——manage_policy
+    list-only）。prompt 约定（软兜底）：经对话/交互式问询（如 question 工具）
+    向用户确认。不提及协议级 elicitation。
     """
-    base = ("；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认后，"
-            "调用 manage_policy 授予（line 支持传数组一次批量授予）：")
+    if confirm_available:
+        base = ("；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认，"
+                "确认后重传本工具并传 confirm=true（服务端在同次调用内授予最小规则"
+                "并直接执行）；批量/持久/更宽档位（如产品级、只读规则集）请操作员"
+                "直接编辑 policy 文件（热生效、无需重启）：")
+    else:
+        base = ("；本部署当前无法经协议问询确认（客户端不支持 elicitation），"
+                "请操作员编辑 policy 文件授予规则（热生效、无需重启）：")
     if offer.coarse_rule:
         readonly = ""
         if offer.readonly_rules:
             readonly = (f"/readonly=产品级只读规则集 '{'/'.join(offer.readonly_rules)}'"
-                        "（会话内，重启即失）")
-        return (base + f"api=最小规则 '{offer.rule}'（一次性）/"
-                f"api_session=最小规则 '{offer.rule}'（会话内）/"
-                f"product=产品级规则 '{offer.coarse_rule}'（会话内）"
-                f"{readonly}/none=不授予")
+                        "（浏览/多步任务首选）")
+        return (base + f"api_session=最小规则 '{offer.rule}'（同一目标重复使用首选）"
+                f"{readonly}"
+                f"/product=产品级规则 '{offer.coarse_rule}'"
+                f"/api=最小规则 '{offer.rule}'（仅明确单次使用）")
     return base + f"规则 '{offer.rule}'"
 
 
 class PolicyConsent:
     """safety policy 变更的确认机制：何时问、怎么问、如何解释回答。
 
-    offer_grant 用于拒绝路径（accept → 自动授予并增强 denial；coarse_rule
+    offer_grant 用于拒绝路径（accept → 授予并返回 GrantAccepted；coarse_rule
     存在时五选一——api=最小规则（minimal_scope 档）、api_session=最小规则
     （固定 session 档）、product=产品级规则（固定 session 档）、
     readonly=产品级只读规则集（offer.readonly_rules 存在时可用，逐条 session
-    档授予 best-effort 无回滚）、none=不授予）；gate_change 用于
-    manage_policy add/remove（check 习语：None=放行）。
+    档授予 best-effort 无回滚，任一条成功即 GrantAccepted 携带已成功子集）、
+    none=不授予）；confirm_grant 用于 off 模式断言式确认快路径。
 
     scope 知识内聚于本模块：choice→scope 映射（api→minimal_scope，
     api_session/product/readonly→session）是接口不变量，调用方仅经
@@ -207,105 +252,144 @@ class PolicyConsent:
         self._minimal_scope = minimal_scope
 
     async def offer_grant(self, offer: DenialOffer,
-                          denial: Mapping[str, Any]) -> Mapping[str, Any]:
-        """对 policy 拒绝提议授予；返回原 denial 或增强后的 denial（防御非 dict 输入）。
+                          denial: Mapping[str, Any]) -> GrantOutcome:
+        """对 policy 拒绝提议授予；返回类型化 GrantOutcome（防御非 dict 输入）。
 
-        增强 result 为 dict（原 denial 键集 + granted_rule/reason 增强）；
-        其余路径原样返回入参对象。coarse_rule 存在时以 GrantChoiceConfirm
-        四选一问询，否则以 PolicyChangeConfirm 单一确认（向后兼容）。
-        未发生问询即保持拒绝的路径（off 档 / 客户端不支持）——reason 追加
-        ``fallback_hint`` 兜底指引（prompt 约定，经交互式问询后 manage_policy
-        授予）；decline/cancel/refuse 与授予路径不加（用户已表态或已入流程）。
+        未授予 → GrantRefused（envelope 为原 denial 或增强后的 denial：off 档/
+        客户端不支持追加 ``fallback_hint`` 兜底指引，授予失败附失败原因；
+        decline/cancel/refuse 与 none 选择保持原 denial——用户已表态不加指引）；
+        授予成功 → GrantAccepted（rules 为已授予规则文本，调用方经
+        ``offer_grant_and_retry`` 以原参数重放原操作）。coarse_rule 存在时以
+        GrantChoiceConfirm 枚举问询，否则以 PolicyChangeConfirm 单一确认。
         """
         if not (isinstance(denial, dict) and denial.get("ok") is False):
-            return denial
+            return GrantRefused(denial)
         if self.mode == "off":
-            return self._with_fallback_hint(offer, denial)
-        outcome = await self._ask(denial_message(offer),
+            return GrantRefused(self._with_fallback_hint(offer, denial))
+        outcome = await self._ask(denial_message(offer, self._minimal_scope),
                                   GrantChoiceConfirm if offer.coarse_rule
                                   else PolicyChangeConfirm)
         if outcome is None:
             logger.warning("grant offer skipped: client unsupported elicitation (mode=%s)",
                            self.mode)
-            return self._with_fallback_hint(offer, denial)
+            return GrantRefused(self._with_fallback_hint(offer, denial))
         if outcome.action == "accept" and outcome.choice == "readonly":
             return self._grant_readonly(offer, denial)
         if outcome.action == "accept" and offer.coarse_rule:
             picked = self._pick_coarse(outcome, offer)
             if picked is None:   # none / 缺失 / 未知 choice：不授予
-                return denial
+                return GrantRefused(denial)
             rule, scope = picked
         elif outcome.action == "accept" and outcome.confirm:
             rule, scope = offer.rule, self._minimal_scope
         else:
             logger.warning("grant offer declined: %s (action=%s)",
                            offer.coarse_rule or offer.rule, outcome.action)
-            return denial
+            return GrantRefused(denial)
         grant = self._grant
         if grant is None:
             logger.warning("grant offer accepted but no grant fn wired: %s", rule)
-            return denial
+            return GrantRefused(denial)
         result = grant(rule, scope)
         if result.get("ok"):
             logger.info("grant accepted: %s (scope=%s)", rule, scope)
-            if (scope == "session" and offer.coarse_rule is not None
-                    and rule == offer.coarse_rule):
-                kind = "会话内产品级规则"
-            elif scope == "session":
-                kind = "会话内最小规则"
-            else:
-                kind = "一次性规则"
-            return {**denial, "granted_rule": rule,
-                    "reason": (f"{denial.get('reason', '')}"
-                               f"；用户已通过确认授予{kind} {rule}"
-                               f"（热生效），请重新调用")}
+            return GrantAccepted((rule,))
         reason = result.get("reason") or "未知原因"
         logger.warning("grant failed: %s: %s", rule, reason)
-        return {**denial,
-                "reason": f"{denial.get('reason', '')}；自动授予 {rule} 失败: {reason}"}
+        return GrantRefused(
+            {**denial,
+             "reason": f"{denial.get('reason', '')}；自动授予 {rule} 失败: {reason}"})
 
-    @staticmethod
-    def _with_fallback_hint(offer: DenialOffer,
+    def confirm_grant(self, offer: DenialOffer,
+                      denial: Mapping[str, Any]) -> GrantOutcome:
+        """off 模式 confirm 快路径：不经问询直接授予最小规则（minimal_scope 档）。
+
+        调用方（包装层）仅在 consent mode=off 且工具入参 confirm=true 时路由
+        到此（双保险：本方法再验 mode——off 档部署信任调用方经对话问询确认后
+        自授，此处把内部授予接缝的调用并入同次工具调用；auto/required 的确认
+        必须走协议问询，持久/批量规则由操作员编辑 policy 文件，误路由返回
+        结构化拒绝——断言式确认不得绕过部署开启的确认门）。授权经注入
+        grant fn（service 层 manage_policy add 内部接缝），openapi 侧审计照常
+        入账（与操作员经文件授予的审计形态互见）；scope 取 minimal_scope
+        （execute/call_tool once、connect session）。
+        """
+        if not (isinstance(denial, dict) and denial.get("ok") is False):
+            return GrantRefused(denial)
+        if self.mode != "off":
+            return GrantRefused({**denial, "reason": (
+                f"{denial.get('reason', '')}；confirm 快路径仅在 --elicitation "
+                "off 模式下生效（当前部署的确认经协议问询；持久/批量规则由"
+                "操作员编辑 policy 文件）")})
+        grant = self._grant
+        if grant is None:
+            logger.warning("confirmed grant unavailable: no grant fn wired: %s",
+                           offer.rule)
+            return GrantRefused(denial)
+        result = grant(offer.rule, self._minimal_scope)
+        if result.get("ok"):
+            logger.info("confirmed grant: %s (scope=%s)",
+                        offer.rule, self._minimal_scope)
+            return GrantAccepted((offer.rule,))
+        reason = result.get("reason") or "未知原因"
+        logger.warning("confirmed grant failed: %s: %s", offer.rule, reason)
+        return GrantRefused(self._with_fallback_hint(
+            offer, {**denial,
+                    "reason": f"{denial.get('reason', '')}；自动授予 "
+                              f"{offer.rule} 失败: {reason}"}))
+
+    def _with_fallback_hint(self, offer: DenialOffer,
                             denial: Mapping[str, Any]) -> Mapping[str, Any]:
-        """未问询即保持拒绝：reason 追加兜底指引（拒绝本体不变）。"""
-        return {**denial, "reason": denial.get("reason", "") + fallback_hint(offer)}
+        """未问询即保持拒绝：reason 追加兜底指引（拒绝本体不变）。
+
+        指引按 self.mode 感知 confirm 可达性——仅 off 档提 confirm 快路径
+        （auto/required 降级路径的 confirm 被包装层静态忽略，指引它即循环）。
+        """
+        return {**denial,
+                "reason": denial.get("reason", "") + fallback_hint(
+                    offer, confirm_available=self.mode == "off")}
 
     def _grant_readonly(self, offer: DenialOffer,
-                        denial: Mapping[str, Any]) -> Mapping[str, Any]:
+                        denial: Mapping[str, Any]) -> GrantOutcome:
         """readonly 选择：逐条授予产品级只读规则集（session 档，best-effort 无回滚）。
 
         session 档为内存 overlay（无文件 I/O）且规则文本构造期校验，add 失败
-        近乎不可达；部分失败如实报告已授予/失败明细（只读 + 会话内 + 重启即失，
-        部分授予无害），不引入 revoke seam（deletion test）。
+        近乎不可达；任一条成功即 GrantAccepted（rules 为已成功子集、failed
+        为失败子集——重试可能命中已授予规则，失败明细经 WARNING 留痕并在
+        重试信封披露回执；只读 + 会话内 + 重启即失，部分授予无害），零成功
+        保持拒绝（envelope 附失败明细与补授指引），不引入 revoke seam
+        （deletion test）。
         """
         grant = self._grant
         rules = offer.readonly_rules or []
         if grant is None or not rules:
             logger.warning("readonly grant unavailable: rules=%s grant_wired=%s",
                            len(rules), grant is not None)
-            return denial
+            return GrantRefused(denial)
         granted: list[str] = []
-        failed: list[str] = []
+        failed_rules: list[str] = []
+        failed_details: list[str] = []
         for rule in rules:
             result = grant(rule, "session")
             if result.get("ok"):
                 granted.append(rule)
             else:
-                failed.append(f"{rule}: {result.get('reason') or '未知原因'}")
-        if not failed:
-            logger.info("grant accepted: readonly ruleset (%d rules, scope=session)",
-                        len(granted))
-            return {**denial, "granted_rule": ";".join(granted),
-                    "reason": (f"{denial.get('reason', '')}"
-                               f"；用户已通过确认授予会话内产品级只读规则 "
-                               f"（{';'.join(granted)}，热生效），请重新调用")}
-        logger.warning("readonly grant partial: granted=%d failed=%d",
-                       len(granted), len(failed))
-        parts = [f"{denial.get('reason', '')}；readonly 规则集部分授予失败"]
+                failed_rules.append(rule)
+                failed_details.append(
+                    f"{rule}: {result.get('reason') or '未知原因'}")
         if granted:
-            parts.append(f"已授予（会话内）: {';'.join(granted)}")
-        parts.append(f"失败: {';'.join(failed)}；可经 manage_policy 手动补授")
-        return {**denial, "reason": "；".join(p for p in parts if p)}
+            if failed_rules:
+                logger.warning("readonly grant partial: granted=%d failed=%d (%s)",
+                               len(granted), len(failed_rules), ";".join(failed_details))
+            else:
+                logger.info("grant accepted: readonly ruleset (%d rules, scope=session)",
+                            len(granted))
+            # failed 为裸规则文本（操作员编辑 policy 文件可直接使用的 line 形态），
+            # 失败原因仅留 WARNING——回执披露规则即可自纠，不复述 grant 内部原因
+            return GrantAccepted(tuple(granted), failed=tuple(failed_rules))
+        logger.warning("readonly grant failed: %d rules all failed", len(failed_details))
+        reason = (f"{denial.get('reason', '')}；readonly 规则集授予失败: "
+                  f"{';'.join(failed_details)}；可由操作员编辑 policy 文件补授")
+        return GrantRefused({**denial, "reason": reason})
 
     def _pick_coarse(self, outcome: ElicitOutcome,
                      offer: DenialOffer) -> tuple[str, str] | None:
@@ -324,28 +408,6 @@ class PolicyConsent:
         if choice not in ("api", "api_session", "product", "none"):
             logger.warning("grant offer: unknown choice %r, keeping denial", choice)
         return None
-
-    async def gate_change(self, action: str,
-                          line: str | list[str]) -> str | None:
-        """manage_policy add/remove 确认门（line 为数组时整批一次确认）。
-        返回 None 放行，返回字符串为拒绝 reason。"""
-        if self.mode == "off":
-            return None
-        outcome = await self._ask(change_message(action, line))
-        if outcome is None:
-            if self.mode == "required":
-                return ("客户端不支持 elicitation，无法完成变更确认"
-                        "（启动参数 --elicitation off 可显式关闭确认机制）")
-            logger.warning("manage_policy proceeds without consent: "
-                           "client unsupported elicitation (mode=auto)")
-            return None
-        if outcome.action == "accept" and outcome.confirm:
-            return None
-        logger.warning("manage_policy blocked: user did not confirm (%s)", action)
-        if isinstance(line, list):
-            label = "、".join(str(x) for x in line if str(x).strip()) or "-"
-            return f"用户未确认该 safety policy 变更（{action}: {label}）"
-        return f"用户未确认该 safety policy 变更（{action}: {line}）"
 
     async def _ask(self, message: str,
                    schema: type[BaseModel] = PolicyChangeConfirm) -> ElicitOutcome | None:
@@ -384,32 +446,94 @@ def ctx_elicit_fn(ctx: ElicitContext) -> ElicitFn:
     return elicit
 
 
-def _gate_line(line: str | list[str] | None) -> str | list[str] | None:
-    """门条件归一：存在非空规则行时返回原形 line（供弹窗渲染），否则 None。"""
-    if isinstance(line, list):
-        return line if any(str(x).strip() for x in line) else None
-    return line.strip() if isinstance(line, str) and line.strip() else None
+MANAGE_POLICY_WRITE_REFUSAL = (
+    "manage_policy 仅保留 action=list（读）——add/remove 已从工具面收敛，"
+    "防止 agent 未经用户确认自授规则。授予路径：单次执行经被拒工具传 "
+    "confirm=true（--elicitation off）；会话内/产品级/只读规则集经被拒工具的 "
+    "elicitation 提议（--elicitation auto/required）；持久/批量/自定义规则由"
+    "操作员直接编辑 policy 文件（热生效、无需重启）。注意：已授予的会话内规则"
+    "随连接/进程结束自动失效，文件编辑不影响在途会话的 overlay 规则")
 
 
-async def gated_manage_policy(
-        consent: "PolicyConsent", manage: Callable[..., Any],
+def manage_policy_list_only(
+        manage: Callable[..., Any],
         action: str, line: str | list[str] | None = None,
         scope: str | None = None,
         ttl_seconds: int | None = None) -> dict[str, Any]:
-    """manage_policy 工具体（openapi/discover 两模式共享）：add/remove 先过确认门。
+    """manage_policy 工具体（openapi/discover 两模式共享）：list-only 读面。
 
-    consent 为调用方按各自 service 构造的 PolicyConsent；manage 为其
-    svc.manage_policy / ds.manage_policy 可调用。其余行为（热更新、scope
-    语义）内聚 PolicyStore，由 manage 委派。line 为数组时整批一次确认
-    （弹窗列出全部规则行），确认后 line 原形透传（信封形状由
-    manage_policy_ops 按入参形状决定）。
+    add/remove 结构化拒绝（``MANAGE_POLICY_WRITE_REFUSAL`` 指向三条合法授予
+    路径）；action=list 原样委派 manage（service 层 manage_policy 仍为内部
+    可写接缝——elicitation/confirm 授予经 functools.partial(svc.manage_policy,
+    "add") 直调，不经本工具面，2026-10 起 agent 可达写面仅此三条确认路径）。
     """
-    gate_line = (_gate_line(line) if (action or "").strip().lower() in ("add", "remove")
-                 else None)
-    if gate_line is not None:
-        blocked = await consent.gate_change(action, gate_line)
-        if blocked:
-            return {"ok": False, "action": action, "reason": blocked}
+    if (action or "").strip().lower() in ("add", "remove"):
+        logger.warning("manage_policy write refused at tool face: %s", action)
+        return {"ok": False, "action": action,
+                "reason": MANAGE_POLICY_WRITE_REFUSAL}
     result: dict[str, Any] = manage(action, line=line, scope=scope,
                                     ttl_seconds=ttl_seconds)
+    return result
+
+
+async def offer_grant_and_retry(
+        consent: "PolicyConsent", offer: DenialOffer,
+        denial: Mapping[str, Any],
+        retry: Callable[[], Any]) -> Any:
+    """提议授予并在成功后重放原操作恰一次（openapi/discover 包装层共用编排）。
+
+    未授予 → 返回（可能增强后的）denial；授予成功 → 调 retry 以原参数重放
+    （同步/异步 thunk 均可，inspect.isawaitable 判据覆盖 coroutine/Task/Future）
+    并返回其结果。readonly 部分授予（outcome.failed 非空）：重试成功时在
+    reason 披露失败子集回执（wire 可选字段，可再次调用重新提议或由操作员
+    编辑 policy 文件补授），
+    重试仍被 policy 拒绝时并入授予上下文。policy 拒绝（reason 前缀门控
+    ``_POLICY_DENIAL_PREFIX``）时在 reason 追加已授予规则上下文与再调用
+    指引（只读规则集不含该接口 / 一次性授权已被并发消费两个场景），
+    不二次弹窗、不循环；其余重试失败（参数校验先于授权门返回、上游执行
+    错误）原样返回不注上下文——自纠面不被污染，once 规则为修正参数后的
+    下一次调用保留。
+    """
+    return await _dispatch_granted_retry(
+        await consent.offer_grant(offer, denial), retry)
+
+
+async def confirmed_grant_and_retry(
+        consent: "PolicyConsent", offer: DenialOffer,
+        denial: Mapping[str, Any],
+        retry: Callable[[], Any]) -> Any:
+    """off 模式 confirm 授予-重放编排：调用方断言用户已确认（对话问询），
+    不经协议问询直接授予最小规则并重放恰一次；信封呈现与问询路径共用
+    ``_dispatch_granted_retry``（重试仍被拒附上下文、其余失败原样返回）。
+    """
+    return await _dispatch_granted_retry(
+        consent.confirm_grant(offer, denial), retry)
+
+
+async def _dispatch_granted_retry(outcome: GrantOutcome,
+                                  retry: Callable[[], Any]) -> Any:
+    """GrantOutcome 已定后的重放编排与信封呈现（问询/断言两条授予路径共用）。"""
+    if isinstance(outcome, GrantRefused):
+        return outcome.envelope
+    result = retry()
+    if inspect.isawaitable(result):
+        result = await result
+    if not isinstance(result, dict):
+        return result
+    reason = result.get("reason")
+    if result.get("ok") is True and outcome.failed:
+        note = (f"readonly 规则集部分授予失败: {';'.join(outcome.failed)}"
+                "（本次已按已授予子集放行，其余可再次调用重新提议或由操作员编辑 "
+                "policy 文件补授）")
+        prefix = f"{reason}；" if isinstance(reason, str) and reason else ""
+        return {**result, "reason": prefix + note}
+    if (result.get("ok") is False and isinstance(reason, str)
+            and reason.startswith(_POLICY_DENIAL_PREFIX)):
+        note = f"；此前用户已确认授予 {';'.join(outcome.rules)}（热生效）"
+        if outcome.failed:
+            note += (f"；部分规则授予失败: {';'.join(outcome.failed)}"
+                     "（可再次调用重新提议或由操作员编辑 policy 文件补授）")
+        note += ("——该拒绝可能因已授予规则未覆盖此目标，或一次性授权已被并发消费，"
+                 "再次调用将重新提议授予")
+        return {**result, "reason": f"{reason}{note}"}
     return result

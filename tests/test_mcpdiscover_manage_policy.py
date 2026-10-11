@@ -121,16 +121,29 @@ def test_policy_denial_offer_server_constructed(tmp_path):
 
 
 def test_policy_denial_offer_server_none_cases(tmp_path):
-    svc, _ = make_service(tmp_path, ["server:@huaweicloud/ecs=allow"])
-    assert svc.policy_denial_offer("@huaweicloud/ecs") is None          # 放行
-    assert svc.policy_denial_offer("@huaweicloud/ecs", "list*") is not None
+    allow_svc, _ = make_service(tmp_path, ["server:@huaweicloud/ecs=allow"])
+    assert allow_svc.policy_denial_offer("@huaweicloud/ecs") is None          # connect 放行
 
     unconfigured = DiscoverService(DiscoverConfig())
     assert unconfigured.policy_denial_offer("@huaweicloud/ecs") is None  # 未配置 store
 
     # reason 不一致（门栓外的其它拒绝）→ 不提议
-    assert svc.policy_denial_offer("@huaweicloud/ecs", "list*",
-                                   denial_reason="其它原因") is None
+    deny_svc, _ = make_service(tmp_path, ["*=deny"])
+    assert deny_svc.policy_denial_offer("@huaweicloud/ecs", "list_servers",
+                                        denial_reason="其它原因") is None
+
+
+def test_policy_denial_offer_wildcard_tool_suppressed(tmp_path):
+    """crafted 通配目标不构造 offer：最小规则载体不接受元字符（coarse_rule
+    是唯一合法通配载体）——confirm/api_session 授予路径不可经 tool="*"
+    升级为全工具/多工具放行。"""
+    svc, _ = make_service(tmp_path, ["*=deny"])
+    for crafted in ("*", "list*", "li?t", "li[s]t"):
+        assert svc.policy_denial_offer("@huaweicloud/ecs", crafted) is None
+    # 具体工具名照常构造（最小粒度）
+    offer = svc.policy_denial_offer("@huaweicloud/ecs", "list_servers")
+    assert offer is not None
+    assert offer.rule == "server:@huaweicloud/ecs:list_servers=allow"
 
 
 # ---------- 一次性授权（once，call_tool dispatch 前） ----------

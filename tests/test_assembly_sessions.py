@@ -75,32 +75,35 @@ def test_http_instructions_append_transport_note(tmp_path):
 
 # ---------- strict_sessions 按传输置位（经真工具面） ----------
 
-def test_http_strict_rejects_session_scope_add_without_identity(tmp_path):
+def test_http_tool_face_is_list_only(tmp_path):
+    """2026-10 起 manage_policy 工具面 list-only（build_app 外部缝合同契约）：
+    add 结构化拒绝指向确认路径与操作员文件；store 层 strict/I2 语义由
+    S18 单测与组合行为测试（F4）覆盖——协议级写面载体已按设计退役。"""
     path = _policy_file(tmp_path, ["*:*=deny"])
     app = build_app(["openapi"], make_args(policy=path, transport="http"))
     out = _call_tool(app, "manage_policy",
                      {"action": "add", "line": "ECS:List*=allow", "scope": "session"})
     assert out["ok"] is False
-    assert "会话身份" in out["reason"]
+    assert "list" in out["reason"] and "confirm=true" in out["reason"]
+    assert "policy 文件" in out["reason"]
 
 
-def test_stdio_keeps_legacy_session_scope_add(tmp_path):
+def test_stdio_tool_face_is_list_only(tmp_path):
     path = _policy_file(tmp_path, ["*:*=deny"])
     app = build_app(["openapi"], make_args(policy=path))
     out = _call_tool(app, "manage_policy",
                      {"action": "add", "line": "ECS:List*=allow", "scope": "session"})
-    assert out["ok"] is True
-    assert out["scope"] == "session"
+    assert out["ok"] is False
+    assert "list" in out["reason"]
 
 
-def test_http_strict_still_allows_permanent_add(tmp_path):
-    path = _policy_file(tmp_path, ["*:*=deny"])
+def test_http_operator_file_rule_visible(tmp_path):
+    """操作员文件路径（持久规则唯一写面）：预置规则经 build_app 装载、list 可见。"""
+    path = _policy_file(tmp_path, ["ECS:List*=allow", "*:*=deny"])
     app = build_app(["openapi"], make_args(policy=path, transport="http"))
-    out = _call_tool(app, "manage_policy",
-                     {"action": "add", "line": "ECS:List*=allow", "scope": "permanent"})
+    out = _call_tool(app, "manage_policy", {"action": "list"})
     assert out["ok"] is True
-    assert json.loads(open(path, encoding="utf-8").read()) == [
-        "ECS:List*=allow", "*:*=deny"]
+    assert "ECS:List*=allow" in [r["line"] for r in out["rules"]]
 
 
 # ---------- 组合行为测试（F4）：middleware → contextvar → store 全链 ----------

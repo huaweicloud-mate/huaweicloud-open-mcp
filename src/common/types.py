@@ -20,8 +20,11 @@ class ClientResponse(TypedDict):
 
 
 class ExecuteResult(TypedDict, total=False):
-    """execute_api 的规范化输出。ok=False 时携带 reason；错误响应携带 error_code/error_msg。
+    """execute_api 的规范化输出。ok=False 时携带 reason（拒绝/错误原因）；错误响应携带 error_code/error_msg。
 
+    reason 在 ok=True 时亦可出现——仅 elicitation readonly 部分授予回执场景
+    （已按已授予子集放行，失败子集在 reason 披露供补授），消费者不得以
+    reason 在场推断失败。
     可选字段声明为可空：并非每条路径都会填充（如拒绝时无 status/body），
     MCP SDK 序列化缺失字段为 null，outputSchema 必须允许 null。
     """
@@ -40,7 +43,6 @@ class ExecuteResult(TypedDict, total=False):
     spill: "SpillInfo | None"  # 超限响应/信封完整落盘（S12）
     extract: "ExtractInfo | None"  # _jsonpath 投影抽取信封（命中/未命中/降级说明）
     applied_defaults: dict[str, Any] | None  # required query 缺省时填充的 declared default（P1；拒绝路径恒无）
-    granted_rule: str | None  # policy 拒绝经用户 elicitation 确认后授予的规则（最小或产品级）
 
 
 class SpillInfo(TypedDict):
@@ -311,7 +313,6 @@ class McpConnectResult(TypedDict, total=False):
     endpoint: str | None
     protocol_version: str | None
     server_info: dict[str, Any] | None
-    granted_rule: str | None
 
 
 class ServerToolsResult(TypedDict, total=False):
@@ -343,7 +344,6 @@ class McpCallResult(TypedDict, total=False):
     error_code: str | None
     error_msg: str | None
     truncated: bool | None
-    granted_rule: str | None
 
 
 class McpDisconnectResult(TypedDict):
@@ -481,7 +481,6 @@ class McpConnectWire(ToolEnvelope, total=False):
     endpoint: str | None
     protocol_version: str | None
     server_info: dict[str, Any] | None
-    granted_rule: str | None
 
 
 class ServerToolsWire(ToolEnvelope, total=False):

@@ -2,7 +2,7 @@
 
 import argparse
 import functools
-from typing import Any, cast
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
@@ -14,7 +14,7 @@ from apie.metadata_corrections import (
     MetadataCorrections,
     parse_metadata_corrections,
 )
-from common.audit import AuditSink, sink_from_path
+from common.audit import AuditSink, _audit_write, sink_from_path
 from common.auth import credentials as cred_mod
 from common.deployment import (
     ENV_AUTH_DEMOTE,
@@ -29,7 +29,15 @@ from common.deployment import (
     Deployment,
     resolve_deployment,
 )
-from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
+from common.elicit import (
+    MANAGE_POLICY_WRITE_REFUSAL,
+    PolicyConsent,
+    confirmed_grant_and_retry,
+    ctx_elicit_fn,
+    manage_policy_list_only,
+    offer_grant_and_retry,
+    parse_elicit_mode,
+)
 from common.hotconf import HotFile
 from common.optconf import watch_opt_file
 from common.types import (
@@ -84,27 +92,34 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 - `execute_api` 执行前强制过 safety policy（allowlist/denylist 白名单）；
 - 未配置 policy 时所有执行被拒绝；
 - 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口；
-- 被拒接口确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认，再调用
-  `manage_policy(action="add", line=...)` 授予规则（如 "OBS:GetObject=allow"，
-  或产品级 "VPC:*=allow"），规则热生效后重试即可通过；问询按五选一口径：
-  api=最小规则（一次性，用后即焚）/ api_session=最小规则（会话内，本次会话内
-  持续放行该 API，重启即失）/ product=产品级规则（会话内，覆盖该产品全部
-  API，重启即失）/ readonly=产品级只读规则集（会话内，List/Show/Get/Query
-  四条通配，浏览类任务首选）/ none=不授予；同会话第二次问询建议直接推荐
-  session 或 readonly 档；
-  部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
-  经 MCP elicitation 弹出同样的五选一提议（结果携带 `granted_rule` 字段）；
-  默认 off 或客户端不支持 elicitation 时，拒绝原因会附带同样的兜底指引，
-  按指引问询确认后再授予；
-- 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
-  （--elicitation off）无弹窗，务必先向用户确认再调用；开启 elicitation 后
-  add/remove 由服务端先经 elicitation 向用户确认；注意 `manage_policy` 是
-  server 内置控制面工具，直接调用即可，不要经 execute_api 路由；
+- 被拒接口确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认；
+  确认后单次执行重传本工具并传 confirm=true（仅 --elicitation off 模式生效，
+  auto/required 下 confirm 被忽略——服务端在同次调用内授予一次性
+  最小规则并直接执行，无需 manage_policy；once 在重放执行时焚毁，再次执行
+  需重新确认）；更宽档位（会话内/产品级/只读规则集）仅在 --elicitation
+  auto/required 部署下经被拒工具的提议表单选择（见下）；持久/批量/自定义
+  规则由操作员编辑 policy 文件（`--policy` 指定，热生效、无需重启）；问询按五选一口径（首次
+  问询即推荐会话档）：api_session=最小规则（会话内，本次会话内持续放行该
+  API，重启即失；单 API 重复使用首选）/ readonly=产品级只读规则集（会话内，
+  List/Show/Get/Query 四条通配；浏览/多步任务首选）/ product=产品级规则
+  （会话内，覆盖该产品全部 API，重启即失）/ api=最小规则（一次性，用后即焚；
+  仅明确单次使用时选择）/ none=不授予；
+  部署开启 elicitation（--elicitation auto/required）时直接重试被拒工具：服务端
+  经 MCP elicitation 弹出同样的五选一提议，用户确认后自动重放一次并直接返回
+  执行结果（无需再次调用）；重试仍被拒时结果附已授予规则上下文（如只读规则集
+  不含该写接口，或一次性授权已被并发消费），再次调用将重新提议；默认 off 或
+  客户端不支持 elicitation 时，拒绝原因会附带同样的兜底指引，按指引问询确认
+  后再授予；
+- manage_policy 仅保留 action=list（读）——add/remove 已从工具面收敛，防止
+  agent 未经用户确认自授规则；授予路径：单次执行经被拒工具传 confirm=true，
+  会话内/产品级/只读规则集经被拒工具的 elicitation 提议，持久/批量/自定义
+  规则由操作员直接编辑 policy 文件（`--policy` 指定，热生效、无需重启）；
 - 规则四档 scope：`once` 一次性（仅放行下一次执行，用后即焚，重启即失）/
   `session` 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
   `temporary` 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ `permanent` 永久
-  （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内/临时；
-  `remove` 跨层回收（先会话/临时后文件，首个语义命中移除）。
+  （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内。
+  会话内规则随连接/进程结束自动失效（文件编辑不影响在途会话规则）；
+  temporary/permanent 与 remove 仅为操作员侧语义（文件编辑/内部接缝）。
 - 认证由网关 AK/SK 签名层自动供给：不要在 params 里构造 x-auth-token 等
   认证头（元数据 required 标注已按此口径归一；部署豁免名单内的 API 以
   get_api 返回的 required 为准）。
@@ -311,6 +326,7 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
     include_manage_policy：混装时 manage_policy 全局只注册一次（由 composite 决定归属）。
     """
+    consent_mode = parse_elicit_mode(consent_mode)
 
     def _consent(ctx: Context | None) -> PolicyConsent:
         assert ctx is not None, "Context injected by MCP framework"
@@ -390,7 +406,7 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
 
     @server.tool()
     async def execute_api(product: str, api: str, region: str | None = None,
-                          params: dict | None = None,
+                          params: dict | None = None, confirm: bool = False,
                           ctx: Context | None = None) -> ExecuteResult:
         """第四步：执行华为云 API。执行前强制过 safety policy（未配置 policy 时全部拒绝）。
 
@@ -410,16 +426,24 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         未锁定时签名按空 CT 计算，直连请求不得携带 Content-Type 头
         （信封 note 字段给出警示口径）。桶管理类接口仍由 gateway 直连执行。
 
-        被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户弹窗五选一提议授予（用户确认后热生效并携带 granted_rule）：
-        api=最小规则（一次性，用后即焚）/ api_session=最小规则（会话内，本次
-        会话内持续放行该 API，重启即失）/ product=产品级规则如 "VPC:*=allow"
-        （会话内放行该产品全部 API，重启即失）/ readonly=产品级只读规则集
-        （会话内放行 List/Show/Get/Query 四组只读 API，浏览类任务首选，重启
-        即失）/ none=不授予；
+        被 policy 拒绝时不要绕过：默认 off 或客户端不支持 elicitation 时，拒绝
+        原因附兜底指引（先经交互式问询向用户确认；off 模式确认后可重传本工具
+        并传 confirm=true——服务端在同次调用内授予一次性最小规则并直接
+        执行，无需 manage_policy，once 随重放执行焚毁，再次执行需重新确认，
+        auto/required 下 confirm 被忽略），更宽档位经下述提议表单或操作员
+        policy 文件；开启 elicitation 时直接重试本工具，server 经 elicitation 向用户
+        弹窗五选一提议授予（首次问询即推荐会话档）：api_session=最小规则（会话内，
+        本次会话内持续放行该 API，重启即失；单 API 重复使用首选）/ readonly=
+        产品级只读规则集（会话内放行 List/Show/Get/Query 四组只读 API，浏览/
+        多步任务首选，重启即失）/ product=产品级规则如 "VPC:*=allow"（会话内
+        放行该产品全部 API，重启即失）/ api=最小规则（一次性，用后即焚；仅明确
+        单次使用时选择）/ none=不授予；用户确认后服务端自动重放一次并直接返回
+        执行结果，无需再次调用；重试仍被拒时结果附已授予规则上下文（如只读
+        规则集不含该写接口，或一次性授权已被并发消费），再次调用将重新提议；
         默认 off 或客户端不支持 elicitation 时，拒绝原因附带同样的兜底指引
-        （先经交互式问询向用户确认，再经 manage_policy 授予）；
-        亦可经 manage_policy 授予（add/remove 前服务端先 elicit 确认）。
+        （先经交互式问询向用户确认；更宽会话档位经提议表单（auto/required），
+        持久/批量规则由操作员编辑 policy 文件——manage_policy 工具仅保留
+        action=list 读面）。
 
         超大响应落盘：响应超过 200k 字符时自动落盘，body 为截断预览，结果携带
         spill 信封（path/format/bytes/note 消费指引，部署混装 data 模式时指引
@@ -440,38 +464,47 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
             offer = svc.policy_denial_offer(product, api,
                                             denial_reason=result.get("reason"))
             if offer is not None:
-                result = cast(ExecuteResult,
-                              await _consent(ctx).offer_grant(offer, result))
+
+                def _retry() -> Any:
+                    return svc.execute_api(product, api, region=region,
+                                           params=params)
+
+                if consent_mode == "off" and confirm:
+                    # off 模式 confirm 快路径：断言式确认授予+重放（问询路径
+                    # 的镜像；auto/required 不路由——协议确认门不可被断言绕过）
+                    result = await confirmed_grant_and_retry(
+                        _consent(ctx), offer, result, _retry)
+                else:
+                    # 问询路径授予+重放（auto 档及 off 无 confirm 拒绝）；
+                    # once 在重试的授权门焚毁，重试仍被拒附已授予上下文
+                    result = await offer_grant_and_retry(
+                        _consent(ctx), offer, result, _retry)
         return result
 
     if include_manage_policy:
         @server.tool()
         async def manage_policy(action: str, line: str | list[str] | None = None,
                                 scope: str | None = None,
-                                ttl_seconds: int | None = None,
-                                ctx: Context | None = None) -> ManagePolicyWire:
-            """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
+                                ttl_seconds: int | None = None) -> ManagePolicyWire:
+            """查看 safety policy（action=list，读面；add/remove 已从工具面收敛）。
 
-            四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
-            session 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
-            temporary 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ permanent 永久
-            （写入策略文件，跨重启）。仅 permanent 落盘。
-            action=list 查看当前全部规则（结构化 rules 含 scope/expires_in + 文件全文）；
-            action=add 新增规则（自动插到会遮蔽它的 deny 规则之前，如 "OBS:GetObject=allow"）；
-            action=remove 按语义移除首个匹配规则（跨层：先会话/临时后文件；不接受
-            scope/ttl_seconds）。
-            line 支持传字符串数组批量 add/remove（如 ["ECS:*List*=allow",
-            "ECS:*Get*=allow"]）：整批共享同一 scope/ttl_seconds；add 任一行非法
-            则整批不应用（fail-fast）；批量信封附加 results 逐条结果，顶层
-            ok=全部成功。批量授权只读规则集示例：readonly 口径四条通配可一次传入。
-            安全约定：先经交互式问询（如 question 工具）向用户确认再 add/remove
-            （数组批量整批一次确认）；开启 elicitation 时由服务端弹窗确认，未开启/
-            客户端不支持时由调用方自行完成问询确认。
-            未配置 policy 文件时本工具拒绝执行（不创建文件）。
+            add/remove 结构化拒绝——防止 agent 未经用户确认自授规则。授予路径：
+            单次执行经被拒工具（execute_api）传 confirm=true；会话内/产品级/
+            只读规则集经被拒工具的 elicitation 提议；持久/批量/自定义规则由
+            操作员直接编辑 policy 文件（--policy 指定，热生效、无需重启）。
+            action=list 返回当前全部规则（结构化 rules 含 scope/expires_in +
+            文件全文）；未配置 policy 文件时本工具拒绝执行（不创建文件）。
             """
-            return as_wire(await gated_manage_policy(
-                _consent(ctx), svc.manage_policy, action, line=line,
-                scope=scope, ttl_seconds=ttl_seconds), ManagePolicyWire)
+            result = manage_policy_list_only(
+                svc.manage_policy, action, line=line,
+                scope=scope, ttl_seconds=ttl_seconds)
+            if result.get("reason") == MANAGE_POLICY_WRITE_REFUSAL:
+                # agent 自授尝试恰是审计要捕捉的安全事件（拒绝先于 @audited
+                # service 方法返回，不经此补记则 NDJSON 无痕）
+                _audit_write(svc, "manage_policy",
+                             {"action": action, "line": line, "scope": scope,
+                              "ttl_seconds": ttl_seconds}, result)
+            return as_wire(result, ManagePolicyWire)
 
 build_config = build_openapi_config
 build_app = build_openapi_app

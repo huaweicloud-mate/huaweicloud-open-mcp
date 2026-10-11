@@ -129,21 +129,24 @@ def test_openapi_data_policy_roundtrip_and_data_isolation(tmp_path, monkeypatch)
                 # data 工具不受 policy 干扰（未配置允许集也照常执行）
                 data_ok = result_dict(await s.call_tool("query_data", {
                     "sql": "SELECT 1 AS one"}))
-                granted = result_dict(await s.call_tool("manage_policy", {
+                confirmed = result_dict(await s.call_tool("execute_api", {
+                    "product": "ECS", "api": "ListServersDetails",
+                    "confirm": True}))
+                mp_add = result_dict(await s.call_tool("manage_policy", {
                     "action": "add", "line": "ECS:ListServersDetails=allow"}))
-                allowed = result_dict(await s.call_tool("execute_api", {
-                    "product": "ECS", "api": "ListServersDetails"}))
-                return denied, data_ok, granted, allowed
+                return denied, data_ok, confirmed, mp_add
 
-    denied, data_ok, granted, allowed = run(_run())
+    denied, data_ok, confirmed, mp_add = run(_run())
     assert denied["ok"] is False and denied.get("reason")
     # wire 扁平信封：SDK 对可选字段 null-fill（reason 在成功臂为 None），同 ExecuteResult 先例
     assert data_ok == {"ok": True, "reason": None,
                        "columns": [{"name": "one", "type": "int64"}],
                        "rows": [{"one": 1}], "total_rows": 1, "returned_rows": 1,
                        "truncated": False, "tables": []}
-    assert granted["ok"] is True
-    assert allowed["ok"] is True
+    # off 默认档 confirm 快路径：同次调用授予 once 并执行（混装装配全链）
+    assert confirmed["ok"] is True
+    # 工具面 list-only：写路径拒绝（data 工具不受 policy 干扰的口径不变）
+    assert mp_add["ok"] is False and "list" in mp_add["reason"]
 
 
 # ---------- parse_modes ----------

@@ -117,6 +117,13 @@ class DiscoverService:
             return None
         if denial_reason is not None and denial_reason != err:
             return None
+        # 最小规则载体不接受通配目标（server 经 is_connected 约束为目录 id，
+        # tool 为调用方可控——crafted 元字符会把最小规则构造为全工具放行）；
+        # coarse_rule 是唯一合法通配载体（服务级选项数据驱动）
+        if any(c in (tool or "") or c in (server or "") for c in "*?["):
+            logger.warning("grant offer suppressed for wildcard target %s:%s",
+                           server, tool)
+            return None
         return DenialOffer(
             subject=f"{server}:{tool}" if tool else server,
             rule=safety_policy.grant_server_rule(server, tool), reason=err,
@@ -126,7 +133,9 @@ class DiscoverService:
     def manage_policy(self, action: str, line: str | list[str] | None = None,
                       scope: str | None = None,
                       ttl_seconds: int | None = None) -> dict[str, Any]:
-        """管理 safety policy（list/add/remove），改动即时生效无需重启。
+        """内部可写接缝（grant fn 直调；MCP 工具面 list-only，见
+        common.elicit.manage_policy_list_only——2026-10 起 add/remove 不经
+        工具面暴露，防 agent 未经用户自授）。
 
         四档 scope：permanent（写策略文件，跨重启）/ temporary（内存 + TTL 自动
         过期，ttl_seconds 缺省 3600）/ session（内存，缺省档——本次 code agent
@@ -135,8 +144,7 @@ class DiscoverService:
         remove 跨层先 overlay 后文件并回报 scope；不接受 scope/ttl_seconds。
         line 支持传字符串数组批量 add/remove（整批共享 scope，add 任一行非法
         整批不应用；信封附加 results 逐条结果）。
-        安全约定：调用方（Agent）应先经交互式问询（如 question 工具）向用户
-        确认再 add/remove；审计日志强制记录。
+        调用方为 elicitation/confirm 确认路径（用户已确认或断言式）与测试。
         信封语义委托 safety.policy_store.manage_policy_ops（两模式单一实现）。
         """
         return manage_policy_ops(self.config.policy_store, action,

@@ -3,7 +3,7 @@
 import argparse
 import functools
 import logging
-from typing import Any, cast
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
@@ -15,11 +15,17 @@ from common.deployment import (
     Deployment,
     resolve_deployment,
 )
-from common.elicit import PolicyConsent, ctx_elicit_fn, gated_manage_policy
+from common.elicit import (
+    PolicyConsent,
+    confirmed_grant_and_retry,
+    ctx_elicit_fn,
+    manage_policy_list_only,
+    offer_grant_and_retry,
+    parse_elicit_mode,
+)
 from common.types import (
     ManagePolicyWire,
     McpCallResult,
-    McpConnectResult,
     McpConnectWire,
     McpDisconnectResult,
     McpServerListWire,
@@ -55,26 +61,34 @@ INSTRUCTIONS_DISCOVER = """# 华为云 Open MCP 使用指引（MCP Server 发现
 - `connect_mcp_server` 和 `call_server_tool` 执行前强制过 safety policy；
 - 未配置 policy 时所有连接与调用被拒绝；
 - 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的 server/tool；
-- 被拒连接/调用确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认，再调用
-  `manage_policy(action="add", line=...)` 授予规则（如 "server:@huaweicloud/ecs=allow"，
-  或服务级全工具 "server:@huaweicloud/ecs:*=allow"），规则热生效后重试即可通过；
-  call_tool 问询按四选一口径：api=最小工具规则（一次性，用后即焚）/
-  api_session=最小工具规则（会话内，本次会话内持续放行该工具，重启即失）/
-  product=服务级全工具规则（会话内，覆盖该 server 全部工具，重启即失）/ none=不授予
+- 被拒连接/调用确属任务必需时：先经对话/交互式问询（如 question 工具）向用户确认；
+  确认后单次执行重传本工具并传 confirm=true（仅 --elicitation off 模式生效，
+  auto/required 下 confirm 被忽略——服务端在同次调用内授予最小规则并
+  直接执行——call_tool 为一次性档，再次调用需重新确认；connect 为会话内档，
+  后续连接免确认）；更宽档位（会话内全工具/服务级）仅在 --elicitation
+  auto/required 部署下经被拒工具的提议表单选择（见下）；持久/批量/自定义
+  规则由操作员编辑 policy 文件（`--policy` 指定，热生效、无需重启）；
+  call_tool 问询按四选一口径（首次问询即推荐会话档）：api_session=最小工具规则
+  （会话内，本次会话内持续放行该工具，重启即失；单工具重复使用首选）/
+  product=服务级全工具规则（会话内，覆盖该 server 全部工具，重启即失）/
+  api=最小工具规则（一次性，用后即焚；仅明确单次使用时选择）/ none=不授予
   （readonly 产品级只读档仅 openapi 侧提供，discover 拒绝不含只读规则集）；
-  connect 为单一确认（会话内连接级授予）；
-  部署开启 elicitation（--elicitation auto/required）时重新调用被拒工具，服务端会
-  经 MCP elicitation 弹出同样的提议（结果携带 `granted_rule` 字段）；
+  connect 为单一确认（会话内连接级授予，弹窗如实陈述实际授予档位）；
+  部署开启 elicitation（--elicitation auto/required）时直接重试被拒工具：服务端
+  经 MCP elicitation 弹出同样的提议，用户确认后自动重放一次并直接返回连接/调用
+  结果（无需再次调用）；重试仍被拒时结果附已授予规则上下文，再次调用将重新提议；
   默认 off 或客户端不支持 elicitation 时，拒绝原因会附带同样的兜底指引，
   按指引问询确认后再授予；
-- 也可直接调用 `manage_policy`：**改动热生效、无需重启 server**；默认
-  （--elicitation off）无弹窗，务必先向用户确认再调用；开启 elicitation 后
-  add/remove 由服务端先经 elicitation 向用户确认；
+- manage_policy 仅保留 action=list（读）——add/remove 已从工具面收敛，防止
+  agent 未经用户确认自授规则；授予路径：单次执行经被拒工具传 confirm=true，
+  会话内/服务级规则经被拒工具的 elicitation 提议，持久/批量/自定义规则由
+  操作员直接编辑 policy 文件（`--policy` 指定，热生效、无需重启）；
 - 规则四档 scope：`once` 一次性（仅放行下一次执行，用后即焚，重启即失）/
   `session` 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
   `temporary` 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ `permanent` 永久
-  （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内/临时；
-  `remove` 跨层回收（先会话/临时后文件，首个语义命中移除）。
+  （写入策略文件，跨重启）；仅 permanent 落盘，授予最小权限请优先用 once/会话内。
+  会话内规则随连接/进程结束自动失效（文件编辑不影响在途会话规则）；
+  temporary/permanent 与 remove 仅为操作员侧语义（文件编辑/内部接缝）。
   注意「会话内」指 code agent 会话（AI 客户端与 gateway 的一次连接），**非**到远端
   MCP server 的连接会话——远端连接由空闲回收/LRU 管理，断开或回收后 session 档
   授权仍在，直到本次 code agent 会话结束。
@@ -128,6 +142,7 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
 
     include_manage_policy：混装时 manage_policy 全局只注册一次（由 composite 决定归属）。
     """
+    consent_mode = parse_elicit_mode(consent_mode)
 
     def _consent(ctx: Context | None, minimal_scope: str = "session") -> PolicyConsent:
         assert ctx is not None, "Context injected by MCP framework"
@@ -162,24 +177,34 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
         return as_wire(ds.get_server(server), McpServerWire)
 
     @server.tool()
-    async def connect_mcp_server(server: str, ctx: Context | None = None
+    async def connect_mcp_server(server: str, confirm: bool = False,
+                                 ctx: Context | None = None
                                  ) -> McpConnectWire:
         """第三步：连接指定 MCP server（过 safety policy）。
 
         policy 匹配 server 连接规则：server:serverId=allow|deny；
         真实模式 endpoint 严格取自目录；mock 模式指向 --mock-base。
-        被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户提议授予最小连接规则（用户确认后热生效并携带 granted_rule）；
-        未开启 elicitation 时拒绝原因附带兜底指引（先经交互式问询向用户
-        确认，再经 manage_policy 授予）。
+        被 policy 拒绝时不要绕过：经对话/交互式问询向用户确认后重传本工具并传
+        confirm=true——服务端在同次调用内授予会话内连接规则并直接连接（后续
+        连接免确认）；更宽档位经提议表单（auto/required）或操作员 policy 文件。开启 elicitation 时直接
+        重试本工具，server 经 elicitation 向用户
+        提议授予最小连接规则（会话内档，弹窗如实陈述实际授予档位）；用户确认后
+        服务端自动重放一次并直接返回连接结果，无需再次调用；重试仍被拒时结果
+        附已授予规则上下文。
         """
         logger.info("connect_mcp_server server=%s", server)
         result = await ds.connect(server)
         if isinstance(result, dict) and result.get("ok") is False:
             offer = ds.policy_denial_offer(server, denial_reason=result.get("reason"))
             if offer is not None:
-                result = cast(McpConnectResult,
-                              await _consent(ctx).offer_grant(offer, result))
+                retry = functools.partial(ds.connect, server)
+                # 授予成功后内联重放恰一次（拒绝点在会话副作用之前，重试不双建会话）
+                if consent_mode == "off" and confirm:
+                    result = await confirmed_grant_and_retry(
+                        _consent(ctx), offer, result, retry)
+                else:
+                    result = await offer_grant_and_retry(
+                        _consent(ctx), offer, result, retry)
         return as_wire(result, McpConnectWire)
 
     @server.tool()
@@ -208,18 +233,26 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
     @server.tool()
     async def call_server_tool(server: str, tool: str,
                                arguments: dict[str, Any] | None = None,
+                               confirm: bool = False,
                                ctx: Context | None = None) -> McpCallResult:
         """第六步：调用已连接 server 的指定工具（过 safety policy）。
 
-        arguments 为工具参数 dict；policy 匹配 server:serverId:toolPattern=allow|deny。
-        被 policy 拒绝时不要绕过：直接重试本工具，server 将经 elicitation
-        向用户弹窗提议授予（用户确认后热生效并携带 granted_rule）：
-        api=最小工具规则（一次性，用后即焚）/ api_session=最小工具规则（会话内，
-        本次会话内持续放行该工具，重启即失）/ product=服务级全工具规则如
-        "server:@huaweicloud/ecs:*=allow"（会话内放行该 server 全部工具，
-        重启即失）/ none=不授予（readonly 只读档仅 openapi 侧提供）；默认 off
-        或客户端不支持 elicitation 时，拒绝原因附带同样的兜底指引（先经交互式
-        问询向用户确认，再经 manage_policy 授予）。
+        arguments 为工具参数 dict（confirm 为网关确认标记，不进入 arguments）；
+        policy 匹配 server:serverId:toolPattern=allow|deny。
+        被 policy 拒绝时不要绕过：默认 off 或客户端不支持 elicitation 时，经
+        对话/交互式问询向用户确认后重传本工具并传 confirm=true——服务端在
+        同次调用内授予一次性最小工具规则并直接执行（再次调用需重新确认），
+        更宽档位经提议表单（auto/required）或操作员 policy 文件；开启 elicitation 时直接重试本工具，
+        server 经 elicitation 向用户
+        弹窗四选一提议授予（首次问询即推荐会话档）：api_session=最小工具规则
+        （会话内，本次会话内持续放行该工具，重启即失；单工具重复使用首选）/
+        product=服务级全工具规则如 "server:@huaweicloud/ecs:*=allow"（会话内
+        放行该 server 全部工具，重启即失）/ api=最小工具规则（一次性，用后即焚；
+        仅明确单次使用时选择）/ none=不授予（readonly 只读档仅 openapi 侧提供）；
+        用户确认后服务端自动重放一次并直接返回调用结果，无需再次调用；重试仍
+        被拒时结果附已授予规则上下文，再次调用将重新提议；默认 off 或客户端
+        不支持 elicitation 时，拒绝原因附带同样的兜底指引（先经交互式问询向
+        用户确认，持久/自定义规则由操作员编辑 policy 文件授予）。
         """
         logger.info("call_server_tool server=%s tool=%s", server, tool)
         result = await ds.call_tool(server, tool, arguments=arguments)
@@ -227,8 +260,15 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
             offer = ds.policy_denial_offer(server, tool,
                                            denial_reason=result.get("reason"))
             if offer is not None:
-                result = cast(McpCallResult,
-                              await _consent(ctx, minimal_scope="once").offer_grant(offer, result))
+                retry = functools.partial(ds.call_tool, server, tool,
+                                          arguments=arguments)
+                # 授予成功后内联重放恰一次（once 在重试的授权门焚毁）
+                if consent_mode == "off" and confirm:
+                    result = await confirmed_grant_and_retry(
+                        _consent(ctx, minimal_scope="once"), offer, result, retry)
+                else:
+                    result = await offer_grant_and_retry(
+                        _consent(ctx, minimal_scope="once"), offer, result, retry)
         return result
 
     @server.tool()
@@ -244,28 +284,17 @@ def register_discover_tools(server: MCPServer, ds: DiscoverService, *,
         @server.tool()
         async def manage_policy(action: str, line: str | list[str] | None = None,
                                 scope: str | None = None,
-                                ttl_seconds: int | None = None,
-                                ctx: Context | None = None) -> ManagePolicyWire:
-            """管理 safety policy（list/add/remove），改动热生效、无需重启 server。
+                                ttl_seconds: int | None = None) -> ManagePolicyWire:
+            """查看 safety policy（action=list，读面；add/remove 已从工具面收敛）。
 
-            四档 scope：once 一次性（仅放行下一次执行，用后即焚，重启即失）/
-            session 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
-            temporary 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ permanent 永久
-            （写入策略文件，跨重启）。仅 permanent 落盘。「会话内」指 code agent 会话
-            （AI 客户端与 gateway 的一次连接），非到远端 MCP server 的连接会话——远端
-            连接断开或空闲回收后 session 档授权仍在。
-            action=list 查看当前全部规则（结构化 rules 含 scope/expires_in + 文件全文）；
-            action=add 新增规则（自动插到会遮蔽它的 deny 规则之前，如
-            "server:@huaweicloud/ecs=allow"）；action=remove 按语义移除首个匹配规则
-            （跨层：先会话/临时后文件；不接受 scope/ttl_seconds）。
-            line 支持传字符串数组批量 add/remove：整批共享同一 scope/ttl_seconds；
-            add 任一行非法则整批不应用（fail-fast）；批量信封附加 results 逐条结果，
-            顶层 ok=全部成功。批量授权只读规则集示例：readonly 口径四条通配可一次传入。
-            安全约定：先经交互式问询（如 question 工具）向用户确认再 add/remove
-            （数组批量整批一次确认）；开启 elicitation 时由服务端弹窗确认，未开启/
-            客户端不支持时由调用方自行完成问询确认。
-            未配置 policy 文件时本工具拒绝执行（不创建文件）。
+            add/remove 结构化拒绝——防止 agent 未经用户确认自授规则。授予路径：
+            单次执行经被拒工具（connect_mcp_server/call_server_tool）传
+            confirm=true；会话内/服务级规则经被拒工具的 elicitation 提议；
+            持久/批量/自定义规则由操作员直接编辑 policy 文件（--policy 指定，
+            热生效、无需重启）。
+            action=list 返回当前全部规则（结构化 rules 含 scope/expires_in +
+            文件全文）；未配置 policy 文件时本工具拒绝执行（不创建文件）。
             """
-            return as_wire(await gated_manage_policy(
-                _consent(ctx), ds.manage_policy, action, line=line,
+            return as_wire(manage_policy_list_only(
+                ds.manage_policy, action, line=line,
                 scope=scope, ttl_seconds=ttl_seconds), ManagePolicyWire)
