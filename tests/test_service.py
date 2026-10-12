@@ -917,6 +917,27 @@ def test_policy_denial_offer_none_when_reason_mismatches(tmp_path):
                                    denial_reason=other_denial_reason) is None
 
 
+def test_policy_denial_offer_blank_target_suppressed(tmp_path):
+    """空/纯空白 product/api 不构造 offer：grant_rule('ECS','') 产出
+    'ECS:=allow'，parse_policy 把空模式归一为 '*'——最小规则静默升级为
+    产品级/全局放行，元字符检查检测不到的同形受害。"""
+    from safety import policy
+    from safety.policy_store import PolicyStore
+
+    # 独立真值：空模式在 parse_policy 归一为 '*'（产品级放行）
+    parsed = policy.parse_policy(["ECS:=allow"])
+    assert parsed[0].product == "ECS" and parsed[0].api_pattern == "*"
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    for product, api in (("ECS", ""), ("ECS", "  "),
+                         ("", "ListServers"), ("  ", "ListServers"),
+                         ("", "")):
+        assert svc.policy_denial_offer(product, api) is None
+    # 具体目标照常构造（抑制不伤正常路径）
+    assert svc.policy_denial_offer("ECS", "ListServersDetails") is not None
+
+
 # ---------- spill 装配（S12） ----------
 
 

@@ -419,6 +419,78 @@ def test_once_with_ttl_rejected(tmp_path):
     assert res.ok is False
 
 
+def test_lingering_once_does_not_absorb_session_grant(tmp_path):
+    """残留 once（重试先撞校验失败保留）不吸收 session 授予：session 规则
+    真实落位（非「规则已存在」吸收），authorize 消费后仍持续放行——
+    用户所选档位不失真（否则 session 被吸收、重试烧 once 后授权消失）。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("OBS:GetObject=allow", scope="once")      # 残留 once（未被消费）
+
+    res = store.add_rule("OBS:GetObject=allow", scope="session")
+    assert res.ok is True and res.reason is None             # 真实插入（非吸收）
+    scopes = sorted(r.scope for r in store.list_rules()
+                    if r.line == "OBS:GetObject=allow")
+    assert scopes == ["once", "session"]                     # session 确已落位
+    assert store.authorize("OBS", "GetObject") is None       # 放行（烧 once 或命中 session）
+    assert store.authorize("OBS", "GetObject") is None       # 会话授权持续生效
+    assert "OBS:GetObject=allow" in [r.line for r in store.list_rules()
+                                     if r.scope == "session"]
+
+
+def test_lingering_temporary_does_not_absorb_session_grant(tmp_path):
+    """残留 temporary（TTL 档）不吸收 session 授予（round-4 泛化：寿命排序
+    once < temporary < session）——否则 session 授予返回「规则已存在」
+    却从未落位，TTL 到期后授权蒸发（与 once 例外同形，一档之差）。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("OBS:GetObject=allow", scope="temporary", ttl_seconds=120)
+
+    res = store.add_rule("OBS:GetObject=allow", scope="session")
+    assert res.ok is True and res.reason is None             # 真实插入（非吸收）
+    scopes = sorted(r.scope for r in store.list_rules()
+                    if r.line == "OBS:GetObject=allow")
+    assert scopes == ["session", "temporary"]                # session 确已落位
+
+
+def test_temporary_request_absorbed_by_existing_session_rule(tmp_path):
+    """宽吸收窄无害保留：session 已存在时 temporary 请求报「规则已存在」。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("OBS:GetObject=allow", scope="session")
+
+    res = store.add_rule("OBS:GetObject=allow", scope="temporary", ttl_seconds=60)
+    assert res.ok is True and res.reason == "规则已存在"
+
+
+def test_lingering_once_does_not_absorb_wider_scope_batch(tmp_path):
+    """批量路径同口径：残留 once 不吸收 session 批量授予。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("OBS:GetObject=allow", scope="once")
+
+    out = store.add_rules(["OBS:GetObject=allow"], scope="session")
+    assert out.ok is True
+    assert out.results[0].reason is None                     # 真实插入（非吸收）
+
+
+def test_once_request_absorbed_by_existing_session_rule(tmp_path):
+    """反向吸收无害保留：session 已存在时 once 请求报「规则已存在」
+    （更宽档位已在，once 无增量）。"""
+    p = tmp_path / "policy.txt"
+    p.write_text("*=deny\n", encoding="utf-8")
+    store = make_store(p)
+    store.add_rule("OBS:GetObject=allow", scope="session")
+
+    res = store.add_rule("OBS:GetObject=allow", scope="once")
+    assert res.ok is True and res.reason == "规则已存在"
+    assert store.authorize("OBS", "GetObject") is None       # 经 session 放行
+
+
 def test_once_list_rules_reports_scope(tmp_path):
     """list_rules 回报 scope=once、expires_in=None。"""
     p = tmp_path / "policy.txt"

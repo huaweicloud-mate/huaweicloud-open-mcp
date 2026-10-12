@@ -146,8 +146,9 @@ def build_app(modes: list[str], args: argparse.Namespace, *,
     if discover_svc is None and "discover" in modes:
         from mcp_discover.server import build_discover_config
         from mcp_discover.service import DiscoverService
-        # discover 模式不写审计（DiscoverConfig 无 audit_sink，口径与单模式一致）
-        dcfg = build_discover_config(args, dep, policy_store=shared_store)
+        # discover 审计与 openapi 同 sink（manage_policy 授予 + 工具面写尝试补记）
+        dcfg = build_discover_config(args, dep, policy_store=shared_store,
+                                     audit_sink=shared_sink)
         discover_svc = DiscoverService(dcfg)
 
     data_svc: DataService | None = data_service
@@ -215,10 +216,12 @@ def _log_openapi_start(svc: "ToolService") -> None:
 def _log_discover_start(svc: "DiscoverService", elicit_mode: str, *,
                         include_manage_policy: bool) -> None:
     cfg = svc.config
-    logger.info("server start: mode=discover mock=%s policy=%s catalog=%s elicit=%s%s",
+    logger.info("server start: mode=discover mock=%s policy=%s catalog=%s elicit=%s "
+                "audit=%s%s",
                 cfg.mock,
                 "configured" if cfg.policy_rules else "MISSING",
                 cfg.catalog_path, elicit_mode,
+                "configured" if cfg.audit_sink else "none",
                 "" if include_manage_policy else " manage_policy=openapi")
     if cfg.policy_rules is None:
         logger.warning("未配置 safety policy，discover 连接与调用将全部拒绝（--policy 指定策略文件）")

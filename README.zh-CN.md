@@ -29,7 +29,7 @@
 
 - **渐进式工作流**：Agent 逐步探索，`search_apis`（意图未指明产品时，实体图谱跨产品检索）→ `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`，从 17000+ API 收窄到一次具体调用。每一步都把 LLM 上下文控制在有界范围；完整工作流指引已内置于 server instructions。
 - **元数据驱动、零 SDK**：API 元数据从华为云 API Explorer 实时拉取并缓存在内存。请求在本地签名（自实现 SDK-HMAC-SHA256）后直连华为云。
-- **默认安全**：每次 `execute_api` 必须通过 safety policy（allowlist/denylist）；未配置 policy 时全部拒绝。规则热更新；授予仅经被拒工具的确认流（`confirm=true` / elicitation 提议），持久规则由操作员编辑 policy 文件。
+- **默认安全**：每次 `execute_api` 必须通过 safety policy（allowlist/denylist）；未配置 policy 时全部拒绝。规则热更新；授予仅经被拒工具的确认流（off 模式 `grant=<档位>` / `confirm=true`、auto/required elicitation 提议），持久规则由操作员编辑 policy 文件。
 
 ## 快速开始
 
@@ -242,7 +242,7 @@ uvx huaweicloud-open-mcp --transport http --http-host 0.0.0.0 --http-port 9000
 
 HTTP 档带来的变化集中在会话语义：
 
-- 每个客户端连接拥有独立的 policy 会话。经被拒工具确认流（elicitation 提议或 off 模式 `confirm=true`）授予的 `session` 档规则仅对本连接可见、对其它连接不可见；断开重连即新会话，不继承原授予；`once` 规则在授予会话内焚毁。`permanent` 规则照旧落策略文件，跨会话、跨重启共享。
+- 每个客户端连接拥有独立的 policy 会话。经被拒工具确认流（elicitation 提议，或 off 模式 `grant=<档位>` / `confirm=true` 断言式授予）授予的 `session` 档规则仅对本连接可见、对其它连接不可见；断开重连即新会话，不继承原授予；`once` 规则在授予会话内焚毁。`permanent` 规则照旧落策略文件，跨会话、跨重启共享。
 - 无 MCP 会话身份的请求（modern 单交换协议）无法写入 session 档授予，只会收到结构化拒绝而非静默共享状态。
 - `GET /healthz` 供探针使用。审计事件（配置 `--audit-file` 时）携带 `session` 字段，把每次调用归因到其 MCP 会话；stdio 下审计输出与此前逐字节一致。
 - 闲置会话回收：30 分钟无活动的会话桶被回收，任何授予超过 24 小时即失效。持续工作的会话，其授予持续存活。
@@ -294,7 +294,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 
 - 规则形如 `product:apiPattern=allow|deny`，fnmatch 风格通配，product/API 大小写不敏感，`#` 开头为注释。
 - 未配置 `--policy` 时，全部执行被拒绝。
-- `manage_policy` 仅保留 `action=list`（读）：add/remove 已从工具面收敛，防止 agent 未经用户确认自授——授予走被拒工具的确认流（`confirm=true` / elicitation 提议），持久/批量/自定义规则由操作员直接编辑 policy 文件（热生效）。
+- `manage_policy` 仅保留 `action=list`（读）：add/remove 已从工具面收敛，防止 agent 未经用户确认自授——授予走被拒工具的确认流（off 模式 `grant=<档位>` / `confirm=true`、auto/required elicitation 提议），持久/批量/自定义规则由操作员直接编辑 policy 文件（热生效）。
 - `manage_policy` service 层的授予档位（内部接缝与文件格式参考）：
   - `once`：一次性，用后即焚
   - `session`（缺省）：仅本次 Agent 会话
@@ -302,7 +302,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
   - `permanent`：写入 policy 文件
 - 批量授予：`line` 亦支持传规则数组，整批共享同一 scope；批量 add 为全有或全无（任一行非法则整批不应用）；批量 remove 逐条尽力而为（未命中逐条回报）。批量信封附加逐条 `results`，顶层 `ok` 仅在全部成功时为 true。
 - 全部热生效：操作员编辑文件即时生效（持久规则唯一写路径）；确认流授予的会话档规则随连接结束失效。优先授予最小规则（`once`/`session`），产品级仅在确有必要时使用。
-- 拒绝结果附可操作原因。默认 `off` 时，经对话/交互式问询确认后重传被拒工具并传 `confirm=true`：server 在同次调用内授予一次性最小规则并直接执行（再次执行需重新确认）。开启 `--elicitation auto|required` 后，被拒时直接重试该工具：server 经 MCP elicitation 提议授予（五选一，首次问询即推荐会话档），用户确认后自动重放一次并直接返回执行结果，无需再次调用（此模式下 `confirm` 被忽略，确认必须走协议问询）；重试仍被拒时结果附已授予规则上下文：
+- 拒绝结果附可操作原因。默认 `off` 时，经对话/交互式问询确认所选档位后重传被拒工具并传 `grant=<档位>`：server 在同次调用内按所选档位授予并直接执行——`api_session`（最小规则，会话内）/ `readonly`（产品级只读规则集，会话内）/ `product`（产品级规则，会话内）/ `api`（一次性最小规则；`confirm=true` 为其历史等价写法）。开启 `--elicitation auto|required` 后，被拒时直接重试该工具：server 经 MCP elicitation 提议授予（五选一，口径与 grant 档位同构，首次问询即推荐会话档），用户确认后自动重放一次并直接返回执行结果，无需再次调用（此模式下 `grant`/`confirm` 被忽略，确认必须走协议问询）；重试仍被拒时结果附已授予规则上下文：
   - `api_session`：最小规则（会话内；单 API 重复使用首选）
   - `readonly`：产品级只读规则集（`*List*/*Show*/*Get*/*Query*` 四条，会话内；浏览/多步任务首选）
   - `product`：产品级规则（会话内）
@@ -504,7 +504,7 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | 客户端显示 "failed to connect" 或 server 立即退出 | `--policy` 是相对路径或文件缺失 —— policy 文件有问题时 server 快速失败 | 使用存在的文件的绝对路径 |
 | 网关工具从未出现在 Agent 中 | `uvx` 不在客户端 PATH 上 | `which uvx`（macOS/Linux）或 `where uvx`（Windows）定位后在命令中改用绝对路径 |
 | 元数据工具正常但 `execute_api` 失败 | 凭证未加载（`[basic]` 节为空，或环境变量覆盖了一个空文件） | 修正 `~/.huaweicloud/credentials`（见[凭证](#凭证)）或设置 `HUAWEICLOUD_SDK_*` 环境变量 |
-| `execute_api` 返回 `{"ok": false, "reason": ...}` 且提及 policy | 该 API 未被 policy 文件允许（快速开始文件仅允许 `ECS:*List*`） | 编辑 policy 文件 —— 热生效无需重启 server —— 或（先向用户确认后）让 Agent 重传被拒工具并传 `confirm=true`（off 模式、一次性最小规则） |
+| `execute_api` 返回 `{"ok": false, "reason": ...}` 且提及 policy | 该 API 未被 policy 文件允许（快速开始文件仅允许 `ECS:*List*`） | 编辑 policy 文件 —— 热生效无需重启 server —— 或（先向用户确认所选档位后）让 Agent 重传被拒工具并传 `grant=<档位>`（off 模式；`confirm=true` 为一次性最小规则的历史等价写法） |
 | 401 / SignatureDoesNotMatch | AK 或 SK 错误 | 核对正在生效的凭证来源（env 优先于 profile 文件） |
 | 华为云返回 403 权限错误 | IAM 用户缺少该权限 | 为该 API 授予最小 IAM 权限 |
 | 明明有服务器却返回 `"count": 0` | 资源在另一个 region | 带 `region` 再问，如 `cn-east-3` |

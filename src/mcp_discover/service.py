@@ -6,8 +6,9 @@
 
 import json
 import logging
-from typing import Any, Sequence, cast
+from typing import Any, Literal, Sequence, cast
 
+from common.audit import audited
 from common.elicit import DenialOffer
 from common.types import (
     McpCallResult,
@@ -119,9 +120,14 @@ class DiscoverService:
             return None
         # 最小规则载体不接受通配目标（server 经 is_connected 约束为目录 id，
         # tool 为调用方可控——crafted 元字符会把最小规则构造为全工具放行）；
-        # coarse_rule 是唯一合法通配载体（服务级选项数据驱动）
-        if any(c in (tool or "") or c in (server or "") for c in "*?["):
-            logger.warning("grant offer suppressed for wildcard target %s:%s",
+        # 空/纯空白目标同形受害——grant_server_rule(s,'') 产出 'server:s:=allow'，
+        # parse_policy 把空模式归一为 '*'，元字符检查检测不到（tool=None 为
+        # 合法 connect 级语义，不在抑制范围）；coarse_rule 是唯一合法通配载体
+        # （服务级选项数据驱动）
+        if (any(c in (tool or "") or c in (server or "") for c in "*?[")
+                or not (server or "").strip()
+                or (tool is not None and not tool.strip())):
+            logger.warning("grant offer suppressed for wildcard/blank target %s:%s",
                            server, tool)
             return None
         return DenialOffer(
@@ -130,9 +136,12 @@ class DiscoverService:
             coarse_rule=(safety_policy.grant_server_rule(server, "*")
                          if tool is not None else None))
 
+    @audited
     def manage_policy(self, action: str, line: str | list[str] | None = None,
                       scope: str | None = None,
-                      ttl_seconds: int | None = None) -> dict[str, Any]:
+                      ttl_seconds: int | None = None,
+                      source: Literal["assertion", "elicit"] | None = None
+                      ) -> dict[str, Any]:
         """内部可写接缝（grant fn 直调；MCP 工具面 list-only，见
         common.elicit.manage_policy_list_only——2026-10 起 add/remove 不经
         工具面暴露，防 agent 未经用户自授）。
@@ -145,6 +154,9 @@ class DiscoverService:
         line 支持传字符串数组批量 add/remove（整批共享 scope，add 任一行非法
         整批不应用；信封附加 results 逐条结果）。
         调用方为 elicitation/confirm 确认路径（用户已确认或断言式）与测试。
+        source 为审计溯源标记（不参与策略语义）：elicit=协议问询确认授予 /
+        assertion=grant/confirm 参数断言式授予，经 @audited 落入 input 快照，
+        操作员在 NDJSON 区分两类授予的 provenance。
         信封语义委托 safety.policy_store.manage_policy_ops（两模式单一实现）。
         """
         return manage_policy_ops(self.config.policy_store, action,
@@ -183,7 +195,11 @@ class DiscoverService:
 
     # ---------- 3: 连接 ----------
 
+    @audited(name="connect_mcp_server")
     async def connect(self, server: str) -> McpConnectResult | ToolError:
+        """连接（@audited(name=...) 按尝试入账，NDJSON tool 字段为工具面名
+        ——与 openapi service 层同层同语义：异常/取消路径同样写 ok=False
+        事件后重抛，audit_sink 未配置零开销）。"""
         entry = discover_catalog.get_server(self.catalog, server)
         if entry is None:
             return {"ok": False, "reason": f"MCP server {server} 未找到"}
@@ -267,8 +283,12 @@ class DiscoverService:
 
     # ---------- 6: 调用 ----------
 
+    @audited(name="call_server_tool")
     async def call_tool(self, server: str, tool: str,
                         arguments: dict[str, Any] | None = None) -> McpCallResult:
+        """代发调用（@audited(name=...) 按尝试入账，NDJSON tool 字段为
+        工具面名——与 openapi service 层同层同语义；once 在 _authorize
+        的授权门焚毁，异常/取消路径同样入账）。"""
         if not self.manager.is_connected(server):
             return {"ok": False, "reason": f"server {server} 未连接，请先调用 connect_mcp_server"}
 
@@ -301,6 +321,9 @@ class DiscoverService:
 
     # ---------- 7: 断开 ----------
 
+    @audited(name="disconnect_mcp_server")
     async def disconnect(self, server: str) -> McpDisconnectResult:
+        """断开（@audited(name=...)——状态突变无 policy 门，HTTP 多会话部署
+        下会话 A 断开他会话在用连接必须留痕；只读发现工具不审计为有意边界）。"""
         released = await self.manager.disconnect(server)
         return {"ok": True, "server": server, "released": released}

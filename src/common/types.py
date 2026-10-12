@@ -22,9 +22,10 @@ class ClientResponse(TypedDict):
 class ExecuteResult(TypedDict, total=False):
     """execute_api 的规范化输出。ok=False 时携带 reason（拒绝/错误原因）；错误响应携带 error_code/error_msg。
 
-    reason 在 ok=True 时亦可出现——仅 elicitation readonly 部分授予回执场景
-    （已按已授予子集放行，失败子集在 reason 披露供补授），消费者不得以
-    reason 在场推断失败。
+    reason 在 ok=True 时亦可出现——elicitation/断言式 readonly 部分授予
+    回执场景（已按已授予子集放行，失败子集在 reason 披露供补授），以及
+    off 档会话档断言未被消费的披露注（grant 请求的档位未新落地），消费者
+    不得以 reason 在场推断失败。
     可选字段声明为可空：并非每条路径都会填充（如拒绝时无 status/body），
     MCP SDK 序列化缺失字段为 null，outputSchema 必须允许 null。
     """
@@ -336,6 +337,13 @@ class ServerToolResult(TypedDict, total=False):
 
 
 class McpCallResult(TypedDict, total=False):
+    """call_server_tool 的规范化输出。ok=False 时携带 reason（拒绝/错误原因）。
+
+    reason 在 ok=True 时亦可出现——off 档会话档断言未被消费的披露注
+    （grant 请求的档位未新落地；discover 无 readonly 档，部分授予
+    回执场景结构性不可达）；消费者不得以 reason 在场推断失败。
+    """
+
     ok: bool
     reason: str | None
     server: str | None

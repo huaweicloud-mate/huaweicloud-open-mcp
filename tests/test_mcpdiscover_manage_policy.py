@@ -65,6 +65,37 @@ def test_unconfigured_store_rejected():
     assert out["ok"] is False and "--policy" in out["reason"]
 
 
+def test_manage_policy_add_audited_with_source(tmp_path):
+    """discover 侧授予审计：manage_policy add 经 @audited 落 NDJSON，
+    source 溯源标记区分 assertion（grant/confirm 参数断言）与 elicit
+    （协议问询确认）两类 provenance；工具面 list 调用照常审计、无 source。"""
+    import json
+
+    events: list[dict] = []
+
+    class _Sink:
+        def record(self, event) -> None:
+            events.append(dict(event))
+
+    p = tmp_path / "policy.json"
+    p.write_text(json.dumps(["*=deny"]), encoding="utf-8")
+    svc = DiscoverService(DiscoverConfig(
+        policy_store=PolicyStore(str(p)), audit_sink=_Sink()))
+
+    assert svc.manage_policy("add", "server:@huaweicloud/ecs=allow",
+                             source="assertion")["ok"] is True
+    assert svc.manage_policy("list")["ok"] is True
+
+    adds = [e for e in events if e["input"].get("action") == "add"]
+    assert len(adds) == 1
+    assert adds[0]["tool"] == "manage_policy"
+    assert adds[0]["input"]["line"] == "server:@huaweicloud/ecs=allow"
+    assert adds[0]["input"]["source"] == "assertion"
+    assert adds[0]["ok"] is True
+    lists = [e for e in events if e["input"].get("action") == "list"]
+    assert len(lists) == 1 and "source" not in lists[0]["input"]
+
+
 # ---------- 批量 line（str | list[str]） ----------
 
 def test_batch_add_and_remove(tmp_path):
@@ -144,6 +175,24 @@ def test_policy_denial_offer_wildcard_tool_suppressed(tmp_path):
     offer = svc.policy_denial_offer("@huaweicloud/ecs", "list_servers")
     assert offer is not None
     assert offer.rule == "server:@huaweicloud/ecs:list_servers=allow"
+
+
+def test_policy_denial_offer_blank_target_suppressed(tmp_path):
+    """空/纯空白 server/tool 不构造 offer：grant_server_rule(s,'') 产出
+    'server:s:=allow'，parse_policy 把空模式归一为 '*'（全工具放行）——
+    元字符检查检测不到的同形受害；tool=None 为合法 connect 级语义不受影响。"""
+    from safety import policy
+
+    parsed = policy.parse_policy(["server:@huaweicloud/ecs:=allow"])
+    assert parsed[0].api_pattern == "*" and parsed[0].connect_only is False
+
+    svc, _ = make_service(tmp_path, ["*=deny"])
+    assert svc.policy_denial_offer("@huaweicloud/ecs", "") is None
+    assert svc.policy_denial_offer("@huaweicloud/ecs", "  ") is None
+    assert svc.policy_denial_offer("") is None               # connect 空目标
+    # tool=None（connect 级）与具体工具名照常构造
+    assert svc.policy_denial_offer("@huaweicloud/ecs") is not None
+    assert svc.policy_denial_offer("@huaweicloud/ecs", "list_servers") is not None
 
 
 # ---------- 一次性授权（once，call_tool dispatch 前） ----------

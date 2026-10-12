@@ -63,8 +63,9 @@ MAX_SESSION_BUCKETS = 4096
 _STRICT_REASON = (
     "当前请求缺少 MCP 会话身份，无法授予 {scope} 档规则"
     "（HTTP 多会话部署拒绝无会话键的内存授予以防跨会话泄权）；"
-    "可改用 scope=permanent（落策略文件、跨会话生效），"
-    "或经完整 MCP initialize 握手建立会话后重试")
+    "跨会话放行需操作员在 policy 文件中添加永久规则（scope=permanent "
+    "由操作员/内部接缝可达，工具面不可写），或由客户端经完整 MCP "
+    "initialize 握手建立会话后重试")
 
 _REMOVE_MISS_HINT = (
     "（注意：会话档授予仅对授予会话可见；"
@@ -127,6 +128,42 @@ def _rule_key(rule: safety_policy.PolicyRule) -> tuple[Any, ...]:
     """规则的语义匹配键（与 evaluate 的大小写不敏感口径一致）。"""
     return (rule.kind, rule.connect_only,
             rule.product.lower(), rule.api_pattern.lower(), rule.allow)
+
+
+_SCOPE_RANK: dict[str, int] = {"once": 0, "temporary": 1, "session": 2}
+"""overlay 档位寿命排序（permanent 走文件层不入桶）。"""
+
+
+def _entry_scope_rank(entry: "_OverlayEntry") -> int:
+    """条目寿命档：委托 _overlay_scope（单点推导——once/temporary/session
+    三态分类唯一真值源，list_rules/remove/GC 与本函数共享）。"""
+    return _SCOPE_RANK[_overlay_scope(entry)]
+
+
+def _absorbed_by(bucket: "list[_OverlayEntry]", rule: safety_policy.PolicyRule,
+                 scope: str) -> bool:
+    """桶内已有语义等价规则即吸收（幂等），除非其寿命档低于请求档位。
+
+    rank < requested 不吸收（once < temporary < session）——寿命低于请求的
+    残留条目吸收更宽请求会使授予返回「规则已存在」却从未落位，残留条目
+    焚毁/过期后授权不存在，用户所选档位失真；此例外下照常插入。等寿命
+    及更宽条目吸收（含 temporary 请求被 temporary 条目吸收）幂等无害
+    保留——**已知缺口（第 13 轮记录，internal-seam 不可达）**：等寿命
+    比较按 scope 种类、不按剩余寿命，temporary 条目剩余 TTL 短于请求
+    ttl_seconds 时吸收返回「已存在」而请求寿命未获延展（工具面不可达
+    ——choice→scope 仅 once/session、manage_policy 工具面 list-only）。
+    scope 由调用方（add_rule/add_rules）预先验证 ∈ SCOPES，
+    overlay 路径仅见 once/temporary/session——未知值 KeyError 内部缝
+    炸响（fail-closed，不静默按最宽档处理）。
+    """
+    requested = _SCOPE_RANK[scope]
+    for entry in bucket:
+        if _rule_key(entry.rule) != _rule_key(rule):
+            continue
+        if _entry_scope_rank(entry) < requested:
+            continue
+        return True
+    return False
 
 
 def _semantic_positions(entries: list[str]) -> list[int]:
@@ -416,9 +453,8 @@ class PolicyStore:
             bucket = self._ensure_bucket(key)
             self._prune_expired(bucket)
             self._touch(key, self._time_fn())
-            for entry in bucket:
-                if _rule_key(entry.rule) == _rule_key(rule):
-                    return MutationResult(ok=True, scope=scope, reason="规则已存在")
+            if _absorbed_by(bucket, rule, scope):
+                return MutationResult(ok=True, scope=scope, reason="规则已存在")
             expire_at = ((self._time_fn() + (ttl_seconds if ttl_seconds is not None
                                              else DEFAULT_TTL_SECONDS))
                          if scope == "temporary" else None)
@@ -531,7 +567,7 @@ class PolicyStore:
             for text, rule in zip(texts, rules):
                 if scope == "once":
                     rule = dataclasses.replace(rule, once=True)
-                if any(_rule_key(entry.rule) == _rule_key(rule) for entry in bucket):
+                if _absorbed_by(bucket, rule, scope):
                     results.append(MutationResult(ok=True, scope=scope,
                                                   reason="规则已存在"))
                     continue

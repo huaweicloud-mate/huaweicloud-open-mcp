@@ -10,7 +10,7 @@ import functools
 import inspect
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence, TypeVar, cast
+from typing import Any, Callable, Literal, Sequence, TypeVar, cast
 
 from apie import catalog, metadata
 from apie import mock as apie_mock
@@ -225,10 +225,13 @@ class ToolService:
             return None
         # 最小规则载体不接受通配目标：offer 的 product/api 为调用方可控字符串，
         # crafted 元字符（*?[）会把「最小规则」实际构造为产品级/全局放行
-        # （confirm 断言式授予与 api_session 选择同形受害）；coarse_rule 是
-        # 唯一合法通配载体（产品级选项数据驱动）
-        if any(c in (product or "") or c in (api or "") for c in "*?["):
-            logger.warning("grant offer suppressed for wildcard target %s:%s",
+        # （confirm 断言式授予与 api_session 选择同形受害）；空/纯空白目标
+        # 同形受害——grant_rule('ECS','') 产出 'ECS:=allow'，parse_policy 把
+        # 空模式归一为 '*'（policy.py product.strip() or '*'），元字符检查
+        # 检测不到；coarse_rule 是唯一合法通配载体（产品级选项数据驱动）
+        if (any(c in (product or "") or c in (api or "") for c in "*?[")
+                or not (product or "").strip() or not (api or "").strip()):
+            logger.warning("grant offer suppressed for wildcard/blank target %s:%s",
                            product, api)
             return None
         return DenialOffer(subject=f"{product}:{api}",
@@ -240,7 +243,9 @@ class ToolService:
     @_guarded
     def manage_policy(self, action: str, line: str | list[str] | None = None,
                       scope: str | None = None,
-                      ttl_seconds: int | None = None) -> dict[str, Any]:
+                      ttl_seconds: int | None = None,
+                      source: Literal["assertion", "elicit"] | None = None
+                      ) -> dict[str, Any]:
         """内部可写接缝（grant fn 直调；MCP 工具面 list-only，见
         common.elicit.manage_policy_list_only——2026-10 起 add/remove 不经
         工具面暴露，防 agent 未经用户自授）。
@@ -253,6 +258,9 @@ class ToolService:
         line 支持传字符串数组批量 add/remove（整批共享 scope，add 任一行非法
         整批不应用；信封附加 results 逐条结果）。
         调用方为 elicitation/confirm 确认路径（用户已确认或断言式）与测试。
+        source 为审计溯源标记（不参与策略语义）：elicit=协议问询确认授予 /
+        assertion=grant/confirm 参数断言式授予，经 @audited 落入 input 快照，
+        操作员在 NDJSON 区分两类授予的 provenance。
         信封语义委托 safety.policy_store.manage_policy_ops（两模式单一实现）。
         """
         return manage_policy_ops(self.config.policy_store, action,

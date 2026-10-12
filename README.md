@@ -28,7 +28,7 @@ The gateway serves stdio by default, the form your code agent launches. `--trans
 
 - **Progressive workflow.** The agent explores step by step: `search_apis` (entity-graph cross-product search when the intent doesn't name a product) → `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`, narrowing 17,000+ APIs to one concrete call. Each step keeps the LLM context bounded; the full guide ships in the server instructions.
 - **Metadata-driven, zero SDK.** API metadata is fetched live from Huawei Cloud API Explorer and cached in memory. Requests are signed locally (SDK-HMAC-SHA256, self-implemented) and sent straight to Huawei Cloud.
-- **Secure by default.** Every `execute_api` must pass a safety policy (allowlist/denylist); with no policy configured, everything is denied. Rules hot-reload; grants flow only through the denied tool's consent paths (`confirm=true` / elicitation proposal), and persistent rules are edited by the operator in the policy file.
+- **Secure by default.** Every `execute_api` must pass a safety policy (allowlist/denylist); with no policy configured, everything is denied. Rules hot-reload; grants flow only through the denied tool's consent paths (`grant=<tier>` / `confirm=true` in off mode, elicitation proposal in auto/required), and persistent rules are edited by the operator in the policy file.
 
 ## Quick start
 
@@ -241,7 +241,7 @@ Point any MCP-capable client at the endpoint:
 
 What changes over HTTP:
 
-- Every client connection gets its own policy session. `session`-scope rules granted through the denied tool's consent paths (elicitation proposal or off-mode `confirm=true`) are visible only to that connection and invisible to every other; reconnecting starts a fresh session with no inherited grants; `once` rules burn within the granting session. `permanent` rules land in the policy file and stay shared across sessions and restarts, as always.
+- Every client connection gets its own policy session. `session`-scope rules granted through the denied tool's consent paths (elicitation proposal, or off-mode `grant=<tier>` / `confirm=true` assertion) are visible only to that connection and invisible to every other; reconnecting starts a fresh session with no inherited grants; `once` rules burn within the granting session. `permanent` rules land in the policy file and stay shared across sessions and restarts, as always.
 - Requests without MCP session identity (the modern single-exchange protocol) cannot write session-scoped grants; they get a structured rejection instead of silently sharing state.
 - `GET /healthz` serves probes. Audit events (with `--audit-file`) carry a `session` field attributing each call to its MCP session; over stdio the audit output is byte-identical to before.
 - Idle sessions are recycled: a session bucket untouched for 30 minutes is reclaimed, and any grant dies after 24 hours. A session that keeps working keeps its grants alive.
@@ -293,7 +293,7 @@ A policy file is a JSON array (or plain text) of rules. The gateway evaluates ru
 
 - Rules have the form `product:apiPattern=allow|deny`. Matching uses fnmatch-style wildcards, is case-insensitive for product and API, and lines starting with `#` are comments.
 - With no `--policy` configured, every execution is denied.
-- `manage_policy` keeps `action=list` only (read): add/remove are retired from the tool face to stop the agent from self-granting without the user — grants flow through the denied tool's consent paths (`confirm=true` / elicitation proposal), and persistent/batch/custom rules are edited by the operator directly in the policy file (hot-reloaded).
+- `manage_policy` keeps `action=list` only (read): add/remove are retired from the tool face to stop the agent from self-granting without the user — grants flow through the denied tool's consent paths (`grant=<tier>` / `confirm=true` in off mode, elicitation proposal in auto/required), and persistent/batch/custom rules are edited by the operator directly in the policy file (hot-reloaded).
 - Grant scopes (internal seam & file format reference):
   - `once`: single execution, burned after use
   - `session` (default): this agent session only
@@ -301,7 +301,7 @@ A policy file is a JSON array (or plain text) of rules. The gateway evaluates ru
   - `permanent`: written to the policy file
 - Batch grants: `line` also accepts an array of rules. The whole batch shares one scope; batch `add` is all-or-nothing (any invalid line rejects the entire batch, nothing applied); batch `remove` is per-rule best-effort (misses are reported per item). The batch envelope carries per-rule `results`; top-level `ok` is true only when every rule succeeded.
 - Everything hot-reloads: operator edits to the file apply immediately (the only write path for persistent rules). Session-tier grants from the consent paths die with the connection. Grant minimal rules first (`once`/`session`), product-wide only when justified.
-- Denials return an actionable reason. Under the default `off`, ask the user over chat first, then resend the denied tool with `confirm=true`: the server grants the one-shot minimal rule and executes in the same call — no `manage_policy` needed (the next execution requires fresh confirmation). With `--elicitation auto|required`, retry the denied tool directly: the server proposes a grant over MCP elicitation (five choices, session-tier recommended on the first ask); once the user confirms, the server replays the call once inline and returns the execution result — no second call needed (`confirm` is ignored in this mode; confirmation must go through the protocol prompt). If the retry is still denied, the result carries the already-granted rules as context:
+- Denials return an actionable reason. Under the default `off`, ask the user over chat which tier to grant, then resend the denied tool with `grant=<tier>`: the server grants the chosen rule in the same call and executes it — `api_session` (minimal rule, session-scoped), `readonly` (product-level read-only ruleset, session-scoped), `product` (product-wide rule, session-scoped), or `api` (one-shot minimal rule; `confirm=true` is its legacy spelling). With `--elicitation auto|required`, retry the denied tool directly: the server proposes a grant over MCP elicitation (five choices aligned with the `grant` tiers, session-tier recommended on the first ask); once the user confirms, the server replays the call once inline and returns the execution result — no second call needed (`grant`/`confirm` are ignored in this mode; confirmation must go through the protocol prompt). If the retry is still denied, the result carries the already-granted rules as context:
   - `api_session`: minimal rule, session-scoped (preferred for repeated single-API use)
   - `readonly`: product read-only rule set (`*List*/*Show*/*Get*/*Query*`, session-scoped; preferred for browsing and multi-step tasks)
   - `product`: product-wide, session-scoped
@@ -503,7 +503,7 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | Client shows "failed to connect" or the server exits immediately | `--policy` path is relative or the file is missing — the server fails fast on a bad policy file | Use an absolute path to a file that exists |
 | The gateway tools never appear in the agent | `uvx` is not on the client's PATH | Find it with `which uvx` (macOS/Linux) or `where uvx` (Windows) and use the absolute path in place of `uvx` in the command |
 | Metadata tools work but `execute_api` fails | Credentials not loaded (empty `[basic]` section, or env vars shadow an empty file) | Fix `~/.huaweicloud/credentials` (see [Credentials](#credentials)) or set the `HUAWEICLOUD_SDK_*` environment variables |
-| `execute_api` returns `{"ok": false, "reason": ...}` mentioning policy | The API is not allowed by the policy file (the quick-start file allows only `ECS:*List*`) | Edit the policy file — changes hot-reload without restarting the server — or, after confirming with the user, have the agent resend the denied tool with `confirm=true` (off mode, one-shot minimal rule) |
+| `execute_api` returns `{"ok": false, "reason": ...}` mentioning policy | The API is not allowed by the policy file (the quick-start file allows only `ECS:*List*`) | Edit the policy file — changes hot-reload without restarting the server — or, after confirming the tier with the user, have the agent resend the denied tool with `grant=<tier>` (off mode; `confirm=true` for the one-shot minimal rule) |
 | 401 / SignatureDoesNotMatch | Wrong AK or SK | Recheck the credentials source in use (env wins over profile file) |
 | 403 from Huawei Cloud with a permission error | The IAM user lacks the permission | Grant the minimal IAM policy needed for that API |
 | `"count": 0` but you have servers | Resources live in another region | Ask again with an explicit `region`, e.g. `cn-east-3` |

@@ -202,17 +202,17 @@ def test_grant_choice_confirm_rejects_unknown_value():
 # ---------- PolicyConsent.offer_grant（GrantOutcome 契约） ----------
 
 def assert_refused(outcome, denial: dict, offer: DenialOffer, *,
-                   hinted: bool = False, confirm_available: bool = False) -> None:
+                   hinted: bool = False, assertion_available: bool = False) -> None:
     """未授予契约：GrantRefused + envelope 保持 ok=False 且 reason 前缀为原拒绝；
-    hinted=True 时 reason 以兜底指引收尾（confirm_available 按被测 consent mode
-    传入——off 档指引含 confirm 快路径，auto/required 降级不含），
-    否则 reason 与原 denial 逐字一致（用户已表态不加指引）。"""
+    hinted=True 时 reason 以兜底指引收尾（assertion_available 按被测 consent
+    mode 传入——off 档指引含 grant/confirm 断言快路径，auto/required 降级
+    明示参数被忽略），否则 reason 与原 denial 逐字一致（用户已表态不加指引）。"""
     assert isinstance(outcome, GrantRefused)
     out = outcome.envelope
     assert out["ok"] is False
     assert out["reason"].startswith(denial["reason"])
     if hinted:
-        expected = fallback_hint(offer, confirm_available=confirm_available)
+        expected = fallback_hint(offer, assertion_available=assertion_available)
         assert out["reason"].endswith(expected)
         assert "policy" in out["reason"]        # 两分支统一指向操作员 policy 文件
     else:
@@ -220,21 +220,43 @@ def assert_refused(outcome, denial: dict, offer: DenialOffer, *,
 
 
 def test_fallback_hint_coarse_lists_four_options():
-    """有 coarse_rule：指引并列四选项与各自语义，统一指向操作员 policy 文件。"""
-    hint = fallback_hint(COARSE_OFFER, confirm_available=True)
+    """off 档 + coarse_rule：指引并列四选项与各自语义（grant=<档位> 机制），
+    统一指向操作员 policy 文件（含 `_OPERATOR_FILE_NOTE` 永久档句——
+    round-12 四路径钉住，常量漂移/缺席即炸）。"""
+    hint = fallback_hint(COARSE_OFFER, assertion_available=True)
     assert "VPC:CreateVpc=allow" in hint and "VPC:*=allow" in hint
     assert ("api_session" in hint and "product" in hint and "api" in hint)
-    assert "confirm=true" in hint and "policy 文件" in hint
+    assert "grant=" in hint and "policy 文件" in hint
+    assert "文件规则为永久档" in hint and "跨重启生效" in hint  # 共享句
     assert "question" in hint          # 通用问询表述（对话/交互式问询）
     assert "elicitation" not in hint   # prompt 约定不走协议弹窗
 
 
 def test_fallback_hint_minimal_lists_single_option():
-    """无 coarse_rule（connect 场景）：仅最小规则单选项。"""
-    hint = fallback_hint(OFFER, confirm_available=True)
+    """off 档 + 无 coarse_rule（connect 场景）：confirm=true 单机制；
+    永久档句在场（connect 是 session-vs-permanent 差异最要紧处——
+    round-11 补齐、round-12 钉住）。"""
+    hint = fallback_hint(OFFER, assertion_available=True)
     assert "ECS:ListServers=allow" in hint
     assert "confirm=true" in hint and "policy 文件" in hint
+    assert "文件规则为永久档" in hint                      # 共享句（round-12 钉）
     assert "product" not in hint
+
+
+def test_fallback_hint_degraded_states_params_ignored():
+    """auto/required 降级（客户端不支持）：明示 confirm/grant 参数被忽略
+    （重传不会改变结果——循环守卫），仅指向操作员 policy 文件并附规则文本
+    供直接补授；不再列举参数断言档位为 agent 行动项；永久档句在场
+    （round-12 钉——降级分支的共享句注入点）。"""
+    hint = fallback_hint(COARSE_OFFER)                     # assertion_available 缺省 False
+    assert "被忽略" in hint and "重传不会改变结果" in hint
+    assert "grant=" not in hint and "confirm=true" not in hint
+    assert "操作员" in hint and "policy 文件" in hint
+    assert "文件规则为永久档" in hint                      # 共享句（round-12 钉）
+    assert "VPC:CreateVpc=allow" in hint and "VPC:*=allow" in hint  # 操作员补授参考
+    minimal = fallback_hint(OFFER)
+    assert "被忽略" in minimal and "ECS:ListServers=allow" in minimal
+    assert "文件规则为永久档" in minimal                    # 降级 minimal 路径
 
 
 def test_offer_grant_off_never_elicts():
@@ -242,7 +264,7 @@ def test_offer_grant_off_never_elicts():
     consent = PolicyConsent("off", elicit, make_grant())
     outcome = run(consent.offer_grant(OFFER, dict(DENIAL)))
     assert elicit.calls == []  # type: ignore[attr-defined]
-    assert_refused(outcome, DENIAL, OFFER, hinted=True, confirm_available=True)
+    assert_refused(outcome, DENIAL, OFFER, hinted=True, assertion_available=True)
 
 
 def test_offer_grant_accept_grants_and_reports_rules():
@@ -355,7 +377,7 @@ def test_offer_grant_coarse_off_never_elicts():
     outcome = run(consent.offer_grant(COARSE_OFFER, dict(DENIAL_VPC)))
     assert elicit.calls == []  # type: ignore[attr-defined]
     assert_refused(outcome, DENIAL_VPC, COARSE_OFFER, hinted=True,
-                   confirm_available=True)
+                   assertion_available=True)
 
 
 def test_offer_grant_minimal_scope_session_wiring():
@@ -613,7 +635,10 @@ def test_offer_grant_readonly_all_failed_keeps_denial():
     assert "policy 文件" in outcome.envelope["reason"]
 
 
-def test_offer_grant_readonly_without_rules_keeps_denial():
+def test_offer_grant_readonly_without_rules_structured_refusal():
+    """readonly 数据缺席（discover offer）→ 结构化拒绝并列可用档位
+    （2026-10 行为变更：旧口径「误选按 none 处理」静默拒绝收敛；两传输统一，
+    grant 参数路径经 confirm_grant 同款分支）。"""
     bare = DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
                        coarse_rule="X:*=allow")
     elicit = make_elicit(ACCEPT_READONLY)
@@ -621,28 +646,32 @@ def test_offer_grant_readonly_without_rules_keeps_denial():
     consent = PolicyConsent("auto", elicit, grant)
     denial = {"ok": False, "reason": "denied"}
     outcome = run(consent.offer_grant(bare, dict(denial)))
-    assert_refused(outcome, denial, bare)
+    assert isinstance(outcome, GrantRefused)
+    assert outcome.envelope["reason"].startswith(denial["reason"])
+    assert "readonly 档不可用" in outcome.envelope["reason"]
+    assert "api_session" in outcome.envelope["reason"]      # 并列可用档位
+    assert "policy 文件" in outcome.envelope["reason"]      # 操作员补授指引
     assert grant.calls == []  # type: ignore[attr-defined]
 
 
 def test_fallback_hint_readonly_lists_five_options():
-    hint = fallback_hint(READONLY_OFFER, confirm_available=True)
+    hint = fallback_hint(READONLY_OFFER, assertion_available=True)
     assert "api_session=最小规则" in hint
     assert "product=产品级规则" in hint
     assert "readonly=产品级只读" in hint
     assert "api=最小规则" in hint
     assert "*List*" in hint and "*Query*" in hint
-    assert "confirm=true" in hint
+    assert "grant=" in hint
 
 
 def test_fallback_hint_coarse_orders_session_tier_first():
     """指引选项与弹窗同序：api_session/readonly 在 product/api 之前。"""
-    hint = fallback_hint(READONLY_OFFER, confirm_available=True)
+    hint = fallback_hint(READONLY_OFFER, assertion_available=True)
     assert hint.index("api_session=") < hint.index("readonly=")
     assert hint.index("readonly=") < hint.index("product=")
     assert hint.index("product=") < hint.index("/api=")
 
-    plain = fallback_hint(COARSE_OFFER, confirm_available=True)   # 无 readonly_rules
+    plain = fallback_hint(COARSE_OFFER, assertion_available=True)   # 无 readonly_rules
     assert "readonly" not in plain
     assert plain.index("api_session=") < plain.index("product=") < plain.index("/api=")
 
@@ -736,7 +765,7 @@ def test_offer_grant_and_retry_denied_again_appends_granted_context():
     assert out["ok"] is False
     assert out["reason"].startswith("safety policy 拒绝执行 ECS:ListServers")
     assert "ECS:ListServers=allow" in out["reason"]
-    assert "再次调用将重新提议" in out["reason"]
+    assert "再次调用将重新进入确认授予流程" in out["reason"]
     assert len(elicit.calls) == 1  # type: ignore[attr-defined]
 
 
@@ -778,7 +807,7 @@ def test_offer_grant_and_retry_partial_readonly_denied_appends_failed_subset():
     assert out["reason"].startswith("safety policy 拒绝执行 VPC:CreateVpc")
     assert "VPC:*List*=allow" in out["reason"]            # 已授予上下文
     assert "VPC:*Show*=allow" in out["reason"]            # 失败子集回执
-    assert "再次调用将重新提议" in out["reason"]
+    assert "再次调用将重新进入确认授予流程" in out["reason"]
 
 
 def test_offer_grant_and_retry_non_policy_failure_returns_untouched():
@@ -852,6 +881,65 @@ def test_confirm_grant_failure_reports():
     assert outcome.envelope["reason"].startswith(DENIAL["reason"])
 
 
+def test_confirm_grant_failure_does_not_readvertise_mechanism():
+    """授予失败信封不附 fallback_hint——刚失败的机制（grant/confirm 重传）
+    不可再兜售（strict_sessions 拒绝等场景重传即无变化循环）。"""
+    consent = PolicyConsent("off", make_elicit(DECLINE), make_grant(fail=True))
+    outcome = consent.confirm_grant(COARSE_OFFER, dict(DENIAL_VPC))
+    assert isinstance(outcome, GrantRefused)
+    reason = outcome.envelope["reason"]
+    assert "自动授予" in reason and "失败" in reason
+    assert "grant=" not in reason and "confirm=true" not in reason
+
+
+def test_confirm_grant_choice_matrix_matches_elicitation():
+    """断言式 choice 派发与问询表单同源共享：api_session→最小规则 session、
+    product→coarse session、readonly→只读规则集逐条 session、缺省 api→
+    minimal_scope（once）。"""
+    grant = make_grant()
+    consent = PolicyConsent("off", make_elicit(DECLINE), grant)
+
+    out = consent.confirm_grant(COARSE_OFFER, dict(DENIAL_VPC), choice="api_session")
+    assert isinstance(out, GrantAccepted)
+    assert grant.calls == [("VPC:CreateVpc=allow", "session")]  # type: ignore[attr-defined]
+
+    out = consent.confirm_grant(COARSE_OFFER, dict(DENIAL_VPC), choice="product")
+    assert isinstance(out, GrantAccepted)
+    assert grant.calls[-1] == ("VPC:*=allow", "session")  # type: ignore[attr-defined]
+
+    readonly = consent.confirm_grant(READONLY_OFFER, dict(DENIAL_VPC), choice="readonly")
+    assert isinstance(readonly, GrantAccepted)
+    assert readonly.rules == tuple(READONLY_RULES)
+    assert grant.calls[2:] == [(r, "session") for r in READONLY_RULES]  # type: ignore[attr-defined]
+
+    api = consent.confirm_grant(OFFER, dict(DENIAL))          # 缺省 choice="api"
+    assert isinstance(api, GrantAccepted)
+    assert grant.calls[-1] == ("ECS:ListServers=allow", "once")  # type: ignore[attr-defined]
+
+
+def test_confirm_grant_product_without_coarse_keeps_denial():
+    """product 档在无 coarse_rule 的 offer（connect 场景）不可授予。"""
+    grant = make_grant()
+    consent = PolicyConsent("off", make_elicit(DECLINE), grant)
+    outcome = consent.confirm_grant(OFFER, dict(DENIAL), choice="product")
+    assert isinstance(outcome, GrantRefused)
+    assert outcome.envelope == DENIAL
+    assert grant.calls == []  # type: ignore[attr-defined]
+
+
+def test_confirm_grant_readonly_without_rules_structured_refusal():
+    """readonly 数据缺席经断言路径同样结构化拒绝（两传输统一）。"""
+    bare = DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
+                       coarse_rule="X:*=allow")
+    grant = make_grant()
+    consent = PolicyConsent("off", make_elicit(DECLINE), grant)
+    denial = {"ok": False, "reason": "denied"}
+    outcome = consent.confirm_grant(bare, dict(denial), choice="readonly")
+    assert isinstance(outcome, GrantRefused)
+    assert "readonly 档不可用" in outcome.envelope["reason"]
+    assert grant.calls == []  # type: ignore[attr-defined]
+
+
 def test_confirmed_grant_and_retry_executes_inline_once():
     """断言式授予后重放恰一次，结果原样返回。"""
     consent = PolicyConsent("off", make_elicit(DECLINE), make_grant())
@@ -866,6 +954,24 @@ def test_confirmed_grant_and_retry_executes_inline_once():
     assert calls == [0]
 
 
+def test_confirmed_grant_and_retry_choice_passthrough():
+    """choice 穿透：confirmed_grant_and_retry 按 choice 档位授予（api_session
+    → session）并重放恰一次。"""
+    grant = make_grant()
+    consent = PolicyConsent("off", make_elicit(DECLINE), grant)
+    calls: list[int] = []
+
+    def retry() -> dict:
+        calls.append(len(calls))
+        return {"ok": True, "body": {"mock": True}}
+
+    out = run(confirmed_grant_and_retry(consent, COARSE_OFFER, dict(DENIAL_VPC),
+                                        retry, choice="api_session"))
+    assert out == {"ok": True, "body": {"mock": True}}
+    assert calls == [0]
+    assert grant.calls == [("VPC:CreateVpc=allow", "session")]  # type: ignore[attr-defined]
+
+
 def test_confirmed_grant_and_retry_denied_again_appends_context():
     """重试仍被 policy 拒绝：附已授予上下文（共享尾部与问询路径同口径）。"""
     consent = PolicyConsent("off", make_elicit(DECLINE), make_grant())
@@ -876,28 +982,28 @@ def test_confirmed_grant_and_retry_denied_again_appends_context():
     out = run(confirmed_grant_and_retry(consent, OFFER, dict(DENIAL), retry))
     assert out["ok"] is False
     assert "ECS:ListServers=allow" in out["reason"]
-    assert "再次调用将重新提议" in out["reason"]
+    assert "再次调用将重新进入确认授予流程" in out["reason"]
 
 
 def test_fallback_hint_mode_aware():
-    """兜底指引按 confirm 可达性分流：off 档（confirm_available=True）含
-    confirm 快路径与操作员 policy 文件指引；auto/required 降级（缺省 false）
-    不提 confirm——那些模式下 confirm 被静态忽略，指引它即无变化重试循环，
-    仅指向操作员 policy 文件。"""
-    hint = fallback_hint(OFFER, confirm_available=True)
+    """兜底指引按断言参数可达性分流：off 档（assertion_available=True）含
+    grant/confirm 断言快路径与操作员 policy 文件指引；auto/required 降级
+    （缺省 false）不提参数断言并明示被忽略——那些模式下 grant/confirm 被静态
+    忽略，指引它即无变化重试循环，仅指向操作员 policy 文件。"""
+    hint = fallback_hint(OFFER, assertion_available=True)
     assert "confirm=true" in hint
     assert "policy 文件" in hint and "question" in hint
     plain = fallback_hint(OFFER)                     # auto/required 降级口径
     assert "confirm=true" not in plain               # 循环守卫
     assert "policy 文件" in plain and "操作员" in plain
-    coarse = fallback_hint(COARSE_OFFER, confirm_available=True)
-    assert "confirm=true" in coarse
+    coarse = fallback_hint(COARSE_OFFER, assertion_available=True)
+    assert "grant=" in coarse
 
 
-def test_fallback_hint_off_mentions_batch_via_operator_file():
-    """off 档指引以「批量/持久/更宽档位」指向操作员文件（无 agent 数组写面）。"""
-    hint = fallback_hint(OFFER, confirm_available=True)
-    assert "批量" in hint and "policy 文件" in hint
+def test_fallback_hint_off_mentions_persistent_via_operator_file():
+    """off 档指引以「持久/批量档位」指向操作员文件（无 agent 数组写面）。"""
+    hint = fallback_hint(COARSE_OFFER, assertion_available=True)
+    assert "持久" in hint and "policy 文件" in hint
     degraded = fallback_hint(OFFER)
     assert "confirm=true" not in degraded and "操作员" in degraded
 

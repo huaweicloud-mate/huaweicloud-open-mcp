@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Sequence
 
+from common.audit import AuditSink
 from safety.policy import PolicyRule
 from safety.policy_store import PolicyStore
 
@@ -22,3 +23,5 @@ class DiscoverConfig:
     policy_store: PolicyStore | None = None
     session_idle_timeout: int = DEFAULT_IDLE_TIMEOUT
     max_sessions: int = DEFAULT_MAX_SESSIONS
+    # 审计 sink（manage_policy 授予 + connect/call_tool dispatch，NDJSON；None=零开销跳过）
+    audit_sink: AuditSink | None = None
