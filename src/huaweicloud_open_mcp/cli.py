@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
-_MODES = ("openapi", "discover", "data")
+_MODES = ("openapi", "data")
 
 
 def run_transport(app: "MCPServer", args: argparse.Namespace,
@@ -50,7 +50,7 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
     items = [m.strip() for m in raw.split(",") if m.strip()]
     invalid = [m for m in items if m not in _MODES]
     if invalid:
-        logger.warning("无效模式 %s 已忽略（可用：openapi/discover/data）", invalid)
+        logger.warning("无效模式 %s 已忽略（可用：openapi/data）", invalid)
     valid = list(dict.fromkeys(m for m in items if m in _MODES))
     return valid or ["openapi"]
 
@@ -59,9 +59,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="huaweicloud-open-mcp",
         description="华为云 Open MCP server（stdio / Streamable HTTP）。"
-                    "openapi 直连华为云 API；discover 发现连接云端 MCP server。")
+                    "openapi 直连华为云 API；data 本地只读 SQL 分析。")
     parser.add_argument("--mode", default=None,
-                        help="运行模式，可逗号组合混用（openapi/discover/data，"
+                        help="运行模式，可逗号组合混用（openapi/data，"
                              "如 openapi,data；默认 openapi；环境变量 HUAWEICLOUD_MCP_MODE）")
     parser.add_argument("--transport", default=None,
                         help="传输层：stdio（缺省，MCP 客户端拉起的本地形态）或 "
@@ -81,7 +81,7 @@ def main() -> None:
                         help="HTTP MCP 端点路径（默认 /mcp；须以 / 开头；"
                              "环境变量 HUAWEICLOUD_MCP_HTTP_PATH）")
     parser.add_argument("--mock", action="store_true", default=None,
-                        help="mock 模式：openapi 模式指向 API Explorer mock；discover 模式指向本地 stub")
+                        help="mock 模式：openapi 模式指向 API Explorer mock 端点")
     parser.add_argument("--mock-base", default=None,
                         help="mock 端点基础地址（环境变量 HUAWEICLOUD_MCP_MOCK_BASE）")
     parser.add_argument("--mock-passthrough", action="store_true", default=None,

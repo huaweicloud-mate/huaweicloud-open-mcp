@@ -22,9 +22,6 @@ from tests.test_elicit_mcp import _OPENAPI_DOC, _StubMockClient, result_dict
 
 _OPENAPI_TOOLS = {"search_apis", "list_products", "get_product", "list_apis",
                   "get_api", "get_api_examples", "execute_api", "manage_policy"}
-_DISCOVER_TOOLS = {"list_mcp_servers", "get_mcp_server", "connect_mcp_server",
-                   "list_server_tools", "get_server_tool", "call_server_tool",
-                   "disconnect_mcp_server", "manage_policy"}
 
 # 文件级密封（conftest 共享 fixture）：共享 store/sink 装配不受宿主 configs 泄入影响
 pytestmark = pytest.mark.usefixtures("sealed_configs")
@@ -77,22 +74,6 @@ def test_openapi_data_toolset_with_dedup():
     assert names.count("manage_policy") == 1
 
 
-def test_discover_data_toolset_with_dedup():
-    app = build_app(["discover", "data"], make_args())
-    names = list_tool_names(app)
-    assert set(names) == _DISCOVER_TOOLS | {"query_data", "transform_data"}
-    assert len(names) == 10
-    assert names.count("manage_policy") == 1
-
-
-def test_all_three_modes_toolset():
-    app = build_app(["openapi", "discover", "data"], make_args())
-    names = list_tool_names(app)
-    assert set(names) == _OPENAPI_TOOLS | _DISCOVER_TOOLS | {"query_data", "transform_data"}
-    assert len(names) == 17
-    assert names.count("manage_policy") == 1
-
-
 # ---------- instructions 合并 ----------
 
 def test_merge_instructions_sections():
@@ -104,9 +85,9 @@ def test_merge_instructions_sections():
 
 
 def test_composite_app_instructions_reach_client():
-    app = build_app(["discover", "data"], make_args())
+    app = build_app(["openapi", "data"], make_args())
     instructions = app.instructions or ""
-    assert "## 模式：discover（MCP server 发现连接）" in instructions
+    assert "## 模式：openapi（OpenAPI 直连）" in instructions
     assert "## 模式：data（数据分析）" in instructions
 
 
@@ -154,7 +135,6 @@ def test_openapi_data_policy_roundtrip_and_data_isolation(tmp_path, monkeypatch)
 def test_parse_modes_single_and_default():
     assert parse_modes(None) == ["openapi"]
     assert parse_modes("openapi") == ["openapi"]
-    assert parse_modes(None, env="discover") == ["discover"]
     assert parse_modes("DATA") == ["data"]
 
 

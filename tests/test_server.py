@@ -77,39 +77,6 @@ def test_execute_api_output_schema_optional_fields_nullable():
         assert any(opt.get("type") == "null" for opt in prop.get("anyOf", []))
 
 
-# ---------- discover 模式隔离 ----------
-
-EXPECTED_DISCOVER_TOOLS = {
-    "list_mcp_servers", "get_mcp_server",
-    "connect_mcp_server", "disconnect_mcp_server",
-    "list_server_tools", "get_server_tool", "call_server_tool",
-    "manage_policy",
-}
-
-
-def test_discover_mode_tools_registered():
-    from mcp_discover.config import DiscoverConfig
-    from mcp_discover.server import build_discover_app
-    app = build_discover_app(DiscoverConfig())
-    assert _tool_names(app) == EXPECTED_DISCOVER_TOOLS
-
-
-def test_openapi_mode_tools_exclude_discover():
-    """openapi 模式下不应注册 discover 工具。"""
-    app = build_app()
-    assert _tool_names(app) == EXPECTED_TOOLS
-    assert "list_mcp_servers" not in _tool_names(app)
-
-
-def test_discover_mode_tools_exclude_openapi():
-    """discover 模式下不应注册 openapi 专属工具（manage_policy 两模式共有）。"""
-    from mcp_discover.config import DiscoverConfig
-    from mcp_discover.server import build_discover_app
-    app = build_discover_app(DiscoverConfig())
-    for tool in EXPECTED_TOOLS - {"manage_policy"}:
-        assert tool not in _tool_names(app)
-
-
 def test_manage_policy_description_notes_list_only_and_operator_path():
     app = build_app()
     desc = app._tool_manager._tools["manage_policy"].description
@@ -117,15 +84,6 @@ def test_manage_policy_description_notes_list_only_and_operator_path():
     assert "操作员" in desc and "policy 文件" in desc
     assert "热生效" in desc and "无需重启" in desc
     assert "confirm=true" in desc            # 单次执行确认路径指引
-
-
-def test_discover_manage_policy_description_notes_list_only():
-    from mcp_discover.config import DiscoverConfig
-    from mcp_discover.server import build_discover_app
-    app = build_discover_app(DiscoverConfig())
-    desc = app._tool_manager._tools["manage_policy"].description
-    assert "action=list" in desc
-    assert "操作员" in desc and "policy 文件" in desc
 
 
 # ---------- 提示注入（hints） ----------

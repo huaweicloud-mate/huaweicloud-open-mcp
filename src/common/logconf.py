@@ -4,7 +4,7 @@
 - stderr 同步 WARNING+（stdio 协议安全：stdout 永不被日志污染）
 - 级别/文件：参数 > 环境变量（HUAWEICLOUD_MCP_LOG_LEVEL / HUAWEICLOUD_MCP_LOG_FILE）
 - 接管点：root logger——全部模块 logger（main/common.*/safety.*/mcp_openapi.*、
-  mcp_discover.*/apie.* 等）经传播汇入；三方噪音库（httpx/httpcore）固定 WARNING
+  mcp_data.*/apie.* 等）经传播汇入；三方噪音库（httpx/httpcore）固定 WARNING
 """
 
 import logging

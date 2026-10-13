@@ -21,8 +21,6 @@ from typing_extensions import NotRequired, Required
 
 from mcp_data.server import build_data_app
 from mcp_data.service import DataConfig
-from mcp_discover.config import DiscoverConfig
-from mcp_discover.server import build_discover_app
 from mcp_openapi.server import build_app
 
 pytestmark = pytest.mark.usefixtures("sealed_configs")
@@ -31,13 +29,12 @@ pytestmark = pytest.mark.usefixtures("sealed_configs")
 def _apps():
     return {
         "openapi": build_app(),
-        "discover": build_discover_app(DiscoverConfig()),
         "data": build_data_app(DataConfig()),
     }
 
 
 def test_all_tools_flat_wire_schema():
-    """18 处注册的 outputSchema 恒为扁平信封：含 ok、非 {"result": ...} 包裹形。"""
+    """10 处注册的 outputSchema 恒为扁平信封：含 ok、非 {"result": ...} 包裹形。"""
     seen = 0
     for mode, app in _apps().items():
         for name, tool in app._tool_manager._tools.items():
@@ -55,7 +52,7 @@ def test_all_tools_flat_wire_schema():
             if props["ok"].get("const") is True:
                 continue
             jsonschema.validate({"ok": False, "reason": "policy denied"}, schema)
-    assert seen == 18, f"预期 18 处注册，实际 {seen}"
+    assert seen == 10, f"预期 10 处注册，实际 {seen}"
 
 
 def test_registered_wire_types_free_of_typing_qualifiers():
@@ -77,7 +74,7 @@ def test_registered_wire_types_free_of_typing_qualifiers():
                 assert get_origin(ann) not in qualifiers, (
                     f"{mode}:{name} 字段 {field!r} 携带类型限定符：{ann!r}")
             seen += 1
-    assert seen == 18
+    assert seen == 10
 
 
 def test_failure_arm_flat_end_to_end():

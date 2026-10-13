@@ -1,8 +1,8 @@
 """部署旋钮归一（Deployment）：argv+env → 跨模式共享值对象，装配归一单点。
 
-此前 mock 三元组/policy/audit 的「args 优先 env 兜底」解析在 openapi/discover
+此前 mock 三元组/policy/audit 的「args 优先 env 兜底」解析在 openapi/data
 两个 builder 逐字重复、data 再抄一遍 audit，~12 处 getattr Namespace 兼容补丁
-散布三文件，env 名以内联字符串散布 62 处。本模块收拢：
+散布多文件，env 名以内联字符串散布多处。本模块收拢：
 
 - env 名常量单点（全部 HUAWEICLOUD_MCP_* 名唯一定义处）；
 - ``Deployment`` 值对象：跨模式共享旋钮 + env 映射（mode 专属旋钮经
@@ -11,8 +11,8 @@
   Namespace）；mock 布尔解析（"1"/"true"/"yes"）与 policy/audit 回退链
   只此一份。
 
-mode 专属旋钮（hints/deprecated/entity/corrections/auth_demote/spill/catalog
-等）的解析留在各 mode builder——共享的是跨模式旋钮纪律，不是 mode 语义。
+mode 专属旋钮（hints/deprecated/entity/corrections/auth_demote/spill 等）的
+解析留在各 mode builder——共享的是跨模式旋钮纪律，不是 mode 语义。
 """
 
 import argparse
@@ -39,10 +39,6 @@ ENV_ENTITY_INDEX = "HUAWEICLOUD_MCP_ENTITY_INDEX"
 ENV_AUTH_DEMOTE = "HUAWEICLOUD_MCP_AUTH_DEMOTE"
 ENV_AUTH_DEMOTE_PASS = "HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS"
 ENV_METADATA_CORRECTIONS = "HUAWEICLOUD_MCP_METADATA_CORRECTIONS"
-ENV_SERVER_CATALOG = "HUAWEICLOUD_MCP_SERVER_CATALOG"
-ENV_SERVER_CATALOG_URL = "HUAWEICLOUD_MCP_SERVER_CATALOG_URL"
-ENV_SESSION_IDLE_TIMEOUT = "HUAWEICLOUD_MCP_SESSION_IDLE_TIMEOUT"
-ENV_MAX_SESSIONS = "HUAWEICLOUD_MCP_MAX_SESSIONS"
 ENV_TRANSPORT = "HUAWEICLOUD_MCP_TRANSPORT"
 ENV_HTTP_HOST = "HUAWEICLOUD_MCP_HTTP_HOST"
 ENV_HTTP_PORT = "HUAWEICLOUD_MCP_HTTP_PORT"

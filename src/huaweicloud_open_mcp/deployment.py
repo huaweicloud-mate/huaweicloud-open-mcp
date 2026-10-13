@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from mcp_data.service import DataService
-    from mcp_discover.service import DiscoverService
     from mcp_openapi.hints import Hints
     from mcp_openapi.service import ToolService
 
@@ -69,7 +68,6 @@ def merge_instructions(modes: list[str], hints: "Hints | None") -> str:
     hints 为 None 时按空 hints 处理（仅 openapi 段消费）。
     """
     from mcp_data.server import INSTRUCTIONS_DATA
-    from mcp_discover.server import INSTRUCTIONS_DISCOVER
     from mcp_openapi.server import build_instructions
 
     openapi_hints: Hints = hints if hints is not None else _empty_hints()
@@ -77,8 +75,6 @@ def merge_instructions(modes: list[str], hints: "Hints | None") -> str:
     sections: list[tuple[str, str]] = []
     if "openapi" in modes:
         sections.append(("openapi（OpenAPI 直连）", build_instructions(openapi_hints)))
-    if "discover" in modes:
-        sections.append(("discover（MCP server 发现连接）", INSTRUCTIONS_DISCOVER))
     if "data" in modes:
         sections.append(("data（数据分析）", INSTRUCTIONS_DATA))
     body = "\n\n".join(
@@ -97,9 +93,6 @@ def _mode_instructions(mode: str, hints: "Hints | None") -> str:
     if mode == "openapi":
         from mcp_openapi.server import build_instructions
         return build_instructions(hints)
-    if mode == "discover":
-        from mcp_discover.server import INSTRUCTIONS_DISCOVER
-        return INSTRUCTIONS_DISCOVER
     if mode == "data":
         from mcp_data.server import INSTRUCTIONS_DATA
         return INSTRUCTIONS_DATA
@@ -111,14 +104,14 @@ def build_app(modes: list[str], args: argparse.Namespace, *,
               log_level: str = "INFO",
               elicit_mode: str = "off",
               openapi_service: "ToolService | None" = None,
-              discover_service: "DiscoverService | None" = None,
               data_service: "DataService | None" = None) -> MCPServer:
     """装配完成的 MCPServer：唯一 external seam（单模式与混装同一路径）。
 
     - 共享 PolicyStore/AuditSink 各构建一次，构造注入 per-mode builder
       （热更新与审计全局一致；single-adapter 测试可经 service 注入参数替换）；
     - env 可整体注入（测试），缺省 os.environ；
-    - manage_policy 全局只注册一次（openapi 优先，discover 次之，data 无贡献）；
+    - manage_policy 随 openapi 段注册（openapi 缺席的纯 data 模式无
+      manage_policy——本工具只属 openapi）；
     - 单模式 instructions 与历史 builder 逐字节一致，混装经 merge_instructions。
     """
     dep = resolve_deployment(args, env)
@@ -141,15 +134,6 @@ def build_app(modes: list[str], args: argparse.Namespace, *,
                                    policy_store=shared_store,
                                    audit_sink=shared_sink)
         svc = ToolService(cfg)
-
-    discover_svc: DiscoverService | None = discover_service
-    if discover_svc is None and "discover" in modes:
-        from mcp_discover.server import build_discover_config
-        from mcp_discover.service import DiscoverService
-        # discover 审计与 openapi 同 sink（manage_policy 授予 + 工具面写尝试补记）
-        dcfg = build_discover_config(args, dep, policy_store=shared_store,
-                                     audit_sink=shared_sink)
-        discover_svc = DiscoverService(dcfg)
 
     data_svc: DataService | None = data_service
     if data_svc is None and "data" in modes:
@@ -187,12 +171,6 @@ def build_app(modes: list[str], args: argparse.Namespace, *,
         from mcp_openapi.server import register_openapi_tools
         _log_openapi_start(svc)
         register_openapi_tools(server, svc, consent_mode=elicit_mode)
-    if discover_svc is not None:
-        from mcp_discover.server import register_discover_tools
-        _log_discover_start(discover_svc, elicit_mode,
-                            include_manage_policy=svc is None)
-        register_discover_tools(server, discover_svc, consent_mode=elicit_mode,
-                                include_manage_policy=svc is None)
     if data_svc is not None:
         from mcp_data.server import register_data_tools
         logger.info("server start: mode=data audit=%s",
@@ -211,17 +189,3 @@ def _log_openapi_start(svc: "ToolService") -> None:
                 "off" if cfg.spill is None else str(cfg.spill.dir))
     if cfg.policy_store is None:
         logger.warning("未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）")
-
-
-def _log_discover_start(svc: "DiscoverService", elicit_mode: str, *,
-                        include_manage_policy: bool) -> None:
-    cfg = svc.config
-    logger.info("server start: mode=discover mock=%s policy=%s catalog=%s elicit=%s "
-                "audit=%s%s",
-                cfg.mock,
-                "configured" if cfg.policy_rules else "MISSING",
-                cfg.catalog_path, elicit_mode,
-                "configured" if cfg.audit_sink else "none",
-                "" if include_manage_policy else " manage_policy=openapi")
-    if cfg.policy_rules is None:
-        logger.warning("未配置 safety policy，discover 连接与调用将全部拒绝（--policy 指定策略文件）")

@@ -325,11 +325,8 @@ def build_openapi_app(service: ToolService | None = None, *,
 
 
 def register_openapi_tools(server: MCPServer, svc: ToolService, *,
-                           consent_mode: str,
-                           include_manage_policy: bool = True) -> None:
-    """注册 openapi 模式工具（7 领域工具 + manage_policy 共 8；混装装配复用）。
-
-    include_manage_policy：混装时 manage_policy 全局只注册一次（由 composite 决定归属）。
+                           consent_mode: str) -> None:
+    """注册 openapi 模式工具（7 领域工具 + manage_policy 共 8）。
     """
     consent_mode = parse_elicit_mode(consent_mode)
 
@@ -510,31 +507,30 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
                           apply_tier_disclosure(result, choice, still_denied))
         return result
 
-    if include_manage_policy:
-        @server.tool()
-        async def manage_policy(action: str, line: str | list[str] | None = None,
-                                scope: str | None = None,
-                                ttl_seconds: int | None = None) -> ManagePolicyWire:
-            """查看 safety policy（action=list，读面；add/remove 已从工具面收敛）。
+    @server.tool()
+    async def manage_policy(action: str, line: str | list[str] | None = None,
+                            scope: str | None = None,
+                            ttl_seconds: int | None = None) -> ManagePolicyWire:
+        """查看 safety policy（action=list，读面；add/remove 已从工具面收敛）。
 
-            add/remove 结构化拒绝——防止 agent 未经用户确认自授规则。授予路径：
-            off 模式经被拒工具（execute_api）传 grant=<档位>（api/api_session/
-            product/readonly）或 confirm=true（等价 grant=api）；auto/required
-            经被拒工具的 elicitation 提议；持久/批量/自定义规则由操作员直接
-            编辑 policy 文件（--policy 指定，热生效、无需重启）。
-            action=list 返回当前全部规则（结构化 rules 含 scope/expires_in +
-            文件全文）；未配置 policy 文件时本工具拒绝执行（不创建文件）。
-            """
-            result = manage_policy_list_only(
-                svc.manage_policy, action, line=line,
-                scope=scope, ttl_seconds=ttl_seconds)
-            if is_write_refusal(action, result):
-                # agent 自授尝试恰是审计要捕捉的安全事件（拒绝先于 @audited
-                # service 方法返回，不经此补记则 NDJSON 无痕）
-                _audit_write(svc, "manage_policy",
-                             {"action": action, "line": line, "scope": scope,
-                              "ttl_seconds": ttl_seconds}, result)
-            return as_wire(result, ManagePolicyWire)
+        add/remove 结构化拒绝——防止 agent 未经用户确认自授规则。授予路径：
+        off 模式经被拒工具（execute_api）传 grant=<档位>（api/api_session/
+        product/readonly）或 confirm=true（等价 grant=api）；auto/required
+        经被拒工具的 elicitation 提议；持久/批量/自定义规则由操作员直接
+        编辑 policy 文件（--policy 指定，热生效、无需重启）。
+        action=list 返回当前全部规则（结构化 rules 含 scope/expires_in +
+        文件全文）；未配置 policy 文件时本工具拒绝执行（不创建文件）。
+        """
+        result = manage_policy_list_only(
+            svc.manage_policy, action, line=line,
+            scope=scope, ttl_seconds=ttl_seconds)
+        if is_write_refusal(action, result):
+            # agent 自授尝试恰是审计要捕捉的安全事件（拒绝先于 @audited
+            # service 方法返回，不经此补记则 NDJSON 无痕）
+            _audit_write(svc, "manage_policy",
+                         {"action": action, "line": line, "scope": scope,
+                          "ttl_seconds": ttl_seconds}, result)
+        return as_wire(result, ManagePolicyWire)
 
 build_config = build_openapi_config
 build_app = build_openapi_app

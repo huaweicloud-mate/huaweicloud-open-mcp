@@ -24,9 +24,9 @@ def test_dev_repo_configs_take_priority(tmp_path, monkeypatch):
 def test_fallback_to_package_resource(tmp_path, monkeypatch):
     """仓库根缺失时回退包内 configs 资源路径。"""
     monkeypatch.setattr(paths, "project_root", lambda: tmp_path)
-    p = paths.config_path("mcp-server-catalog.example.json")
+    p = paths.config_path("safety-policy.example.json")
     assert p.parts[-3:] == ("huaweicloud_open_mcp", "configs",
-                            "mcp-server-catalog.example.json")
+                            "safety-policy.example.json")
 
 
 def test_real_repo_layout_cwd_independent(tmp_path, monkeypatch):
