@@ -153,3 +153,17 @@ def test_parse_modes_removed_discover_fails_fast():
         parse_modes("discover")
     with pytest.raises(ValueError, match="discover"):
         parse_modes(None, env="openapi,DISCOVER")
+    # 空白/--mode 垃圾值不遮蔽环境变量（strip 先于优先级链）
+    with pytest.raises(ValueError, match="discover"):
+        parse_modes("  ", env="discover")
+    with pytest.raises(ValueError, match="discover"):
+        parse_modes(",,", env="discover")
+
+
+def test_build_app_removed_mode_fails_fast():
+    """build_app（嵌入方唯一 external seam）对已移除模式名 fail-fast——
+    混装列表不得静默降级为 openapi（单 server 带已装配凭证）。"""
+    with pytest.raises(ValueError, match="discover"):
+        build_app(["discover", "openapi"], make_args())
+    with pytest.raises(ValueError, match="discover"):
+        build_app(["DISCOVER"], make_args())

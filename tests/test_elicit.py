@@ -538,19 +538,13 @@ def test_offer_grant_readonly_all_failed_keeps_denial():
     assert "policy 文件" in outcome.envelope["reason"]
 
 
-def test_offer_grant_readonly_empty_rules_structured_refusal():
-    """readonly_rules 为空集（嵌入方/测试直造 offer 的边界，生产恒四条）：
-    结构化拒绝并列可用档位——不落入空 join 的乱码 reason。"""
-    grant = make_grant()
-    offer = DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
-                        coarse_rule="X:*=allow", readonly_rules=[])
-    consent = PolicyConsent("auto", make_elicit(ACCEPT_READONLY), grant)
-    outcome = run(consent.offer_grant(offer, {"ok": False, "reason": "denied"}))
-    assert isinstance(outcome, GrantRefused)
-    assert "readonly" in outcome.envelope["reason"]
-    assert "api_session" in outcome.envelope["reason"]
-    assert "policy 文件" in outcome.envelope["reason"]
-    assert grant.calls == []
+def test_denial_offer_rejects_empty_readonly_rules():
+    """readonly_rules 空集构造期拒绝——非法状态不可表示（denial_message /
+    fallback_hint / _grant_readonly 三处 join 渲染由此结构性安全，
+    消费点无需空集守卫）。"""
+    with pytest.raises(ValueError, match="readonly_rules"):
+        DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
+                    coarse_rule="X:*=allow", readonly_rules=[])
 
 
 def test_fallback_hint_readonly_lists_five_options():

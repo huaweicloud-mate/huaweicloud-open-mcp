@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from mcp.server.mcpserver import MCPServer
 
 from common.audit import sink_from_path
-from common.deployment import resolve_deployment
+from common.deployment import reject_removed_modes, resolve_deployment
 from common.sessions import SessionScopeMiddleware, current_session_key
 from safety.policy_store import PolicyStore
 
@@ -102,10 +102,13 @@ def build_app(modes: list[str], args: argparse.Namespace, *,
     - 共享 PolicyStore/AuditSink 各构建一次，构造注入 per-mode builder
       （热更新与审计全局一致；single-adapter 测试可经 service 注入参数替换）；
     - env 可整体注入（测试），缺省 os.environ；
+    - 已移除的模式名（discover）入口即 fail-fast（与 cli.parse_modes 同口径
+      reject_removed_modes——嵌入方混装列表不得静默降级 openapi）；
     - manage_policy 随 openapi 段注册（openapi 缺席的纯 data 模式无
       manage_policy——本工具只属 openapi）；
     - 单模式 instructions 与历史 builder 逐字节一致，混装经 merge_instructions。
     """
+    reject_removed_modes(modes)
     dep = resolve_deployment(args, env)
     is_http = dep.transport == "http"
     # 会话键控装配（ADR-0003）：session_fn 注入与 middleware 注册在 build_app

@@ -17,7 +17,7 @@ mode 专属旋钮（hints/deprecated/entity/corrections/auth_demote/spill 等）
 
 import argparse
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 # ---------- env 名常量（跨模式 + mode 专属，唯一定义处） ----------
@@ -48,6 +48,24 @@ DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 8000
 DEFAULT_HTTP_PATH = "/mcp"
 
+MODES: tuple[str, ...] = ("openapi", "data")
+"""当前合法运行模式（--mode / HUAWEICLOUD_MCP_MODE 词表）。"""
+
+REMOVED_MODES: tuple[str, ...] = ("discover",)
+"""已移除的运行模式名：提及即 fail-fast（cli.parse_modes 与 build_app 入口
+共用），防固定 discover 的部署静默降级 openapi 意外以 AK/SK 打云。"""
+
+
+def reject_removed_modes(modes: "Sequence[str]") -> None:
+    """已移除模式名 fail-fast（cli 与 build_app 嵌入方同一口径）；大小写与
+    空白归一后精确匹配，其余未知串不在此拦（parse_modes 保持宽容回退）。"""
+    removed = sorted({m.strip().lower() for m in modes
+                      if m.strip().lower() in REMOVED_MODES})
+    if removed:
+        raise ValueError(
+            f"模式 {'/'.join(removed)} 已移除；可用：{'/'.join(MODES)}——"
+            "请更新 --mode 或 HUAWEICLOUD_MCP_MODE 配置")
+
 # transport 归一表：stdio | http（streamable-http 别名归一 http；SSE 不提供）
 _TRANSPORT_ALIASES: dict[str, str] = {
     "stdio": "stdio",
@@ -59,7 +77,8 @@ _TRANSPORT_ALIASES: dict[str, str] = {
 
 def parse_transport(raw: str | None) -> str:
     """transport 归一单点：非法值 ValueError fail-fast（有意区别于 parse_modes
-    的宽容回退——传输拓扑错误必须响，静默降级 stdio 会让编排器挂死在无端口上）。"""
+    的宽容回退——后者仅对已移除模式名 fail-fast、其余未知串告警忽略；传输
+    拓扑错误必须响，静默降级 stdio 会让编排器挂死在无端口上）。"""
     value = (raw or "stdio").strip().lower()
     normalized = _TRANSPORT_ALIASES.get(value)
     if normalized is None:

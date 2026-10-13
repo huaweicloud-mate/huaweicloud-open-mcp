@@ -171,7 +171,7 @@ S1–S5 细节见 [mcp-openapi.md](mcp-openapi.md)。纪律：red→green 垂直
 以上各项均含对应测试。`manage_policy` 的安全约定：Agent 需先向用户确认再授予最小规则；规则四档 scope——once（一次性，用后即焚）/ 会话内（缺省，重启即失无需回收）/ 临时（TTL 自动过期）/ 永久（显式 scope="permanent" 落盘）；授予路径为 execute_api 的 grant/confirm 断言或 elicitation 提议（工具面 list-only，见 AGENTS.md「校验规则」）。
 - [x] mock 模式全链路（`--mock` / `--mock-base`）
 - [x] 类型系统：TypedDict 结果信封 + mypy 0 错误
-- [x] 263 单测+集成 / 15 e2e（真实凭证 3 + 渐进式工作流 12，`.env` 加载）
+- [x] 263→当前：全套 pytest 见 CI（单测+集成默认档 + e2e marker，`.env` 加载）
 - [x] 日志体系：文件为主轮转 + stderr 兜底，execute 审计，脱敏红线
 - [x] LLM Agent 级工作流 benchmark（S6）：自然语言用例驱动 opencode，评估精度/耗时/token，stub/real 双后端 + 基线回归（`benchmarks/`）
 

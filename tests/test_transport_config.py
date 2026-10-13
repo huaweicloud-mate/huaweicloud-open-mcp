@@ -1,7 +1,8 @@
 """S19：transport 归一与 run 分派（ADR-0003 决策 4/5）。
 
 纯函数矩阵：argv>env>默认回退链、streamable-http 别名归一、非法值 fail-fast
-（有意区别于 parse_modes 的宽容回退——传输拓扑错误必须响）、裸 Namespace
+（有意区别于 parse_modes 的宽容回退——后者仅对已移除模式名 fail-fast、
+其余未知串告警忽略；传输拓扑错误必须响）、裸 Namespace
 getattr 安全。run_transport 用记录型 app 替身断言 stdio/http 两分派参数；
 stdio 缺省路径与现状逐字节一致。
 """

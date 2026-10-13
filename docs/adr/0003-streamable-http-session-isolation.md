@@ -51,7 +51,8 @@ Ports&Adapters）+ 词汇镜检复审（F1–F8 修订），收敛为本决策�
    rebinding 防护；容器开箱由镜像层 ENV 置 0.0.0.0，非 loopback 绑定
    WARNING）、`--http-port`（默认 8000）、`--http-path`（默认 /mcp）。
    env：`HUAWEICLOUD_MCP_TRANSPORT/HTTP_HOST/HTTP_PORT/HTTP_PATH`。
-   非法值 fail-fast（有意区别于 parse_modes 的宽容回退——传输拓扑错误必须响）。
+   非法值 fail-fast（有意区别于 parse_modes 的宽容回退——后者仅对已移除
+   模式名 fail-fast、其余未知串告警忽略；传输拓扑错误必须响）。
    不提供 `--http-max-sessions`（overlay 内存由 store 内部护栏封顶，transport
    层会话上限留 v2）。
 5. **服务分派归 cli**：stdio → `app.run("stdio")`（逐字节现状）；http →

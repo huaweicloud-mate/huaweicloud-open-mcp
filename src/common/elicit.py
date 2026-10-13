@@ -140,6 +140,10 @@ class DenialOffer:
     只读规则集（safety.policy.readonly_grant_rules 构造）——二者恒随
     policy_denial_offer 构造挂载，故为必填；弹窗五选一
     （api/api_session/product/readonly/none）。
+
+    readonly_rules 构造期拒绝空集（非法状态不可表示）：denial_message /
+    fallback_hint / _grant_readonly 三处消费点对规则集做 join 渲染，空集
+    会产出乱码文案——不变量落在值对象上，消费点无需各自设防。
     """
 
     subject: str
@@ -147,6 +151,14 @@ class DenialOffer:
     reason: str
     coarse_rule: str
     readonly_rules: list[str]
+
+    def __post_init__(self) -> None:
+        if not self.readonly_rules:
+            raise ValueError(
+                "DenialOffer.readonly_rules 不可为空（offer 必须携带产品级"
+                "只读规则集；policy_denial_offer 经 readonly_grant_rules 恒构"
+                "造四条——空集会使 denial_message/fallback_hint 的规则渲染落"
+                "入空 join）")
 
 
 @dataclass(frozen=True)
@@ -418,14 +430,6 @@ class PolicyConsent:
             logger.warning("readonly grant unavailable: rules=%s grant_wired=%s",
                            len(rules), grant is not None)
             return GrantRefused(denial)
-        if not rules:
-            # 空集仅嵌入方/测试直造 offer 可达（policy_denial_offer 恒挂四条）；
-            # 无守卫会落入空 join 的乱码 reason
-            logger.warning("readonly grant unavailable: readonly_rules empty")
-            return GrantRefused({**denial, "reason": (
-                f"{denial.get('reason', '')}；readonly 档不可用（本目标只读规则集"
-                "为空），可改选 api_session/product/api 档位，或由操作员编辑 "
-                "policy 文件补授")})
         granted: list[str] = []
         failed_rules: list[str] = []
         failed_details: list[str] = []
