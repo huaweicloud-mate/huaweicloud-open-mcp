@@ -85,3 +85,9 @@ metadata-corrections / entity-index / discover catalog）此前均为**启动期
 - **F2**：daemon 线程无优雅停机——进程退出时在飞重载被硬杀，纯内存态无害。
 - **F3**：`on_reload` 为公开可写属性，仅限装配阶段注入；有流量后改写属
   未定义行为（文档注明）。
+
+## 订正（2026-10）
+
+discover 模式已删除，其 catalog 热刷新面（原第五面）随之移除；现存四面为
+hints / deprecated index / metadata-corrections / entity-index。HotFile
+内核机制不变。

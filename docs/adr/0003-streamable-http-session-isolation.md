@@ -116,3 +116,8 @@ instructions 传输说明段——读 `dep.transport`）。此界定防止后续
 - async handler 内联调 sync 业务在事件循环内阻塞（单会话慢执行拖慢同进程
   其它会话）——v1 不修，`anyio.to_thread` 包裹属独立立项，ambient key 已
   天然兼容该改造。
+
+## 订正（2026-10）
+
+discover 模式已删除，本文决策 9（discover SessionManager 进程共享）随之
+失效；其余会话键控决策不受影响。

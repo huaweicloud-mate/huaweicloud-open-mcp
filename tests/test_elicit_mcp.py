@@ -23,10 +23,8 @@ from mcp_openapi.server import build_openapi_app
 from mcp_openapi.service import ServiceConfig, ToolService
 from safety.policy_store import PolicyStore
 
-ACCEPT = ElicitResult(action="accept", content={"confirm": True})
-REFUSE = ElicitResult(action="accept", content={"confirm": False})
-DECLINE = ElicitResult(action="decline")
 ACCEPT_API = ElicitResult(action="accept", content={"choice": "api"})
+DECLINE = ElicitResult(action="decline")
 ACCEPT_API_SESSION = ElicitResult(action="accept", content={"choice": "api_session"})
 ACCEPT_PRODUCT = ElicitResult(action="accept", content={"choice": "product"})
 ACCEPT_READONLY = ElicitResult(action="accept", content={"choice": "readonly"})
@@ -268,7 +266,7 @@ def test_openapi_execute_denied_decline_keeps_denial(tmp_path, monkeypatch):
 def test_openapi_mode_off_never_elicits(tmp_path, monkeypatch):
     app, p = make_openapi(tmp_path, "off")
     monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
-    seen, script = [], [ACCEPT, ACCEPT]
+    seen, script = [], [ACCEPT_API, ACCEPT_API]
 
     async def _run():
         async with InMemoryTransport(app) as (r, w):
@@ -412,8 +410,7 @@ def test_openapi_execute_denied_api_choice_message_lists_five_options(tmp_path, 
     """coarse 提议弹窗文案并列五选项与 scope 语义，会话档选项前置。
 
     openapi 的 offer 恒挂 readonly_rules（service 层无条件构造），弹窗实际
-    五选项（api_session/readonly/product/api/none）；无 readonly 的四选项
-    形状由 E1 单测（COARSE_OFFER fixture）覆盖。"""
+    五选项（api_session/readonly/product/api/none）。"""
     app, _ = make_openapi(tmp_path, "auto")
     monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
     seen, script = [], [DECLINE]
@@ -621,7 +618,7 @@ def test_openapi_readonly_mispick_retry_denied_appends_context(tmp_path, monkeyp
 def test_openapi_off_confirm_single_call_executes(tmp_path, monkeypatch):
     """off 模式 confirm=true：单次工具调用内完成 拒绝→授予（once）→重放执行；
     授予经 manage_policy add 入审计（与手动授予同形——off 档信任模型不变）；
-    once 焚毁后无 confirm 的再次调用被拒并附 confirm 兜底指引。"""
+    once 焚毁后无 confirm 的再次调用被拒并附 grant= 断言兜底指引。"""
     stub = _StubMockClient()
     events: list[dict] = []
 

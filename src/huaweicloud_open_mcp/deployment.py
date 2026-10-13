@@ -1,8 +1,8 @@
 """部署装配单一入口（external seam）：(modes, args, env) → 装配完成的 MCPServer。
 
-此前装配知识散落 5 文件（cli 分发 + 三 mode server builder + composite 事后
-覆写）：PolicyStore 构建两次再 mutate 覆写、mock/policy/audit 解析三处逐字
-重复、include_manage_policy 去重决策跨 3 文件。本模块收拢为唯一 external
+此前装配知识散落多个文件（cli 分发 + per-mode server builder + composite 事后
+覆写）：PolicyStore 构建两次再 mutate 覆写、mock/policy/audit 解析逐字重复、
+manage_policy 归属决策分散。本模块收拢为唯一 external
 seam——per-mode ``build_X_config``/``build_X_app`` 降为 internal seams
 （配置解析测试仍可穿越，dep=None 原口），``register_*_tools`` 保持公开
 （InMemoryTransport 测试 seam）。
@@ -63,29 +63,21 @@ def _register_healthz(server: MCPServer) -> None:
 
 
 def merge_instructions(modes: list[str], hints: "Hints | None") -> str:
-    """合并各模式指引：统一 H1 头，各模式正文降级为 H2 段。
-
-    hints 为 None 时按空 hints 处理（仅 openapi 段消费）。
-    """
+    """合并各模式指引：统一 H1 头，各模式正文降级为 H2 段（hints 直接透传
+    build_instructions，None=无部署自定义段）。"""
     from mcp_data.server import INSTRUCTIONS_DATA
     from mcp_openapi.server import build_instructions
 
-    openapi_hints: Hints = hints if hints is not None else _empty_hints()
     header = "# 华为云 Open MCP 使用指引（组合模式：" + " + ".join(modes) + "）"
     sections: list[tuple[str, str]] = []
     if "openapi" in modes:
-        sections.append(("openapi（OpenAPI 直连）", build_instructions(openapi_hints)))
+        sections.append(("openapi（OpenAPI 直连）", build_instructions(hints)))
     if "data" in modes:
         sections.append(("data（数据分析）", INSTRUCTIONS_DATA))
     body = "\n\n".join(
         "## 模式：" + title + "\n\n" + text.split("\n", 1)[1].lstrip()
         for title, text in sections)
     return header + "\n\n" + body + "\n"
-
-
-def _empty_hints() -> "Hints":
-    from mcp_openapi.hints import Hints
-    return Hints.empty()
 
 
 def _mode_instructions(mode: str, hints: "Hints | None") -> str:

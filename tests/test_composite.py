@@ -144,3 +144,12 @@ def test_parse_modes_combos_dedup_and_invalid():
     assert parse_modes("openapi,openapi") == ["openapi"]
     assert parse_modes("openapi,bogus") == ["openapi"]
     assert parse_modes("bogus") == ["openapi"]
+
+
+def test_parse_modes_removed_discover_fails_fast():
+    """已移除的模式名启动即失败——静默降级 openapi 会让固定 discover 的部署
+    以 AK/SK 签名意外打云（对齐 server: 规则行 fail-fast 的口径）。"""
+    with pytest.raises(ValueError, match="discover"):
+        parse_modes("discover")
+    with pytest.raises(ValueError, match="discover"):
+        parse_modes(None, env="openapi,DISCOVER")

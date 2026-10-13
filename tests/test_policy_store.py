@@ -916,7 +916,7 @@ def test_remove_rules_unconfigured_rejected():
     assert out.ok is False and out.reason == NOT_CONFIGURED_REASON
 
 
-# ---------- manage_policy_ops：两模式 manage_policy 工具共用的运维信封 ----------
+# ---------- manage_policy_ops：manage_policy 工具的运维信封 ----------
 
 def test_manage_policy_ops_unconfigured():
     """store=None：ok=False，reason 为统一 NOT_CONFIGURED_REASON（消灭文案漂移）。"""

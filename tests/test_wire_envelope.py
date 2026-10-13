@@ -42,13 +42,13 @@ def test_all_tools_flat_wire_schema():
             assert schema is not None, f"{mode}:{name} 无 outputSchema"
             props = schema.get("properties") or {}
             assert "ok" in props, f"{mode}:{name} 顶层缺 ok：{sorted(props)}"
-            # 排除 SDK 的 {"result": ...} 包裹形（call_server_tool 的业务 result 字段
-            # 与 ok 并存，故按「键集恰为 {result}」判定，而非「含 result」）。
+            # 排除 SDK 的 {"result": ...} 包裹形（按「键集恰为 {result}」判定，
+            # 而非「含 result」——防未来某工具的业务字段名为 result 时误伤）。
             assert set(props) != {"result"}, f"{mode}:{name} 被包成 {{result}}"
             seen += 1
             # 失败臂 {ok: false, reason} 必须通过 schema 校验——否则 SDK 报
             # isError=True 且把 pydantic 校验错误文本外泄给客户端。成功型工具
-            # （ok: const true，如 disconnect_mcp_server）无失败臂，跳过。
+            # （ok: const true）无失败臂，跳过（当前注册面无此形，防御性保留）。
             if props["ok"].get("const") is True:
                 continue
             jsonschema.validate({"ok": False, "reason": "policy denied"}, schema)

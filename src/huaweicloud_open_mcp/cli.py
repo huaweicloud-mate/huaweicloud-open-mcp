@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 _MODES = ("openapi", "data")
+_REMOVED_MODES = ("discover",)
 
 
 def run_transport(app: "MCPServer", args: argparse.Namespace,
@@ -44,10 +45,17 @@ def run_transport(app: "MCPServer", args: argparse.Namespace,
 def parse_modes(value: str | None, env: str | None = None) -> list[str]:
     """解析 --mode / 环境变量：逗号多值混用（如 openapi,data），去重保序。
 
-    无效项告警忽略；全部无效回退 openapi（单值语义与历史行为一致）。
+    已移除的模式名（discover）显式 fail-fast——静默降级 openapi 会让固定
+    discover 的部署以 AK/SK 签名意外打云；其余无效项告警忽略、全部无效
+    回退 openapi（单值语义与历史行为一致）。
     """
     raw = (value or env or "openapi").strip().lower()
     items = [m.strip() for m in raw.split(",") if m.strip()]
+    removed = [m for m in items if m in _REMOVED_MODES]
+    if removed:
+        raise ValueError(
+            f"模式 {removed} 已移除（discover 模式已删除）；可用：openapi/data——"
+            "请更新 --mode 或 HUAWEICLOUD_MCP_MODE 配置")
     invalid = [m for m in items if m not in _MODES]
     if invalid:
         logger.warning("无效模式 %s 已忽略（可用：openapi/data）", invalid)

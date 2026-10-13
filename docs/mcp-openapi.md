@@ -1,6 +1,6 @@
 # 华为云 Open MCP —— openapi 模式设计
 
-> 8 个核心工具直连华为云 OpenAPI（Core 模式，默认）。跨模式整体架构见 [architecture.md](architecture.md)。
+> 8 个核心工具直连华为云 OpenAPI（Core 模式，默认）：search_apis / list_products / get_product / list_apis / get_api / get_api_examples / execute_api / manage_policy。跨模式整体架构见 [architecture.md](architecture.md)。
 
 ## 1. 定位与设计目标
 
@@ -23,6 +23,9 @@ sequenceDiagram
     participant H as 华为云
 
     U->>L: 自然语言任务（如「查 cn-north-4 云服务器列表」）
+    L->>M: search_apis(query)（意图未指明产品时的第 0 步，跨产品检索）
+    M-->>L: 候选产品 + 代表 API + matched_via 证据
+    Note over L: ⓪ 图谱命中则直接收窄（ECS）；明确产品可跳过本步
     L->>M: list_products(keyword?)
     M->>C: /v4/products（首次拉取，缓存到内存）
     M-->>L: 产品列表（中文名/分类/is_global）

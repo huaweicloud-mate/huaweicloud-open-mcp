@@ -59,3 +59,10 @@
   apie——转换期概念）。
 - 未来 Streamable HTTP 多会话部署若需要 per-session 旋钮，build_app 是
   唯一需要感知的接缝（见 AGENTS.md session 档边界记录）。
+
+## 订正（2026-10）
+
+discover 模式已删除（收敛为 openapi + data 双模式）。本文的历史描述不受
+影响，但两处与现状不符：`build_app` 签名不再有 `discover_service` 参数；
+「discover 混装去重」与 `include_manage_policy` 归属机制已随该参数删除。
+装配单入口原则不变。

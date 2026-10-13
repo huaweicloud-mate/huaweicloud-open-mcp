@@ -311,7 +311,7 @@ class PolicyConsent:
             return GrantRefused(denial)
         if self.mode == "off":
             return GrantRefused(self._with_fallback_hint(offer, denial))
-        outcome = await self._ask(denial_message(offer), GrantChoiceConfirm)
+        outcome = await self._elicit(denial_message(offer), GrantChoiceConfirm)
         if outcome is None:
             logger.warning("grant offer skipped: client unsupported elicitation (mode=%s)",
                            self.mode)
@@ -418,6 +418,14 @@ class PolicyConsent:
             logger.warning("readonly grant unavailable: rules=%s grant_wired=%s",
                            len(rules), grant is not None)
             return GrantRefused(denial)
+        if not rules:
+            # 空集仅嵌入方/测试直造 offer 可达（policy_denial_offer 恒挂四条）；
+            # 无守卫会落入空 join 的乱码 reason
+            logger.warning("readonly grant unavailable: readonly_rules empty")
+            return GrantRefused({**denial, "reason": (
+                f"{denial.get('reason', '')}；readonly 档不可用（本目标只读规则集"
+                "为空），可改选 api_session/product/api 档位，或由操作员编辑 "
+                "policy 文件补授")})
         granted: list[str] = []
         failed_rules: list[str] = []
         failed_details: list[str] = []
@@ -461,11 +469,6 @@ class PolicyConsent:
         if choice not in ("api", "api_session", "product", "none", None):
             logger.warning("grant choice %r undeliverable, keeping denial", choice)
         return None
-
-    async def _ask(self, message: str,
-                   schema: type[BaseModel]) -> ElicitOutcome | None:
-        """发送 elicitation；adapter 归一化结果（None=客户端不支持）。"""
-        return await self._elicit(message, schema)
 
 
 def ctx_elicit_fn(ctx: ElicitContext) -> ElicitFn:
