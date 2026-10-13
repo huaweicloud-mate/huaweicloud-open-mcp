@@ -45,13 +45,14 @@ def run_transport(app: "MCPServer", args: argparse.Namespace,
 def parse_modes(value: str | None, env: str | None = None) -> list[str]:
     """解析 --mode / 环境变量：逗号多值混用（如 openapi,data），去重保序。
 
-    优先级在 token 层：--mode 与 env 中首个产出实际 token 的一方生效——
-    空白/纯逗号等垃圾 flag 不遮蔽环境变量。**两个源都扫已移除模式名**：
-    env 里的 discover 残留是地雷，即便显式 flag 赢得优先级也 fail-fast
-    （静默降级 openapi 会让固定 discover 的部署以 AK/SK 意外打云）；其余
-    无效项告警忽略、全部无效回退 openapi（单值语义与历史行为一致）。
-    strip/lower/去空去重委托 normalize_modes（字符级归一知识单点——本
-    函数只剩 None 守卫与 MODES 过滤）。
+    优先级在**有效 token** 层：--mode 与 env 中首个产出有效模式的源整体
+    生效——空白/纯逗号垃圾 flag 不遮蔽环境变量，有 token 但零有效的
+    垃圾 flag 让位给有效 env 并告警（显式 --mode 被忽略须可见，垃圾
+    flag 不当遮蔽防 typo 部署静默落回带凭证的 openapi）。**两个源都扫
+    已移除模式名**：env 里的 discover 残留是地雷，即便显式 flag 赢得
+    优先级也 fail-fast；其余无效项告警忽略、两源皆无有效回退 openapi
+    （单值语义与历史行为一致）。strip/lower/去空去重委托 normalize_modes
+    （字符级归一知识单点——本函数只剩 None 守卫与 MODES 过滤）。
     """
 
     def _tokens(raw: str | None) -> list[str]:
@@ -61,8 +62,15 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
 
     flag_tokens, env_tokens = _tokens(value), _tokens(env)
     reject_removed_modes(flag_tokens + env_tokens)
-    items = flag_tokens or env_tokens or ["openapi"]
-    invalid = [m for m in items if m not in MODES]
+    discarded: list[str] = []
+    if any(m in MODES for m in flag_tokens):
+        items = flag_tokens
+    elif any(m in MODES for m in env_tokens):
+        items = env_tokens
+        discarded = flag_tokens          # 垃圾 flag 让位——被忽略须告警可见
+    else:
+        items = flag_tokens or env_tokens or ["openapi"]
+    invalid = [m for m in items + discarded if m not in MODES]
     if invalid:
         logger.warning("无效模式 %s 已忽略（可用：%s）", invalid, "/".join(MODES))
     return [m for m in items if m in MODES] or ["openapi"]

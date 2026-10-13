@@ -146,6 +146,23 @@ def test_parse_modes_combos_dedup_and_invalid():
     assert parse_modes("bogus") == ["openapi"]
 
 
+def test_parse_modes_garbage_flag_yields_to_valid_env(caplog):
+    """垃圾 flag（有 token 零有效）让位给有效 env——显式 data（本地无凭证）
+    部署不因 typo flag 静默落回带 AK/SK 的 openapi；让位告警（显式 --mode
+    被忽略须可见）。"""
+    import logging
+    with caplog.at_level(logging.WARNING):
+        assert parse_modes("junk", env="data") == ["data"]
+    assert "junk" in caplog.text
+    assert parse_modes("bogus1,bogus2", env="openapi,data") == ["openapi", "data"]
+    # 显式有效 flag 仍赢（env 仅扫已移除名，不参与选择）
+    assert parse_modes("openapi", env="dat") == ["openapi"]
+    # 两源皆无有效：回退 openapi（历史单值语义）
+    assert parse_modes("junk", env="dat") == ["openapi"]
+    # 空白 flag 在 token 层已让位（回归）
+    assert parse_modes("  ", env="data") == ["data"]
+
+
 def test_parse_modes_removed_discover_fails_fast():
     """已移除的模式名启动即失败——静默降级 openapi 会让固定 discover 的部署
     以 AK/SK 签名意外打云（对齐 server: 规则行 fail-fast 的口径）。"""
