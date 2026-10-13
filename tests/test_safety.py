@@ -26,6 +26,14 @@ def test_parse_malformed_raises():
         policy.parse_policy(["ListServers=allow"])  # 缺 product 前缀
 
 
+def test_parse_server_prefix_rejected():
+    """server: 语法已随 discover 模式移除：旧规则行启动即 fail-fast，不静默失效。"""
+    with pytest.raises(ValueError, match="server:"):
+        policy.parse_policy(["server:srv1=allow"])
+    with pytest.raises(ValueError, match="server:"):
+        policy.parse_policy(["*=deny", "server:srv1:list*=allow"])
+
+
 def test_evaluate_allowlist():
     rules = policy.parse_policy(["ECS:*Show*=allow", "*=deny"])
     assert policy.evaluate(rules, "ECS", "ShowServerDetails") is True
@@ -73,7 +81,7 @@ def test_load_policy_file_text_lines(tmp_path):
     assert len(rules) == 2
 
 
-# ---------- match_first / match_server_first（S2：first-match 命中规则对象） ----------
+# ---------- match_first（S2：first-match 命中规则对象） ----------
 
 def test_match_first_returns_first_matching_rule():
     rules = policy.parse_policy(["ECS:*Show*=allow", "*=deny"])
@@ -88,26 +96,8 @@ def test_match_first_no_match_returns_none():
     assert policy.match_first(rules, "ECS", "CreateServers") is None
 
 
-def test_match_first_case_insensitive_and_ignores_server_rules():
-    rules = policy.parse_policy(
-        ["server:srv1=allow", "ecs:list*=allow"])
+def test_match_first_case_insensitive():
+    rules = policy.parse_policy(["ecs:list*=allow"])
     hit = policy.match_first(rules, "ECS", "ListServers")
-    assert hit is rules[1]
+    assert hit is rules[0]
     assert hit.allow is True
-
-
-def test_match_server_first_returns_matching_rule():
-    rules = policy.parse_policy(
-        ["server:srv1:list*=allow", "server:srv1=deny", "ECS:*=allow"])
-    hit_tool = policy.match_server_first(rules, "SRV1", "listTools")
-    assert hit_tool is rules[0]
-    hit_connect = policy.match_server_first(rules, "srv1", None)
-    assert hit_connect is rules[1]
-    assert hit_connect.allow is False
-
-
-def test_match_server_first_no_match_returns_none():
-    rules = policy.parse_policy(["server:srv1:list*=allow"])
-    assert policy.match_server_first(rules, "srv1", "callTool") is None
-    assert policy.match_server_first(rules, "srv1", None) is None
-    assert policy.match_server_first(rules, "other", "listTools") is None

@@ -126,8 +126,7 @@ def _read_entries(path: str) -> tuple[list[str], bool]:
 
 def _rule_key(rule: safety_policy.PolicyRule) -> tuple[Any, ...]:
     """规则的语义匹配键（与 evaluate 的大小写不敏感口径一致）。"""
-    return (rule.kind, rule.connect_only,
-            rule.product.lower(), rule.api_pattern.lower(), rule.allow)
+    return (rule.product.lower(), rule.api_pattern.lower(), rule.allow)
 
 
 _SCOPE_RANK: dict[str, int] = {"once": 0, "temporary": 1, "session": 2}
@@ -186,8 +185,6 @@ def _probe_args(rule: safety_policy.PolicyRule) -> tuple[str, str]:
 def _shadows(rule: safety_policy.PolicyRule,
              probe_product: str, probe_api: str) -> bool:
     """该规则是否命中探测字面量且结果为 deny（与 evaluate 的匹配口径一致）。"""
-    if rule.kind != "product":
-        return False
     if rule.product != "*" and rule.product.lower() != probe_product.lower():
         return False
     if not fnmatch.fnmatch(probe_api.lower(), rule.api_pattern.lower()):
@@ -740,35 +737,6 @@ class PolicyStore:
                 logger.info("policy authorize %s:%s once 规则已消费", product, api)
             return None
 
-    def authorize_server(self, server: str, tool: str | None = None) -> str | None:
-        """authorize 的 server 规则版（discover call_tool / connect 前调用）。
-
-        契约同 authorize：None=放行；str=拒绝原因（复用 check_server 文案）。
-        connect（tool=None）与调用级（tool 非空）once 规则均首次放行即焚毁
-        （焚毁限当前会话桶，I4）。
-        """
-        if self.path is None:
-            return safety_policy.check_server(None, server, tool)
-        with self._lock:
-            self._refresh()
-            key = self._current_key()
-            bucket = self._overlay.get(key)
-            if bucket is not None:
-                self._prune_expired(bucket)
-                self._touch(key, self._time_fn())
-            self._prune_sessions()
-            rules = (tuple(entry.rule for entry in self._bucket_entries(key))
-                     + self._rules)
-            hit = safety_policy.match_server_first(rules, server, tool)
-            if hit is None or not hit.allow:
-                return safety_policy.check_server(rules, server, tool)
-            if hit.once:
-                live = self._bucket_entries(key)
-                live[:] = [e for e in live if e.rule is not hit]
-                logger.info("policy authorize_server %s:%s once 规则已消费",
-                            server, tool or "-")
-            return None
-
     # ---------- 持久化 ----------
 
     def _insert_position(self, entries: list[str], rule: safety_policy.PolicyRule) -> int:
@@ -829,18 +797,18 @@ def _result_item(line: str, result: MutationResult) -> dict[str, Any]:
 def manage_policy_ops(store: PolicyStore | None, action: str,
                       line: str | list[str] | None = None, scope: str | None = None,
                       ttl_seconds: int | None = None) -> dict[str, Any]:
-    """manage_policy 工具信封（openapi/discover 两模式共用单一实现）。
+    """manage_policy 工具信封（openapi 模式单一实现）。
 
     action 归一、store 分派（list/add/remove）、结果信封与日志内聚于此；
-    store=None 时拒绝（NOT_CONFIGURED_REASON，消灭两模式文案漂移）。
+    store=None 时拒绝（NOT_CONFIGURED_REASON）。
     规则语法与四档 scope 知识归 PolicyStore.add_rule/remove_rule（及其批量
     对应 add_rules/remove_rules），本函数仅承载工具信封语义（删除测试：
-    信封语义消失则须在两模式各自重建——47 行 ×2 重复即此）。
+    信封语义消失则须在 service 重建）。
     入参形状决定信封形状：line 为 str = 单条信封（ok/action/scope?/reason?/policy，
     历史契约逐字段不变）；line 为 list[str] = 批量信封（附加 results 逐条结果，
     顶层 ok = 全部条目成功）；空数组/全空串按缺 line 拒绝。
     会话键控完全 ambient（ADR-0003）：store 经构造注入的 session_fn 自取
-    当前会话键，本函数与两模式 service 签名零变化。
+    当前会话键，本函数签名零变化。
     """
     action = (action or "").strip().lower()
     logger.info("manage_policy action=%s line=%s scope=%s ttl=%s",

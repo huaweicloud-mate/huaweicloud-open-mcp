@@ -5,7 +5,7 @@ best-effort 永不抛出——Exception 级口径，KI/SE 停机信号按全局�
 传播例外），未配置审计用 NullAuditSink，测试注入内存替身。
 sink 只拥有信封（ts）与持久化语义；事件 payload 的 schema 由
 build_audit_event 定义（对 verifier 的已发布契约：tool/input/ok）。
-audited 装饰器供各模式 service 复用（openapi/discover/data 同构），
+audited 装饰器供各模式 service 复用（openapi/data 同构），
 契约：self.config.audit_sink 提供 sink（None=零开销跳过）。
 
 会话归因（ADR-0003，HTTP 多会话）：_audit_write 在写事件单点从 ambient
@@ -22,7 +22,7 @@ import threading
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypeVar, overload
+from typing import Any, Protocol, TypeVar
 
 from common.sessions import current_session_key
 
@@ -42,15 +42,7 @@ def build_audit_event(tool: str, input_args: Mapping[str, Any],
     return {"tool": tool, "input": dict(input_args), "ok": ok}
 
 
-@overload
-def audited(fn: _F) -> _F: ...
-@overload
-def audited(*, name: Literal["connect_mcp_server", "call_server_tool",
-                             "disconnect_mcp_server"]) -> "Callable[[_F], _F]": ...
-def audited(fn: _F | None = None, *,
-            name: Literal["connect_mcp_server", "call_server_tool",
-                          "disconnect_mcp_server"] | None = None
-            ) -> Any:
+def audited(fn: _F) -> _F:
     """工具方法审计装饰器：每次调用经 self.config.audit_sink 记一条事件。
 
     input 为绑定后的显式入参（不含 self 与默认值）；方法抛异常时记 ok=False
@@ -65,8 +57,6 @@ def audited(fn: _F | None = None, *,
     路径下原异常降级 ``__context__``（可恢复）而 KI/SE 成为顶层异常、
     成功路径下已完成结果被 KI/SE 替换——重抛前经守卫记 ERROR 锚点，
     该病态路径的事件丢失可 grep 定位）。
-    2026-10 第五轮：discover connect/call_tool 直挂，与 openapi service
-    层同层同语义）。
     async 方法按目标分流装饰（装饰期 iscoroutinefunction 判定（经
     ``getattr(fn, "__func__", fn)`` 解包 staticmethod/classmethod 形态），
     双 wrapper）：async 目标得到真正的 ``async def`` wrapper——
@@ -76,60 +66,48 @@ def audited(fn: _F | None = None, *,
     （run_sync 产出未 await 协程）为本仓库接线（工具面注册的是闭包、
     service 方法从不直接注册）不可达的次级防御注记。异常/取消路径
     同样入账后重抛。
-    name 覆盖事件 tool 字段（缺省=方法名，``Literal`` 收紧到已注册工具面
-    名——拼写错误 mypy 捕获，防 NDJSON tool 字段静默错标；空白串装饰期
-    拒绝）：service 方法名与 MCP 工具面名不一致时用工具面名（discover
-    connect→connect_mcp_server、call_tool→call_server_tool、
-    disconnect→disconnect_mcp_server——NDJSON tool 字段恒为工具面名，
-    trace 消费者（harbor verifier）按工具面名匹配）。
+    tool 字段恒为方法名（NDJSON trace 消费者（harbor verifier）按方法名匹配）。
     契约：宿主 service 须暴露 config.audit_sink（None=零开销跳过）。
 
-    用法：@audited / @audited(name="tool_face_name")
+    用法：@audited
     """
-    def decorator(fn: _F) -> _F:
-        if name is not None and not name.strip():
-            raise ValueError("@audited(name=...) 不接受空白串（tool 字段不可空）")
-        sig = inspect.signature(fn)
-        tool = name or fn.__name__
+    sig = inspect.signature(fn)
+    tool = fn.__name__
 
-        if inspect.iscoroutinefunction(getattr(fn, "__func__", fn)):
-            @functools.wraps(fn)
-            async def async_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
-                try:
-                    bound = sig.bind(self, *args, **kwargs)
-                    input_args = {k: v for k, v in bound.arguments.items() if k != "self"}
-                except TypeError:
-                    input_args = {}
-                try:
-                    result = await fn(self, *args, **kwargs)
-                except BaseException:
-                    _audit_write(self, tool, input_args, {"ok": False})
-                    raise
-                _audit_write(self, tool, input_args, result)
-                return result
-
-            return async_wrapper  # type: ignore[return-value]
-
+    if inspect.iscoroutinefunction(getattr(fn, "__func__", fn)):
         @functools.wraps(fn)
-        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        async def async_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             try:
                 bound = sig.bind(self, *args, **kwargs)
                 input_args = {k: v for k, v in bound.arguments.items() if k != "self"}
             except TypeError:
                 input_args = {}
             try:
-                result = fn(self, *args, **kwargs)
+                result = await fn(self, *args, **kwargs)
             except BaseException:
                 _audit_write(self, tool, input_args, {"ok": False})
                 raise
             _audit_write(self, tool, input_args, result)
             return result
 
-        return wrapper  # type: ignore[return-value]
+        return async_wrapper  # type: ignore[return-value]
 
-    if fn is None:
-        return decorator
-    return decorator(fn)
+    @functools.wraps(fn)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            bound = sig.bind(self, *args, **kwargs)
+            input_args = {k: v for k, v in bound.arguments.items() if k != "self"}
+        except TypeError:
+            input_args = {}
+        try:
+            result = fn(self, *args, **kwargs)
+        except BaseException:
+            _audit_write(self, tool, input_args, {"ok": False})
+            raise
+        _audit_write(self, tool, input_args, result)
+        return result
+
+    return wrapper  # type: ignore[return-value]
 
 
 def _audit_write(host: Any, tool: str, input_args: Mapping[str, Any],

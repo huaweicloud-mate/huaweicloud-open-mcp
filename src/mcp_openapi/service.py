@@ -261,7 +261,7 @@ class ToolService:
         source 为审计溯源标记（不参与策略语义）：elicit=协议问询确认授予 /
         assertion=grant/confirm 参数断言式授予，经 @audited 落入 input 快照，
         操作员在 NDJSON 区分两类授予的 provenance。
-        信封语义委托 safety.policy_store.manage_policy_ops（两模式单一实现）。
+        信封语义委托 safety.policy_store.manage_policy_ops（单一实现）。
         """
         return manage_policy_ops(self.config.policy_store, action,
                                  line, scope, ttl_seconds)

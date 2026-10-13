@@ -514,25 +514,10 @@ def test_remove_once_rule_reports_scope(tmp_path):
     assert store.authorize("ECS", "ListServers") is not None       # 已移除 → deny
 
 
-def test_authorize_server_once_burns(tmp_path):
-    """discover 调用级 server 规则 once 版同样用后即焚；connect 级授权不受影响。"""
-    p = tmp_path / "policy.txt"
-    p.write_text("*=deny\n", encoding="utf-8")
-    store = make_store(p)
-
-    store.add_rule("server:srv1:list*=allow", scope="once")
-    assert store.authorize_server("srv1", "listTools") is None     # 首次放行
-    assert store.authorize_server("srv1", "listTools") is not None  # 已焚毁
-    store.add_rule("server:srv2=allow", scope="once")
-    assert store.authorize_server("srv2", None) is None            # connect 级首次放行
-    assert store.authorize_server("srv2", None) is not None        # 已焚毁
-
-
 def test_authorize_unconfigured_still_denies():
     """未配置路径（path=None）恒 deny，红线不变。"""
     store = PolicyStore(None)
     assert store.authorize("ECS", "ListServers") is not None
-    assert store.authorize_server("srv1", "listTools") is not None
 
 
 def test_authorize_once_concurrent_only_one_passes(tmp_path):
@@ -654,7 +639,7 @@ def test_unknown_scope_rejected(tmp_path):
 
 def _disk_rule_tuples(path):
     """独立真值：直接解析磁盘规则为语义元组，不用 store 自身输出断言自身。"""
-    return sorted((r.kind, r.product, r.api_pattern, r.allow)
+    return sorted((r.product, r.api_pattern, r.allow)
                   for r in policy.parse_policy(semantic_lines(path)))
 
 
@@ -679,8 +664,8 @@ def test_concurrent_adds_all_persisted(tmp_path):
     disk = _disk_rule_tuples(p)
     for line in lines:
         r = policy.parse_policy([line])[0]
-        assert (r.kind, r.product, r.api_pattern, r.allow) in disk   # 无丢失更新
-    memory = sorted((r.kind, r.product, r.api_pattern, r.allow) for r in store.rules())
+        assert (r.product, r.api_pattern, r.allow) in disk   # 无丢失更新
+    memory = sorted((r.product, r.api_pattern, r.allow) for r in store.rules())
     assert memory == disk            # 静止态 memory == file
     assert len(disk) == len(lines) + 2
 

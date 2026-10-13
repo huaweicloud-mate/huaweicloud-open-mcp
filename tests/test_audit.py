@@ -460,19 +460,6 @@ def test_audited_awaitable_exception_and_cancel():
     with pytest.raises(SystemExit):
         asyncio.run(exit_svc.fail_tool())        # async-exception 格（round-9 补）
 
-    # 空白 name 装饰期拒绝（Literal 之外的运行时兜底）
-    with pytest.raises(ValueError, match="空白串"):
-        class _Bad:
-            @audited(name="")  # type: ignore[arg-type]
-            async def x(self) -> dict:
-                return {}
-
-    with pytest.raises(ValueError, match="空白串"):
-        class _Bad2:
-            @audited(name=" ")  # type: ignore[arg-type]
-            async def y(self) -> dict:
-                return {}
-
     # host config 契约违约 fail-fast（round-8：getattr 在 try 外——
     # 与 sink 违约分型；宿主缺 config 属性时首次调用即 AttributeError，
     # config 存在但缺 audit_sink 键则 getattr default 静默跳过=零开销语义）

@@ -1,6 +1,6 @@
 """DataService：data 模式业务编排层（S11）。
 
-职责：audit 信封（与 openapi/discover service 同构，经 common.audit.audited）、
+职责：audit 信封（与 openapi service 同构，经 common.audit.audited）、
 DataError→ToolError 翻译（唯一翻译点）、engine 注入。
 query_data 不做 safety policy 检查（本地计算工具，口径见 AGENTS.md「校验规则」），
 数据访问边界由 engine 只读守卫 + 截断约束。
