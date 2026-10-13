@@ -45,14 +45,14 @@ def run_transport(app: "MCPServer", args: argparse.Namespace,
 def parse_modes(value: str | None, env: str | None = None) -> list[str]:
     """解析 --mode / 环境变量：逗号多值混用（如 openapi,data），去重保序。
 
-    优先级在**有效 token** 层：--mode 与 env 中首个产出有效模式的源整体
-    生效——空白/纯逗号垃圾 flag 不遮蔽环境变量，有 token 但零有效的
-    垃圾 flag 让位给有效 env 并告警（显式 --mode 被忽略须可见，垃圾
-    flag 不当遮蔽防 typo 部署静默落回带凭证的 openapi）。**两个源都扫
-    已移除模式名**：env 里的 discover 残留是地雷，即便显式 flag 赢得
-    优先级也 fail-fast；其余无效项告警忽略、两源皆无有效回退 openapi
-    （单值语义与历史行为一致）。strip/lower/去空去重委托 normalize_modes
-    （字符级归一知识单点——本函数只剩 None 守卫与 MODES 过滤）。
+    优先级在**有效 token** 层：--mode 含任一有效模式则整体生效（显式意图
+    不被 env 覆盖）；否则 env 含有效则整体生效——垃圾 flag（有 token 零
+    有效，typo 场景）让位并告警（显式 --mode 被忽略须可见，防 typo flag
+    静默遮蔽显式模式配置落回带凭证的 openapi）；两源皆无有效回退 openapi
+    （单值语义与历史行为一致）。**两个源都扫已移除模式名**：env 里的
+    discover 残留是地雷，即便显式 flag 赢得优先级也 fail-fast。无效项
+    的告警覆盖两源并集（去重保序）——任一源的死配置都该被点名。
+    strip/lower/去空去重委托 normalize_modes（字符级归一知识单点）。
     """
 
     def _tokens(raw: str | None) -> list[str]:
@@ -62,15 +62,17 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
 
     flag_tokens, env_tokens = _tokens(value), _tokens(env)
     reject_removed_modes(flag_tokens + env_tokens)
-    discarded: list[str] = []
     if any(m in MODES for m in flag_tokens):
         items = flag_tokens
     elif any(m in MODES for m in env_tokens):
         items = env_tokens
-        discarded = flag_tokens          # 垃圾 flag 让位——被忽略须告警可见
+        if flag_tokens:
+            logger.warning("--mode %s 无有效模式已忽略，采用 HUAWEICLOUD_MCP"
+                           "=%s", ",".join(flag_tokens), ",".join(items))
     else:
         items = flag_tokens or env_tokens or ["openapi"]
-    invalid = [m for m in items + discarded if m not in MODES]
+    invalid = [m for m in dict.fromkeys(flag_tokens + env_tokens)
+               if m not in MODES]
     if invalid:
         logger.warning("无效模式 %s 已忽略（可用：%s）", invalid, "/".join(MODES))
     return [m for m in items if m in MODES] or ["openapi"]
@@ -170,13 +172,15 @@ def main() -> None:
     parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")
     args = parser.parse_args()
 
-    modes = parse_modes(args.mode, os.environ.get(ENV_MODE))
-
     level_name = (args.log_level or os.environ.get(ENV_LOG_LEVEL) or "INFO").upper()
     if level_name not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         level_name = "INFO"
+    # 日志先于模式解析：让位/无效告警与 discover fail-fast 落主日志文件
+    # （文件为主约定——先发后配会只剩 stderr lastResort）
     configure_logging(program="huaweicloud-open-mcp", level=level_name,
                       log_file=args.log_file)
+
+    modes = parse_modes(args.mode, os.environ.get(ENV_MODE))
 
     elicit_mode = parse_elicit_mode(args.elicitation or os.environ.get(ENV_ELICIT))
 

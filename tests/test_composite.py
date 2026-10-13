@@ -148,17 +148,32 @@ def test_parse_modes_combos_dedup_and_invalid():
 
 def test_parse_modes_garbage_flag_yields_to_valid_env(caplog):
     """垃圾 flag（有 token 零有效）让位给有效 env——显式 data（本地无凭证）
-    部署不因 typo flag 静默落回带 AK/SK 的 openapi；让位告警（显式 --mode
-    被忽略须可见）。"""
+    部署不因 typo flag 静默落回带 AK/SK 的 openapi；让位告警命名两源与
+    结局（显式 --mode 被忽略须可见）；无效项告警覆盖两源并集。"""
     import logging
+    # 让位：env 生效，独立消息命名被弃 flag 与生效 env
     with caplog.at_level(logging.WARNING):
         assert parse_modes("junk", env="data") == ["data"]
-    assert "junk" in caplog.text
+    assert "--mode junk 无有效模式已忽略" in caplog.text
+    assert "HUAWEICLOUD_MCP=data" in caplog.text
     assert parse_modes("bogus1,bogus2", env="openapi,data") == ["openapi", "data"]
     # 显式有效 flag 仍赢（env 仅扫已移除名，不参与选择）
     assert parse_modes("openapi", env="dat") == ["openapi"]
-    # 两源皆无有效：回退 openapi（历史单值语义）
-    assert parse_modes("junk", env="dat") == ["openapi"]
+    # 两源皆无有效：回退 openapi（历史单值语义）；两源的垃圾都点名
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert parse_modes("junk", env="dat") == ["openapi"]
+    assert "'junk'" in caplog.text and "'dat'" in caplog.text
+    # flag 赢 + env 死配置：并集告警点名 env 侧
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert parse_modes("data", env="xyz") == ["data"]
+    assert "'xyz'" in caplog.text
+    # 同一垃圾 token 在两源：去重单次点名
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert parse_modes("junk", env="junk,data") == ["data"]
+    assert caplog.text.count("'junk'") == 1
     # 空白 flag 在 token 层已让位（回归）
     assert parse_modes("  ", env="data") == ["data"]
 
@@ -170,7 +185,7 @@ def test_parse_modes_removed_discover_fails_fast():
         parse_modes("discover")
     with pytest.raises(ValueError, match="discover"):
         parse_modes(None, env="openapi,DISCOVER")
-    # 空白/纯逗号垃圾 flag 不遮蔽环境变量（优先级在 token 层）
+    # 空白/纯逗号垃圾 flag 不遮蔽环境变量（优先级在有效 token 层）
     with pytest.raises(ValueError, match="discover"):
         parse_modes("  ", env="discover")
     with pytest.raises(ValueError, match="discover"):
