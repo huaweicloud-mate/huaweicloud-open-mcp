@@ -163,6 +163,27 @@ def test_parse_modes_removed_discover_fails_fast():
         parse_modes("junk", env="discover")
 
 
+def test_normalize_modes_matrix():
+    """共享归一单点的直接矩阵（cli 与 build_app 两入口的字符级归一契约）：
+    str 包裹、strip+lower、去空、去重保序。"""
+    from common.deployment import normalize_modes
+    assert normalize_modes("OpenAPI") == ["openapi"]
+    assert normalize_modes([" OPENAPI ", "data", "openapi"]) == ["openapi", "data"]
+    assert normalize_modes(["", "  ", "DATA"]) == ["data"]
+    assert normalize_modes([]) == []
+
+
+def test_reject_removed_modes_bare_string():
+    """裸字符串守卫直接矩阵：str 视为单模式（逐字符迭代会静默绕过）。"""
+    from common.deployment import reject_removed_modes
+    with pytest.raises(ValueError, match="discover"):
+        reject_removed_modes("discover")
+    with pytest.raises(ValueError, match="discover"):
+        reject_removed_modes(" DISCOVER ")
+    reject_removed_modes("openapi")          # 合法单模式串放行
+    reject_removed_modes(["openapi", "data"])
+
+
 def test_build_app_removed_mode_fails_fast():
     """build_app（嵌入方唯一 external seam）对已移除模式名 fail-fast——
     混装列表不得静默降级为 openapi（单 server 带已装配凭证）。"""

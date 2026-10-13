@@ -61,18 +61,17 @@ REMOVED_MODES: tuple[str, ...] = ("discover",)
 def normalize_modes(modes: "Sequence[str] | str") -> list[str]:
     """模式词表归一单点（cli 与 build_app 同口径）：str 包裹为单元素、逐项
     strip+lower、去空去重保序。逗号不拆分——build_app 收元素列表、cli 收
-    逗号串且各自先切好（本函数只做字符级归一）。"""
+    逗号串先切分再委托本函数（字符级归一知识只此一份）。"""
     if isinstance(modes, str):
         modes = [modes]
     return list(dict.fromkeys(m.strip().lower() for m in modes if m.strip()))
 
 
 def reject_removed_modes(modes: "Sequence[str] | str") -> None:
-    """已移除模式名 fail-fast（归一后精确匹配；str 视为单模式——裸字符串
-    逐字符迭代会静默绕过守卫）。其余未知串不在此拦（parse_modes 宽容回退、
-    build_app 入口另行校验）。"""
-    removed = sorted({n for m in ([modes] if isinstance(modes, str) else modes)
-                      if (n := m.strip().lower()) in REMOVED_MODES})
+    """已移除模式名 fail-fast（归一委托 normalize_modes——str 视为单模式，
+    裸字符串逐字符迭代会静默绕过守卫）。其余未知串不在此拦（parse_modes
+    宽容回退、build_app 入口另行校验）。"""
+    removed = sorted(set(normalize_modes(modes)) & set(REMOVED_MODES))
     if removed:
         raise ValueError(
             f"模式 {'/'.join(removed)} 已移除；可用：{'/'.join(MODES)}——"

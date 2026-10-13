@@ -10,6 +10,7 @@ from common.deployment import (
     ENV_LOG_LEVEL,
     ENV_MODE,
     MODES,
+    normalize_modes,
     reject_removed_modes,
     resolve_deployment,
 )
@@ -49,13 +50,13 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
     env 里的 discover 残留是地雷，即便显式 flag 赢得优先级也 fail-fast
     （静默降级 openapi 会让固定 discover 的部署以 AK/SK 意外打云）；其余
     无效项告警忽略、全部无效回退 openapi（单值语义与历史行为一致）。
+    strip/lower/去空去重委托 normalize_modes（字符级归一知识单点）。
     """
 
     def _tokens(raw: str | None) -> list[str]:
-        text = (raw or "").strip().lower()
-        if not text:
+        if raw is None or not raw.strip():
             return []
-        return [m.strip() for m in text.split(",") if m.strip()]
+        return normalize_modes(raw.split(","))
 
     flag_tokens, env_tokens = _tokens(value), _tokens(env)
     reject_removed_modes(flag_tokens + env_tokens)

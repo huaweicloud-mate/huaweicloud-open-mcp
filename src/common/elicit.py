@@ -141,9 +141,13 @@ class DenialOffer:
     policy_denial_offer 构造挂载，故为必填；弹窗五选一
     （api/api_session/product/readonly/none）。
 
-    readonly_rules 构造期元组化并拒绝空集：denial_message / fallback_hint /
-    _grant_readonly 三处消费点对规则集做 join 渲染，空集会产出乱码文案。
-    元组化后空态不可表示（frozen dataclass 无原地变更通道）且实例可 hash。
+    readonly_rules 构造期元组化并拒绝空集与空白规则：denial_message /
+    fallback_hint / _grant_readonly 三处消费点对规则集做 join 渲染，空集
+    或空白条目会产出乱码文案。元组化后空态不可表示（frozen dataclass 无
+    原地变更通道）且实例可 hash；str/bytes 显式拒绝——Sequence[str] 注解
+    下裸字符串类型合法但逐字符元组化是静默数据损坏（与 normalize_modes
+    的 str 包裹同一口径的坑，在此直接拒绝而非包裹：规则集没有单字符串
+    合形态）。
     """
 
     subject: str
@@ -153,13 +157,18 @@ class DenialOffer:
     readonly_rules: Sequence[str]
 
     def __post_init__(self) -> None:
-        rules = tuple(self.readonly_rules)
-        if not rules:
+        if isinstance(self.readonly_rules, (str, bytes)):
             raise ValueError(
-                "DenialOffer.readonly_rules 不可为空（offer 必须携带产品级"
-                "只读规则集；policy_denial_offer 经 readonly_grant_rules 恒构"
-                "造四条——空集会使 denial_message/fallback_hint 的规则渲染落"
-                "入空 join）")
+                "DenialOffer.readonly_rules 不接受裸字符串（str 是 "
+                "Sequence[str]，逐字符元组化是静默数据损坏）——请传规则"
+                "文本列表")
+        rules = tuple(self.readonly_rules)
+        if not rules or not all(r.strip() for r in rules):
+            raise ValueError(
+                "DenialOffer.readonly_rules 不可为空或含空白规则（offer 必须"
+                "携带产品级只读规则集；policy_denial_offer 经 "
+                "readonly_grant_rules 恒构造四条——空集或空白条目会使 "
+                "denial_message/fallback_hint 的规则渲染落入空 join）")
         object.__setattr__(self, "readonly_rules", rules)
 
 

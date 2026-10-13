@@ -31,7 +31,7 @@ from common.sessions import SessionScopeMiddleware, current_session_key
 from safety.policy_store import PolicyStore
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from mcp_data.service import DataService
     from mcp_openapi.hints import Hints
@@ -96,7 +96,7 @@ def _mode_instructions(mode: str, hints: "Hints | None") -> str:
     raise ValueError(f"未知模式: {mode}")
 
 
-def build_app(modes: list[str], args: argparse.Namespace, *,
+def build_app(modes: "Sequence[str] | str", args: argparse.Namespace, *,
               env: "Mapping[str, str] | None" = None,
               log_level: str = "INFO",
               elicit_mode: str = "off",
