@@ -50,11 +50,12 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
     env 里的 discover 残留是地雷，即便显式 flag 赢得优先级也 fail-fast
     （静默降级 openapi 会让固定 discover 的部署以 AK/SK 意外打云）；其余
     无效项告警忽略、全部无效回退 openapi（单值语义与历史行为一致）。
-    strip/lower/去空去重委托 normalize_modes（字符级归一知识单点）。
+    strip/lower/去空去重委托 normalize_modes（字符级归一知识单点——本
+    函数只剩 None 守卫与 MODES 过滤）。
     """
 
     def _tokens(raw: str | None) -> list[str]:
-        if raw is None or not raw.strip():
+        if raw is None:
             return []
         return normalize_modes(raw.split(","))
 
@@ -64,8 +65,7 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
     invalid = [m for m in items if m not in MODES]
     if invalid:
         logger.warning("无效模式 %s 已忽略（可用：%s）", invalid, "/".join(MODES))
-    valid = list(dict.fromkeys(m for m in items if m in MODES))
-    return valid or ["openapi"]
+    return [m for m in items if m in MODES] or ["openapi"]
 
 
 def main() -> None:

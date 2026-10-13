@@ -539,19 +539,19 @@ def test_offer_grant_readonly_all_failed_keeps_denial():
 
 
 def test_denial_offer_rejects_empty_readonly_rules():
-    """readonly_rules 空集/空白条目/裸字符串构造期拒绝，字段随即元组化——
-    空态不可表示（frozen dataclass 无原地变更通道，实例可 hash）；
-    denial_message / fallback_hint / _grant_readonly 三处 join 渲染结构性
-    安全（str 是 Sequence[str]，逐字符元组化是静默数据损坏，显式拒绝）。"""
-    with pytest.raises(ValueError, match="readonly_rules"):
-        DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
-                    coarse_rule="X:*=allow", readonly_rules=[])
-    with pytest.raises(ValueError, match="裸字符串"):
-        DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
-                    coarse_rule="X:*=allow", readonly_rules="X:*List*=allow")
-    with pytest.raises(ValueError, match="空白"):
-        DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
-                    coarse_rule="X:*=allow", readonly_rules=["", "  "])
+    """readonly_rules 非法形态构造期拒绝（空集/空白条目/裸 str/bytes/
+    bytearray/非字符串条目——正向形状检查，恒 ValueError 不逃 AttributeError），
+    字段随即元组化——空态不可表示（frozen dataclass 无原地变更通道，实例
+    可 hash）；denial_message / fallback_hint / _grant_readonly 三处 join
+    渲染结构性安全。"""
+    for bad in ([], ["", "  "], [1, 2]):
+        with pytest.raises(ValueError, match="readonly_rules"):
+            DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
+                        coarse_rule="X:*=allow", readonly_rules=bad)
+    for bad in ("X:*List*=allow", b"X:*List*=allow", bytearray(b"ab")):
+        with pytest.raises(ValueError, match="裸字符串/字节串"):
+            DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
+                        coarse_rule="X:*=allow", readonly_rules=bad)
     offer = DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
                         coarse_rule="X:*=allow",
                         readonly_rules=["X:*List*=allow"])
