@@ -1,13 +1,13 @@
 # 华为云 Open MCP 设计文档
 
-> 本地 stdio 形态的华为云 Open MCP server（通用网关 Core 模式）：以最小工具集编排触达华为云全量 OpenAPI / 云端 MCP server，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用。同类产品参考：[阿里云 OpenAPI MCP Server](https://github.com/aliyun/alibabacloud-api-mcp-server)（Core 模式）、[AWS Labs MCP](https://github.com/awslabs/mcp)。
+> 本地 stdio 形态的华为云 Open MCP server（通用网关 Core 模式）：以最小工具集编排触达华为云全量 OpenAPI，供 AI 客户端（Claude Code / opencode / Cursor 等）通过自然语言查询与调用。同类产品参考：[阿里云 OpenAPI MCP Server](https://github.com/aliyun/alibabacloud-api-mcp-server)（Core 模式）、[AWS Labs MCP](https://github.com/awslabs/mcp)。
 
-两种运行模式（`--mode` 二选一），各自有独立设计文档：
+两种运行模式（`--mode` 可逗号组合混用）：
 
 | 模式 | 工具集 | 设计文档 |
 | --- | --- | --- |
-| **openapi**（默认） | 7 工具直连华为云 OpenAPI | [mcp-openapi.md](mcp-openapi.md) |
-| **discover** | 7 工具发现连接云端 MCP server | [mcp-discovery.md](mcp-discovery.md) |
+| **openapi**（默认） | 8 工具直连华为云 OpenAPI | [mcp-openapi.md](mcp-openapi.md) |
+| **data** | 2 工具本地只读 SQL 分析与转换 | 见 `AGENTS.md`「校验规则」 |
 
 本文档覆盖跨模式共享的内容：总体架构、模块组织、日志、测试纪律、能力清单与路线。
 
@@ -20,7 +20,7 @@ flowchart TB
     end
 
     subgraph Server["huaweicloud-open-mcp（本地 stdio）"]
-        GW["MCP 网关层（mcp_openapi/server.py + mcp_discover/server.py）<br/>6+7 工具注册 + instructions"]
+        GW["MCP 网关层（mcp_openapi/server.py + mcp_data/server.py）<br/>8+2 工具注册 + instructions"]
         SV["ToolService 编排层<br/>mcp_openapi/service.py 加载/配置/客户端工厂注入"]
         MT["纯函数层<br/>apie/metadata.py + mcp_openapi/execute.py"]
         SF["safety/policy.py 匹配"]
@@ -55,10 +55,10 @@ flowchart TB
 
 | 层 | 模块 | 职责 | 依赖方向 |
 | --- | --- | --- | --- |
-| 网关 | `huaweicloud_open_mcp/cli.py` / `mcp_openapi/server.py` / `mcp_discover/server.py` | CLI 入口汇聚 + MCP 协议装配（stdio、工具 schema、instructions） | → service |
-| 编排 | `mcp_openapi/service.py` / `mcp_discover/service.py` | 数据加载、配置（region/mock/policy/凭证）、客户端工厂注入 | → 纯函数层 / apie / signer |
+| 网关 | `huaweicloud_open_mcp/cli.py` / `mcp_openapi/server.py` / `mcp_data/server.py` | CLI 入口汇聚 + MCP 协议装配（stdio、工具 schema、instructions） | → service |
+| 编排 | `mcp_openapi/service.py` / `mcp_data/service.py` | 数据加载、配置（region/mock/policy/凭证）、客户端工厂注入 | → 纯函数层 / apie / signer |
 | 纯函数 | `apie/metadata.py` `mcp_openapi/execute.py` | 元数据处理与请求构建/响应规范化，不碰磁盘、不碰 MCP 协议 | → types |
-| 安全 | `safety/policy.py` | policy 解析与匹配（PolicyRule dataclass，product + server 两类规则） | 无依赖 |
+| 安全 | `safety/policy.py` | policy 解析与匹配（PolicyRule dataclass，product 类规则） | 无依赖 |
 | 执行 | `mcp_openapi/signer/` `apie/mock.py` | 签名直连 / mock 端点 | → types / auth |
 | 元数据 | `apie/` | APIE 管道（可独立运行）+ 内存缓存（`memory_store.py`）+ 远端回退（`catalog.py`/`live_fallback.py`） | → http |
 
@@ -79,12 +79,6 @@ graph LR
                 SN["sign.py"]
                 CL["client.py"]
             end
-        end
-        subgraph MPD["mcp_discover/"]
-            DS["server.py（MCP 装配）"]
-            DE["service.py（编排）"]
-            DG["catalog.py / config.py"]
-            DL["manager.py / sdk.py"]
         end
         subgraph AP["apie/"]
             PIPE["fetch/split/convert/merge/<br/>organize/validate/refresh/api_docs"]
@@ -111,9 +105,6 @@ graph LR
     SV --> AU
     SV --> MS
     SRV --> CM
-    DS --> DE --> DL --> DG
-    DE --> SF
-    DS --> CM
     AP --> H
     AP --> MK
     AP --> MS
@@ -124,9 +115,9 @@ graph LR
 
 关键设计结论：
 
-- **`apie` 是 `mcp_openapi` 独享依赖**：APIE 元数据层只服务 openapi 直连模式；`mcp_discover` 只依赖 `safety` + `common`，两模式互不 import。
-- **`safety` + `common` 是两模式公共底座**，二者本身零内部依赖。
-- **入口包化 + 延迟导入**：入口在 `src/huaweicloud_open_mcp/` 包（`cli.py`，消除 site-packages 顶层 `main.py` 通用名冲突）；`mcp_openapi.server` / `mcp_discover.server` 在 `main()` 体内按 mode 分支导入，避免同时装载两套。
+- **`apie` 是 `mcp_openapi` 独享依赖**：APIE 元数据层只服务 openapi 直连模式；`mcp_data` 只依赖 `common`（纯本地计算，无 policy 门），两模式互不 import。
+- **`safety` + `common` 是公共底座**，二者本身零内部依赖。
+- **入口包化 + 延迟导入**：入口在 `src/huaweicloud_open_mcp/` 包（`cli.py`，消除 site-packages 顶层 `main.py` 通用名冲突）；`mcp_openapi.server` / `mcp_data.server` 在 `build_app` 内按 mode 分支导入，避免同时装载两套。
 
 ### 类型设计（结果信封）
 
@@ -140,7 +131,7 @@ graph LR
 
 ```mermaid
 flowchart LR
-    A["logger: mcp_openapi.* / apie.* / mcp_discover.* / common.*"] --> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
+    A["logger: mcp_openapi.* / apie.* / mcp_data.* / common.*"] --> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
     A --> C["StreamHandler(stderr)<br/>WARNING+ 兜底"]
     D["stdout（JSON-RPC 通道）"] -. "禁止日志" .-> A
 
@@ -166,18 +157,16 @@ flowchart LR
 | S4 | `execute_api` HTTP 边界 | 集成测试直连 mock 端点 + urllib 打桩错误注入 | mock 端点返回 |
 | S5 | APIE 管道各阶段 | 单测 + 迷你样本集成 + e2e 全量 | Swagger 2.0 schema |
 | S6 | benchmark 纯函数（case 加载校验 / 分层评分 / 统计基线 / trace 提取 / token 读取 / 本地 stub） | 单测（迷你 fixture / 回环 HTTP） | 手写字面量 + 独立构造样例调用序列 |
-| S7 | discover 模式（catalog / server 规则 / session 管理 / SDK 适配 / 7 工具） | 见 [mcp-discovery.md](mcp-discovery.md) | 字面量 + 互斥工具集合断言 |
 
 S1–S5 细节见 [mcp-openapi.md](mcp-openapi.md)。纪律：red→green 垂直切片；只 mock 系统边界（外部 HTTP）；期望值来自独立真值，禁止同义反复。
 
 ## 5. 已实现能力清单
 
 - [x] APIE 全量管道：219 产品 / 17666 接口 → 2714 OpenAPI 2.0 文档，Swagger 校验 invalid=0
-- [x] openapi 模式 7 工具：list_products / get_product / list_apis（含 tag_groups）/ get_api / get_api_examples / execute_api / manage_policy
-- [x] discover 模式 8 工具：list_mcp_servers / get_mcp_server / connect / list_server_tools / get_server_tool / call_server_tool / disconnect / manage_policy
+- [x] openapi 模式 8 工具：search_apis / list_products / get_product / list_apis（含 tag_groups）/ get_api / get_api_examples / execute_api / manage_policy
 - [x] server instructions + 渐进式工作流指引
 - [x] SDK-HMAC-SHA256 签名（官方向量 + 真实云验证）
-- [x] safety policy（product + server 规则，无 policy 全拒；PolicyStore 热重载，manage_policy 增删无需重启）
+- [x] safety policy（product 规则，无 policy 全拒；PolicyStore 热重载，操作员编辑 policy 文件即时生效）
 
 以上各项均含对应测试。`manage_policy` 的安全约定：Agent 需先向用户确认再授予最小规则；规则三档 scope——会话内（缺省，重启即失无需回收）/ 临时（TTL 自动过期）/ 永久（显式 scope="permanent" 落盘）。
 - [x] mock 模式全链路（`--mock` / `--mock-base`）

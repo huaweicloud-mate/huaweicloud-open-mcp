@@ -536,9 +536,6 @@ def test_openapi_execute_presign_denied_accept_grants_once_redispatch(
     assert len(seen) == 2
 
 
-# ---------- discover 模式 ----------
-
-
 def test_openapi_required_mode_accept_redispatches(tmp_path, monkeypatch):
     """required 档 + 支持 elicitation 的客户端：拒绝提议照常弹窗，accept 后
     重放直接返回执行结果（与 auto 同构；required 仅在客户端不支持时 fail-closed，

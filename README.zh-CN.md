@@ -15,10 +15,9 @@
 
 一个开放的本地 [Model Context Protocol](https://modelcontextprotocol.io) 网关，让 code agent 用自然语言连接华为云。opencode、Codex、Cursor 以及任何支持 MCP 的客户端均可接入。无需逐服务手写封装，Agent 逐步探索全量目录（300+ 产品、17000+ API），层层收窄到一次具体调用再执行，请求全程在本地签名。这是一套面向个人的本地部署方案：网关完全运行在你自己的机器上，AK/SK 永不出本机。
 
-三种模式可通过 `--mode` 逗号组合混用（如 `openapi,data`）：
+两种模式可通过 `--mode` 逗号组合混用（如 `openapi,data`）：
 
 - `openapi`（默认）直连华为云 OpenAPI。
-- `discover` 发现并连接云端华为云 MCP server（实验性，暂无文档）。
 - `data` 用 DataFusion 对 inline/本地数据执行只读 SQL 分析与转换落盘，纯本地计算，不需要凭证，也不受 safety policy 约束。
 
 典型 `openapi,data` 工作流：经 `execute_api` 拉取大数据落地文件，再用 `query_data` 聚合或 `transform_data` 整形落盘为新数据集，仅聚合结果或产物元数据进入模型上下文。
@@ -394,7 +393,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--mode <modes>` | `openapi` | 运行模式，逗号组合（`openapi`/`discover`/`data`，如 `openapi,data`；env `HUAWEICLOUD_MCP_MODE`） |
+| `--mode <modes>` | `openapi` | 运行模式，逗号组合（`openapi`/`data`，如 `openapi,data`；env `HUAWEICLOUD_MCP_MODE`） |
 | `--transport stdio\|http` | `stdio` | 传输层：stdio（缺省，客户端拉起的本地形态）或 `http`（Streamable HTTP，单进程服务多 MCP 会话；`streamable-http` 别名归一 `http`；非法值启动即失败；env `HUAWEICLOUD_MCP_TRANSPORT`） |
 | `--http-host <addr>` | `127.0.0.1` | HTTP 监听地址（loopback 自动启用 DNS rebinding 防护；非 loopback 告警——见 [HTTP 传输](#http-传输多会话)；env `HUAWEICLOUD_MCP_HTTP_HOST`） |
 | `--http-port <port>` | `8000` | HTTP 端口（env `HUAWEICLOUD_MCP_HTTP_PORT`） |

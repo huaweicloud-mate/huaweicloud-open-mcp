@@ -1,6 +1,6 @@
 # 华为云 Open MCP —— openapi 模式设计
 
-> 7 个核心工具直连华为云 OpenAPI（Core 模式，默认）。discover 模式见 [mcp-discovery.md](mcp-discovery.md)；跨模式整体架构见 [architecture.md](architecture.md)。
+> 8 个核心工具直连华为云 OpenAPI（Core 模式，默认）。跨模式整体架构见 [architecture.md](architecture.md)。
 
 ## 1. 定位与设计目标
 
@@ -203,7 +203,6 @@ flowchart LR
 - 默认行为：无 policy 文件时 `execute_api` 全拒（`configs/safety-policy.example.json` 提供只读白名单示例）
 - 纵深防御：policy 白名单 + 最小权限 IAM 用户的 AK/SK
 - 凭证约定：`HUAWEICLOUD_SDK_AK/SK/SECURITY_TOKEN/PROJECT_ID`（env 或 `~/.huaweicloud/credentials` [basic]）；E2E 测试从项目根 `.env` 加载（gitignore，已存在环境变量优先）
-- server 规则（`server:serverId[:toolPattern]=...`）见 [mcp-discovery.md](mcp-discovery.md)
 
 ## 9. 测试接缝（S1–S5）
 

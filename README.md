@@ -14,10 +14,9 @@
 
 One open, local [Model Context Protocol](https://modelcontextprotocol.io) server connects code agents to Huawei Cloud in natural language. It works with opencode, Codex, Cursor, or any other MCP-capable client. There are no per-service wrappers. The agent explores the full catalog (300+ products, 17,000+ APIs) step by step, narrows down to one concrete API call, then executes it with a locally signed request. This is a personal, local deployment. The gateway runs entirely on your machine, and your AK/SK never leave it.
 
-Three composable modes, selected with `--mode` (comma-separated, e.g. `openapi,data`):
+Two composable modes, selected with `--mode` (comma-separated, e.g. `openapi,data`):
 
 - `openapi` (default) talks to Huawei Cloud OpenAPI.
-- `discover` connects to cloud-hosted Huawei Cloud MCP servers (experimental, not documented yet).
 - `data` runs read-only SQL analytics and transformations over inline/local data with DataFusion, pure local compute that needs no credentials and is not governed by the safety policy.
 
 A typical `openapi,data` workflow pulls a large dataset with `execute_api`, saves it to a file, then aggregates it with `query_data` or reshapes it into a new dataset with `transform_data`. Only the aggregated results or artifact metadata enter the model context.
@@ -393,7 +392,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--mode <modes>` | `openapi` | Run mode(s), comma-separated (`openapi`/`discover`/`data`, e.g. `openapi,data`; env `HUAWEICLOUD_MCP_MODE`) |
+| `--mode <modes>` | `openapi` | Run mode(s), comma-separated (`openapi`/`data`, e.g. `openapi,data`; env `HUAWEICLOUD_MCP_MODE`) |
 | `--transport stdio\|http` | `stdio` | Transport: stdio (default, client-launched local form) or `http` (Streamable HTTP, single process serving multiple MCP sessions; `streamable-http` normalizes to `http`; invalid values fail fast; env `HUAWEICLOUD_MCP_TRANSPORT`) |
 | `--http-host <addr>` | `127.0.0.1` | HTTP bind address (loopback auto-enables DNS-rebinding protection; non-loopback warns — see [HTTP transport](#http-transport-multi-session); env `HUAWEICLOUD_MCP_HTTP_HOST`) |
 | `--http-port <port>` | `8000` | HTTP port (env `HUAWEICLOUD_MCP_HTTP_PORT`) |
