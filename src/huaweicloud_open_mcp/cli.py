@@ -45,10 +45,10 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
     """解析 --mode / 环境变量：逗号多值混用（如 openapi,data），去重保序。
 
     优先级在 token 层：--mode 与 env 中首个产出实际 token 的一方生效——
-    空白/纯逗号等垃圾 flag 不遮蔽环境变量。已移除的模式名（discover）经
-    reject_removed_modes fail-fast——静默降级 openapi 会让固定 discover 的
-    部署以 AK/SK 签名意外打云；其余无效项告警忽略、全部无效回退 openapi
-    （单值语义与历史行为一致）。
+    空白/纯逗号等垃圾 flag 不遮蔽环境变量。**两个源都扫已移除模式名**：
+    env 里的 discover 残留是地雷，即便显式 flag 赢得优先级也 fail-fast
+    （静默降级 openapi 会让固定 discover 的部署以 AK/SK 意外打云）；其余
+    无效项告警忽略、全部无效回退 openapi（单值语义与历史行为一致）。
     """
 
     def _tokens(raw: str | None) -> list[str]:
@@ -57,8 +57,9 @@ def parse_modes(value: str | None, env: str | None = None) -> list[str]:
             return []
         return [m.strip() for m in text.split(",") if m.strip()]
 
-    items = _tokens(value) or _tokens(env) or ["openapi"]
-    reject_removed_modes(items)
+    flag_tokens, env_tokens = _tokens(value), _tokens(env)
+    reject_removed_modes(flag_tokens + env_tokens)
+    items = flag_tokens or env_tokens or ["openapi"]
     invalid = [m for m in items if m not in MODES]
     if invalid:
         logger.warning("无效模式 %s 已忽略（可用：%s）", invalid, "/".join(MODES))

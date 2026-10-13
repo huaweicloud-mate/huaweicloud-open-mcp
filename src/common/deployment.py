@@ -12,7 +12,9 @@
   只此一份。
 
 mode 专属旋钮（hints/deprecated/entity/corrections/auth_demote/spill 等）的
-解析留在各 mode builder——共享的是跨模式旋钮纪律，不是 mode 语义。
+解析留在各 mode builder——共享的是跨模式旋钮纪律。模式词表（MODES/
+REMOVED_MODES/normalize_modes/reject_removed_modes）是唯一例外：cli 与
+build_app 两入口的共享契约，随跨模式常量同居于此。
 """
 
 import argparse
@@ -52,19 +54,29 @@ MODES: tuple[str, ...] = ("openapi", "data")
 """当前合法运行模式（--mode / HUAWEICLOUD_MCP_MODE 词表）。"""
 
 REMOVED_MODES: tuple[str, ...] = ("discover",)
-"""已移除的运行模式名：提及即 fail-fast（cli.parse_modes 与 build_app 入口
-共用），防固定 discover 的部署静默降级 openapi 意外以 AK/SK 打云。"""
+"""已移除的运行模式名：归一后提及即 fail-fast（cli.parse_modes 与 build_app
+入口共用），防固定 discover 的部署静默降级 openapi 意外以 AK/SK 打云。"""
 
 
-def reject_removed_modes(modes: "Sequence[str]") -> None:
-    """已移除模式名 fail-fast（cli 与 build_app 嵌入方同一口径）；大小写与
-    空白归一后精确匹配，其余未知串不在此拦（parse_modes 保持宽容回退）。"""
-    removed = sorted({m.strip().lower() for m in modes
-                      if m.strip().lower() in REMOVED_MODES})
+def normalize_modes(modes: "Sequence[str] | str") -> list[str]:
+    """模式词表归一单点（cli 与 build_app 同口径）：str 包裹为单元素、逐项
+    strip+lower、去空去重保序。逗号不拆分——build_app 收元素列表、cli 收
+    逗号串且各自先切好（本函数只做字符级归一）。"""
+    if isinstance(modes, str):
+        modes = [modes]
+    return list(dict.fromkeys(m.strip().lower() for m in modes if m.strip()))
+
+
+def reject_removed_modes(modes: "Sequence[str] | str") -> None:
+    """已移除模式名 fail-fast（归一后精确匹配；str 视为单模式——裸字符串
+    逐字符迭代会静默绕过守卫）。其余未知串不在此拦（parse_modes 宽容回退、
+    build_app 入口另行校验）。"""
+    removed = sorted({n for m in ([modes] if isinstance(modes, str) else modes)
+                      if (n := m.strip().lower()) in REMOVED_MODES})
     if removed:
         raise ValueError(
             f"模式 {'/'.join(removed)} 已移除；可用：{'/'.join(MODES)}——"
-            "请更新 --mode 或 HUAWEICLOUD_MCP_MODE 配置")
+            "请修正 --mode / HUAWEICLOUD_MCP_MODE 配置或调用方 modes 参数")
 
 # transport 归一表：stdio | http（streamable-http 别名归一 http；SSE 不提供）
 _TRANSPORT_ALIASES: dict[str, str] = {

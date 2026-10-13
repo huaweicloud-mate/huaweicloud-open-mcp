@@ -64,5 +64,5 @@
 
 discover 模式已删除（收敛为 openapi + data 双模式）。本文的历史描述不受
 影响，但与现状不符处：`build_app` 签名不再有 `discover_service` 参数；
-「discover 混装去重」与 manage_policy 归属机制已随 discover 装配分支删除
-（build_app 入口对已移除模式名 fail-fast）。装配单入口原则不变。
+「discover 混装去重」与 `include_manage_policy` 参数已随 discover 装配分支
+删除；manage_policy 归属（随 openapi 段注册）机制保留。装配单入口原则不变。

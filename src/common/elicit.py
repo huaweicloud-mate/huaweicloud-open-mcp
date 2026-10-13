@@ -38,7 +38,7 @@ Protocol 接收 MCP Context；规则文本知识在 ``safety.policy.grant_rule``
 
 import inspect
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeAlias
 
@@ -141,24 +141,26 @@ class DenialOffer:
     policy_denial_offer 构造挂载，故为必填；弹窗五选一
     （api/api_session/product/readonly/none）。
 
-    readonly_rules 构造期拒绝空集（非法状态不可表示）：denial_message /
-    fallback_hint / _grant_readonly 三处消费点对规则集做 join 渲染，空集
-    会产出乱码文案——不变量落在值对象上，消费点无需各自设防。
+    readonly_rules 构造期元组化并拒绝空集：denial_message / fallback_hint /
+    _grant_readonly 三处消费点对规则集做 join 渲染，空集会产出乱码文案。
+    元组化后空态不可表示（frozen dataclass 无原地变更通道）且实例可 hash。
     """
 
     subject: str
     rule: str
     reason: str
     coarse_rule: str
-    readonly_rules: list[str]
+    readonly_rules: Sequence[str]
 
     def __post_init__(self) -> None:
-        if not self.readonly_rules:
+        rules = tuple(self.readonly_rules)
+        if not rules:
             raise ValueError(
                 "DenialOffer.readonly_rules 不可为空（offer 必须携带产品级"
                 "只读规则集；policy_denial_offer 经 readonly_grant_rules 恒构"
                 "造四条——空集会使 denial_message/fallback_hint 的规则渲染落"
                 "入空 join）")
+        object.__setattr__(self, "readonly_rules", rules)
 
 
 @dataclass(frozen=True)

@@ -539,12 +539,21 @@ def test_offer_grant_readonly_all_failed_keeps_denial():
 
 
 def test_denial_offer_rejects_empty_readonly_rules():
-    """readonly_rules 空集构造期拒绝——非法状态不可表示（denial_message /
-    fallback_hint / _grant_readonly 三处 join 渲染由此结构性安全，
-    消费点无需空集守卫）。"""
+    """readonly_rules 空集构造期拒绝，字段随即元组化——空态不可表示
+    （frozen dataclass 无原地变更通道，实例可 hash）；denial_message /
+    fallback_hint / _grant_readonly 三处 join 渲染结构性安全。"""
     with pytest.raises(ValueError, match="readonly_rules"):
         DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
                     coarse_rule="X:*=allow", readonly_rules=[])
+    offer = DenialOffer(subject="X:Y", rule="X:Y=allow", reason="denied",
+                        coarse_rule="X:*=allow",
+                        readonly_rules=["X:*List*=allow"])
+    assert isinstance(offer.readonly_rules, tuple)
+    assert hash(offer) is not None
+    with pytest.raises(AttributeError):
+        offer.readonly_rules = []          # frozen：重绑定不可达
+    with pytest.raises(AttributeError):
+        offer.readonly_rules.clear()       # 元组：无原地变更通道
 
 
 def test_fallback_hint_readonly_lists_five_options():

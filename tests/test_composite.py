@@ -153,11 +153,14 @@ def test_parse_modes_removed_discover_fails_fast():
         parse_modes("discover")
     with pytest.raises(ValueError, match="discover"):
         parse_modes(None, env="openapi,DISCOVER")
-    # 空白/--mode 垃圾值不遮蔽环境变量（strip 先于优先级链）
+    # 空白/纯逗号垃圾 flag 不遮蔽环境变量（优先级在 token 层）
     with pytest.raises(ValueError, match="discover"):
         parse_modes("  ", env="discover")
     with pytest.raises(ValueError, match="discover"):
         parse_modes(",,", env="discover")
+    # 垃圾 token flag 也不遮蔽——两个源都扫已移除名（stale env 是地雷）
+    with pytest.raises(ValueError, match="discover"):
+        parse_modes("junk", env="discover")
 
 
 def test_build_app_removed_mode_fails_fast():
@@ -167,3 +170,27 @@ def test_build_app_removed_mode_fails_fast():
         build_app(["discover", "openapi"], make_args())
     with pytest.raises(ValueError, match="discover"):
         build_app(["DISCOVER"], make_args())
+    # 裸字符串视为单模式（逐字符迭代会静默绕过守卫组装零工具 server）
+    with pytest.raises(ValueError, match="discover"):
+        build_app("discover", make_args())
+
+
+def test_build_app_normalizes_and_rejects_unknown_modes():
+    """入口归一与未知 token fail-fast——大小写/空白/逗号粘连变体要么正确
+    生效要么响，不得静默丢段（说谎的 instructions 头）或拼出零工具 server。"""
+    # 大小写/空白归一后正确装配（与 cli.parse_modes 真同口径）
+    app = build_app(["OPENAPI", " DATA "], make_args())
+    assert len(app._tool_manager._tools) == 10   # 混装并集（8 openapi + 2 data）
+    single = build_app(["DATA"], make_args())
+    assert sorted(single._tool_manager._tools) == ["query_data", "transform_data"]
+    # 逗号粘连的已移除拼写（strip 不去逗号）经未知 token 路径 fail-fast
+    with pytest.raises(ValueError, match="未知模式"):
+        build_app(["discover,", "openapi"], make_args())
+    # 未知 token 是编程错误：响，不静默忽略
+    with pytest.raises(ValueError, match="未知模式.*bogus"):
+        build_app(["bogus", "data"], make_args())
+    # 空列表/空串显式拒绝（不落 IndexError、不组装空 server）
+    with pytest.raises(ValueError, match="modes 为空"):
+        build_app([], make_args())
+    with pytest.raises(ValueError, match="modes 为空"):
+        build_app("  ", make_args())
