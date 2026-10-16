@@ -82,6 +82,8 @@ def test_get_products_cache_isolation(monkeypatch):
 
 
 # ---------- get_apis ----------
+# 索引腿封网点 = http.fetch_json_429（fetch_json_429_raise adapter 的底座，
+# monkeypatch 底座即封住 adapter——explorer 运行时缺省 fetcher）。
 
 def test_get_apis_remote_fetch(monkeypatch):
     store = _store()
@@ -89,9 +91,9 @@ def test_get_apis_remote_fetch(monkeypatch):
 
     def _fetcher(url, **kw):
         calls[0] += 1
-        return {"apis": FIXTURE_APIS, "count": len(FIXTURE_APIS)}
+        return {"apis": FIXTURE_APIS, "count": len(FIXTURE_APIS)}, None
 
-    monkeypatch.setattr(explorer.http, "fetch_json", _fetcher)
+    monkeypatch.setattr(explorer.http, "fetch_json_429", _fetcher)
     r = catalog.get_apis(store, "ECS")
     assert r == FIXTURE_APIS_NORMALIZED
     assert calls[0] == 1
@@ -102,7 +104,7 @@ def test_get_apis_remote_fetch(monkeypatch):
 
 def test_get_apis_remote_error(monkeypatch):
     store = _store()
-    monkeypatch.setattr(explorer.http, "fetch_json",
+    monkeypatch.setattr(explorer.http, "fetch_json_429",
                         lambda url, **kw: (_ for _ in ()).throw(OSError("fail")))
     assert catalog.get_apis(store, "ECS") is None
 

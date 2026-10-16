@@ -53,14 +53,14 @@ def test_retry_failed_maps_all_outcomes(monkeypatch):
 def test_fetch_apis_pipeline_delegates_with_page_sleep(monkeypatch):
     seen = {}
 
-    def fake(product, *, page_sleep=0.0, fetch_json=None):
-        seen.update(product=product, page_sleep=page_sleep)
+    def fake(product, *, page_sleep=0.0, console_first=True, fetch_json=None):
+        seen.update(product=product, page_sleep=page_sleep, console_first=console_first)
         return [{"product_short": product, "name": "A"}]
 
     monkeypatch.setattr(fetch_apis.explorer, "fetch_apis", fake)
     apis = fetch_apis.fetch_product("ECS")
     assert len(apis) == 1
-    assert seen == {"product": "ECS", "page_sleep": 0.3}
+    assert seen == {"product": "ECS", "page_sleep": 0.3, "console_first": False}
 
 # ---------- refresh count/products 派生阶段 ----------
 

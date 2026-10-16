@@ -1,6 +1,7 @@
 """抓取接口索引 → raw/apis_docs.json。
 
-索引拉取委托 apie.explorer（注册域 /v2/apis，方言归一、内部分页）。
+索引拉取委托 apie.explorer（运行时双源；本管道钉注册域单源——构建产物
+可复现性不绑 console 无 SLA，design.md R9）。
 """
 
 import json
@@ -14,8 +15,8 @@ logger = logging.getLogger("apie.fetch_apis")
 
 
 def fetch_product(product_short: str) -> list[dict[str, Any]]:
-    """拉取产品全量接口索引（explorer 内分页，页间礼貌限速）。"""
-    return explorer.fetch_apis(product_short, page_sleep=0.3)
+    """拉取产品全量接口索引（explorer 内分页，页间礼貌限速；注册域单源）。"""
+    return explorer.fetch_apis(product_short, page_sleep=0.3, console_first=False)
 
 
 def main() -> None:

@@ -2,7 +2,7 @@
 
 service 与 api-docs CLI 的共用元数据入口；不依赖本地文件。
 store 由调用方注入（ToolService 或 api-docs CLI）。
-远端拉取委托 apie.explorer（注册域数据源，方言归一）。
+远端拉取委托 apie.explorer（数据源方言归一：索引双源、products/detail 注册域）。
 """
 
 import logging

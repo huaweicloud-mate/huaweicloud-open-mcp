@@ -166,6 +166,24 @@ def fetch_json_429(url: str, *, retries: int = 10, backoff_429: float = 20.0,
     raise ApieHttpError(f"429 rate-limited after {retries} retries: {url}")
 
 
+def fetch_json_429_raise(url: str, *, retries: int = 10, backoff_429: float = 20.0,
+                         backoff: float = 5.0, timeout: int = 30) -> dict[str, Any]:
+    """dict-only 抛错契约（fetch_json_429 薄适配）：成功 → body；429 耗尽 →
+    HTTPError 重抛；网络错耗尽 → ApieHttpError 包装（原因为 __cause__）；
+    非 429 HTTP 错 → HTTPError 立即重抛；200 但 body 非 JSON（挑战页形态）→
+    按底座瞬时错口径退避重试后 ApieHttpError（cause 链保留 JSONDecodeError）。
+    抛出路径的 err.read() 已在 open_url 消费， catcher 只可依赖 code/headers。
+
+    供 explorer 索引腿使用（运行时缺省 fetcher）；测试封网点 = 底座
+    http.fetch_json_429（monkeypatch 底座即封住本 adapter）。
+    """
+    body, err = fetch_json_429(url, retries=retries, backoff_429=backoff_429,
+                               backoff=backoff, timeout=timeout)
+    if err is not None:
+        raise err
+    return body
+
+
 def post_json(url: str, *, body: Any, headers: dict[str, str] | None = None,
               timeout: int = 120) -> Any:
     """单次 POST JSON 并解析响应（OpenAI-compatible API 调用用）。"""

@@ -4,12 +4,13 @@
 FakeResponse/FakeHTTPError idiom）；重试序列与 sleep 矩阵手写字面量。
 """
 
+import json
 import urllib.error
 import urllib.request
 
 import pytest
 
-from common.http import open_with_retry
+from common.http import ApieHttpError, fetch_json_429_raise, open_with_retry
 
 
 class FakeResponse:
@@ -102,3 +103,87 @@ def test_default_method_preserves_urllib_semantics(monkeypatch):
     open_with_retry("http://fake/post", data=b"x")
     assert calls[0][0].get_method() == "GET"
     assert calls[1][0].get_method() == "POST"
+
+
+# ---------- fetch_json_429_raise（dict-only 抛错契约，fetch_json_429 薄适配） ----------
+
+
+def test_raise_success_returns_body(monkeypatch):
+    _install(monkeypatch, [FakeResponse(200, b'{"apis": []}')])
+    assert fetch_json_429_raise("http://fake/x") == {"apis": []}
+
+
+def test_raise_429_once_then_succeeds(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("common.http.time.sleep", lambda s: sleeps.append(s))
+    _install(monkeypatch, [FakeHTTPError(429), FakeResponse(200, b'{"ok": 1}')])
+    out = fetch_json_429_raise("http://fake/x", retries=2, backoff_429=20.0)
+    assert out == {"ok": 1}
+    assert sleeps == [20.0]   # 底座 429 退避节奏透传（transposition 守卫：错传 backoff 则为 [5.0]）
+
+
+def test_raise_429_exhausted_reraises(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("common.http.time.sleep", lambda s: sleeps.append(s))
+    calls = _install(monkeypatch, [FakeHTTPError(429), FakeHTTPError(429)])
+    with pytest.raises(urllib.error.HTTPError) as ei:
+        fetch_json_429_raise("http://fake/x", retries=2, backoff_429=1.0)
+    assert ei.value.code == 429
+    assert len(calls) == 2
+    assert sleeps == [1.0]
+
+
+def test_raise_network_error_retries_then_raises_apie(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("common.http.time.sleep", lambda s: sleeps.append(s))
+    calls = _install(monkeypatch, [OSError("reset"), OSError("reset")])
+    with pytest.raises(ApieHttpError):
+        fetch_json_429_raise("http://fake/x", retries=2, backoff=1.0)
+    assert len(calls) == 2
+    assert sleeps == [1.0]   # 底座线性退避（非 _retry 指数）
+
+
+def test_raise_non_429_http_error_reraises_immediately(monkeypatch):
+    calls = _install(monkeypatch, [FakeHTTPError(504)])
+    with pytest.raises(urllib.error.HTTPError) as ei:
+        fetch_json_429_raise("http://fake/x", retries=5)
+    assert ei.value.code == 504
+    assert len(calls) == 1   # 终态错不重试
+
+
+def test_raise_non_json_200_treated_as_transient(monkeypatch):
+    """200 + 非 JSON body（挑战页形态）：open_url json.loads 抛 → 底座按瞬时错
+    退避重试耗尽 → ApieHttpError（cause 链保留）。继承底座行为，钉住防漂移。"""
+    sleeps: list[float] = []
+    monkeypatch.setattr("common.http.time.sleep", lambda s: sleeps.append(s))
+    calls = _install(monkeypatch, [FakeResponse(200, b"<html>challenge</html>"),
+                                  FakeResponse(200, b"<html>challenge</html>")])
+    with pytest.raises(ApieHttpError) as ei:
+        fetch_json_429_raise("http://fake/x", retries=2, backoff=1.0)
+    assert len(calls) == 2
+    assert sleeps == [1.0]
+    assert isinstance(ei.value.__cause__, json.JSONDecodeError)
+
+
+def test_raise_delegates_to_base_seal_point(monkeypatch):
+    """封网点契约：monkeypatch 底座 fetch_json_429 即封住 adapter（零 urlopen、
+    kwargs 逐字转发、err 通道转异常）。adapter 委托是本接缝的存在理由。"""
+    forwarded = []
+
+    def fake_base(url, *, retries, backoff_429, backoff, timeout):
+        forwarded.append((url, retries, backoff_429, backoff, timeout))
+        return {"sealed": True}, None
+
+    monkeypatch.setattr("common.http.fetch_json_429", fake_base)
+    calls = _install(monkeypatch, [])   # 任何 urlopen 都会失败
+    out = fetch_json_429_raise("http://fake/x")
+    assert out == {"sealed": True}
+    assert calls == []
+    assert forwarded == [("http://fake/x", 10, 20.0, 5.0, 30)]   # 缺省逐字透传
+
+    err = FakeHTTPError(502)
+    monkeypatch.setattr("common.http.fetch_json_429",
+                        lambda url, **kw: ({}, err))
+    with pytest.raises(urllib.error.HTTPError) as ei:
+        fetch_json_429_raise("http://fake/x")
+    assert ei.value is err
