@@ -443,7 +443,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 ## 凭证
 
-网关按顺序从两个来源加载 AK/SK：先环境变量，后 `~/.huaweicloud/credentials`（Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`）；两者同时配置时环境变量优先。
+网关按顺序从三个来源加载 AK/SK：先环境变量，后 devkit JSON vault `~/.config/huaweicloud/credentials.json`（Windows 上即 `%USERPROFILE%\.config\huaweicloud\credentials.json`），再 `~/.huaweicloud/credentials`（Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`）；以第一个 AK/SK 齐全的来源为准。
 
 ### 方式 A：Profile 文件（快速开始主路径）
 
@@ -489,6 +489,25 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | `HUAWEICLOUD_SDK_SECURITY_TOKEN` | 可选临时安全凭证 token；签名前自动携带 `X-Security-Token`（OBS 为 `x-obs-security-token`）并参与请求签名 |
 | `HUAWEICLOUD_SDK_PROJECT_ID` | 可选静态 project ID（用于 `{project_id}` 路径参数填充与 `X-Project-Id` 头） |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | 可选；为全局级服务预留（完整支持开发中） |
+
+### 方式 C：JSON 凭证文件（devkit vault）
+
+若你的凭证由华为云 devkit 托管，它会维护 `~/.config/huaweicloud/credentials.json`（其单一真值源）。网关将其作为链路中间源读取：
+
+```json
+{
+  "ak": "your-access-key-id",
+  "sk": "your-secret-access-key",
+  "securityToken": "<可选临时安全凭证 token>",
+  "region": "cn-north-4",
+  "configuredBySession": true
+}
+```
+
+- `ak` 与 `sk` 为必需；任一缺失时该文件被跳过，链路继续回落到 profile 文件。
+- `configuredBySession` 仅在凭证由 devkit 会话配置时出现；网关容忍其缺席，仅作来源标记、不驱动行为。
+- `region` 作为服务端默认 region 回落档：`--region` 与 `HUAWEICLOUD_MCP_REGION` 优先于它；两者都未配置时，网关使用 vault 的 region 而非 `cn-north-4`。
+- 该文件内容由 devkit 管理；请通过 devkit 管理凭证，不要手工编辑。
 
 ### 行为要点
 

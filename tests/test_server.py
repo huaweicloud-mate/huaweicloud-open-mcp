@@ -1,6 +1,7 @@
 """server 装配冒烟测试（不启动 stdio 进程）。"""
 
 import argparse
+import json
 
 import pytest
 
@@ -222,3 +223,58 @@ def test_parse_auth_demote_policy():
         parse_auth_demote_policy("banana", None)
     with pytest.raises(ValueError):
         parse_auth_demote_policy(None, ":ListVolumeInfo")
+
+
+# ---------- JSON vault credentials → region 回落 ----------
+
+def _isolate_vault_home(monkeypatch, tmp_path, vault=None):
+    home = tmp_path / "home"
+    home.mkdir()
+    if vault is not None:
+        vault_dir = home / ".config" / "huaweicloud"
+        vault_dir.mkdir(parents=True)
+        (vault_dir / "credentials.json").write_text(
+            json.dumps(vault), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    for var in ("HUAWEICLOUD_SDK_AK", "HUAWEICLOUD_SDK_SK",
+                "HUAWEICLOUD_MCP_REGION", "HUAWEICLOUD_MCP_MOCK"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_build_config_region_falls_back_to_vault(tmp_path, monkeypatch):
+    _isolate_vault_home(monkeypatch, tmp_path,
+                        {"ak": "VAK", "sk": "VSK", "region": "cn-south-1"})
+    cfg = build_config(_args(mock=False))
+    assert cfg.region == "cn-south-1"
+    assert cfg.credentials is not None
+    assert cfg.credentials.ak == "VAK"
+
+
+def test_build_config_cli_region_beats_vault(tmp_path, monkeypatch):
+    _isolate_vault_home(monkeypatch, tmp_path,
+                        {"ak": "VAK", "sk": "VSK", "region": "cn-south-1"})
+    cfg = build_config(_args(mock=False, region="cn-east-3"))
+    assert cfg.region == "cn-east-3"
+
+
+def test_build_config_env_region_beats_vault(tmp_path, monkeypatch):
+    _isolate_vault_home(monkeypatch, tmp_path,
+                        {"ak": "VAK", "sk": "VSK", "region": "cn-south-1"})
+    monkeypatch.setenv("HUAWEICLOUD_MCP_REGION", "cn-east-3")
+    cfg = build_config(_args(mock=False))
+    assert cfg.region == "cn-east-3"
+
+
+def test_build_config_mock_ignores_vault(tmp_path, monkeypatch):
+    _isolate_vault_home(monkeypatch, tmp_path,
+                        {"ak": "VAK", "sk": "VSK", "region": "cn-south-1"})
+    cfg = build_config(_args(mock=True))
+    assert cfg.region == "cn-north-4"
+    assert cfg.credentials is None
+
+
+def test_build_config_no_vault_region_default(tmp_path, monkeypatch):
+    _isolate_vault_home(monkeypatch, tmp_path)
+    cfg = build_config(_args(mock=False))
+    assert cfg.region == "cn-north-4"

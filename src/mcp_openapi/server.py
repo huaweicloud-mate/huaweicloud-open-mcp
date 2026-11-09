@@ -246,8 +246,10 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
     """
     dep = dep or resolve_deployment(args)
     env = dep.env
+    creds = None if dep.mock else cred_mod.get_credentials()
     region = (getattr(args, "region", None)
-              or env.get(ENV_REGION) or None)
+              or env.get(ENV_REGION)
+              or (creds.region if creds else None))
     hints_file = (getattr(args, "hints", None)
                   or env.get(ENV_OPENAPI_HINTS))
     deprecated_file = (getattr(args, "deprecated_index", None)
@@ -295,7 +297,7 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
         mock=dep.mock,
         policy_store=policy_store,
         policy_rules=policy_store.rules() if policy_store else None,
-        credentials=None if dep.mock else cred_mod.get_credentials(),
+        credentials=creds,
         mock_base=dep.mock_base or apie_mock.MOCK_BASE,
         mock_passthrough=dep.mock_passthrough,
         hints=hints_snapshot,

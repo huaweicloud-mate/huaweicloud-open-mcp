@@ -442,7 +442,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 ## Credentials
 
-The gateway loads AK/SK from two sources, checked in order: environment variables first, then `~/.huaweicloud/credentials` (on Windows: `%USERPROFILE%\.huaweicloud\credentials`). When both are set, environment variables win.
+The gateway loads AK/SK from three sources, checked in order: environment variables first, then the devkit JSON vault `~/.config/huaweicloud/credentials.json` (on Windows: `%USERPROFILE%\.config\huaweicloud\credentials.json`), then `~/.huaweicloud/credentials` (on Windows: `%USERPROFILE%\.huaweicloud\credentials`). The first source with a usable AK/SK wins.
 
 ### Option A: Profile file (quick-start main path)
 
@@ -488,6 +488,25 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | `HUAWEICLOUD_SDK_SECURITY_TOKEN` | Optional temporary-security-credential token; attached as `X-Security-Token` (and `x-obs-security-token` for OBS) before signing, and included in the request signature |
 | `HUAWEICLOUD_SDK_PROJECT_ID` | Optional static project ID (substituted into `{project_id}` path parameters and the `X-Project-Id` header) |
 | `HUAWEICLOUD_SDK_DOMAIN_ID` | Optional; loaded for global-level services (full support in progress) |
+
+### Option C: JSON credentials file (devkit vault)
+
+If the HuaweiCloud devkit manages your credentials, it maintains `~/.config/huaweicloud/credentials.json` (its single source of truth). The gateway reads it as the middle source in the chain:
+
+```json
+{
+  "ak": "your-access-key-id",
+  "sk": "your-secret-access-key",
+  "securityToken": "<optional temporary security token>",
+  "region": "cn-north-4",
+  "configuredBySession": true
+}
+```
+
+- `ak` and `sk` are required; when either is missing the file is skipped and the chain falls through to the profile file.
+- `configuredBySession` appears only when the credentials were configured by a devkit session; the gateway accepts its absence and treats it as provenance only.
+- A `region` value becomes the default-region fallback: `--region` and `HUAWEICLOUD_MCP_REGION` win over it; without either, the gateway serves the vault's region instead of `cn-north-4`.
+- The devkit owns this file's content; manage credentials through the devkit rather than editing it by hand.
 
 ### Behavior notes
 

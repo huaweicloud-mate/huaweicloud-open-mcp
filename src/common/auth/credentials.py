@@ -1,6 +1,7 @@
-"""凭证加载：AK/SK 环境变量 / profile。"""
+"""凭证加载：AK/SK 环境变量 / JSON vault / profile。"""
 
 import configparser
+import json
 import os
 from dataclasses import dataclass
 
@@ -12,10 +13,47 @@ class Credentials:
     security_token: str | None = None
     project_id: str | None = None
     domain_id: str | None = None
+    region: str | None = None
+    configured_by_session: bool = False
 
     @property
     def ready(self) -> bool:
         return bool(self.ak and self.sk)
+
+
+def _text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _opt_text(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def load_json_profile(path: str | None = None) -> Credentials | None:
+    """devkit S1 vault（~/.config/huaweicloud/credentials.json）。
+
+    键为 camelCase（securityToken/configuredBySession）；ak/sk 缺失归 ""，
+    securityToken/region 空串或缺失归 None。坏文件容错跳过（vault 可能被
+    写入方非原子更新）；ak/sk 不齐 → None，链继续回落。
+    """
+    path = path or os.path.expanduser("~/.config/huaweicloud/credentials.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.loads(f.read())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    cred = Credentials(
+        ak=_text(raw.get("ak")),
+        sk=_text(raw.get("sk")),
+        security_token=_opt_text(raw.get("securityToken")),
+        region=_opt_text(raw.get("region")),
+        configured_by_session=bool(raw.get("configuredBySession")),
+    )
+    if not cred.ready:
+        return None
+    return cred
 
 
 def load_from_env(environ: dict[str, str] | None = None) -> Credentials | None:
@@ -55,5 +93,5 @@ def load_profile(path: str | None = None) -> Credentials | None:
 
 
 def get_credentials() -> Credentials | None:
-    """provider chain：env → profile。"""
-    return load_from_env() or load_profile()
+    """provider chain：env → JSON vault → profile。"""
+    return load_from_env() or load_json_profile() or load_profile()
