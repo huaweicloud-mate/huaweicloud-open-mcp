@@ -85,7 +85,7 @@ Optional keys (uncomment as needed): `security_token` (temporary credentials, IA
 
 ### Step 2: Create a read-only safety policy
 
-The gateway refuses every `execute_api` call unless a policy file explicitly allows it. With no policy configured, everything is denied.
+The gateway refuses every `execute_api` call unless a policy rule explicitly allows it. This step is optional: with no `--policy` configured, the server automatically uses the shipped default posture file (`configs/safety-policy.json` — read-only APIs allowed, writes denied; editable and hot-reloaded). Only when that file is also absent is everything denied. To customize what is allowed, create your own policy file and pass it explicitly:
 
 Create a policy file, for example `hwc-policy.json` in your home directory, with the following content:
 
@@ -189,7 +189,7 @@ On security: requests are signed locally and your SK never leaves your machine; 
 
 ### No account yet? Mock mode
 
-Run the same flow without credentials: skip Step 1, and add `--mock` to the server command in Step 3 (`uvx huaweicloud-open-mcp --mock --policy <policy-path>`, e.g. `/home/you/hwc-policy.json` or `C:\Users\you\hwc-policy.json`).
+Run the same flow without credentials: skip Step 1, and add `--mock` to the server command in Step 3 (`uvx huaweicloud-open-mcp --mock` — `--policy` can be omitted, the default posture already allows read-only; pass `--policy <policy-path>` to customize, e.g. `/home/you/hwc-policy.json` or `C:\Users\you\hwc-policy.json`).
 
 **Output**: Step 4 works identically; the product catalog is real metadata. Step 5 returns simulated server data shaped exactly like the real response (mock endpoint, no Huawei Cloud account involved).
 
@@ -291,7 +291,7 @@ A policy file is a JSON array (or plain text) of rules. The gateway evaluates ru
 ```
 
 - Rules have the form `product:apiPattern=allow|deny`. Matching uses fnmatch-style wildcards, is case-insensitive for product and API, and lines starting with `#` are comments.
-- With no `--policy` configured, every execution is denied.
+- With no `--policy` configured, the shipped default posture applies (read-only allowed, writes denied); when the default posture file is also absent, every execution is denied.
 - `manage_policy` keeps `action=list` only (read): add/remove are retired from the tool face to stop the agent from self-granting without the user — grants flow through the denied tool's consent paths (`grant=<tier>` / `confirm=true` in off mode, elicitation proposal in auto/required), and persistent/batch/custom rules are edited by the operator directly in the policy file (hot-reloaded).
 - Grant scopes (internal seam & file format reference):
   - `once`: single execution, burned after use
@@ -400,7 +400,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--mock` | off | Point `execute_api` at the API Explorer mock endpoint (no credentials needed) |
 | `--mock-base <url>` | — | Mock endpoint base URL override (env `HUAWEICLOUD_MCP_MOCK_BASE`) |
 | `--mock-passthrough` | off | Mock mode: forward execute business params to the mock endpoint (env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`) |
-| `--policy <file>` | — | Safety policy file; missing → all executions denied |
+| `--policy <file>` | — (falls back to the shipped default posture `configs/safety-policy.json`) | Safety policy file; when set it always wins and a missing file fails fast at startup; when unset the shipped read-only default posture is routed; when both are absent every execution is denied |
 | `--region <id>` | `cn-north-4` | Default region |
 | `--hints <file\|off>` | `configs/help-docs-hints.json` (silent skip if absent) | Optional custom-hints file (deploy-side guidance injected into instructions and discovery results); `off` disables; bare filename resolves against `configs/` |
 | `--deprecated-index <file>` | — | Optional deprecated-API index; enables `list_apis` annotate/hide governance; bare filename resolves against `configs/` |

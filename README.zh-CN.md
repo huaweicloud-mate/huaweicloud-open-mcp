@@ -28,7 +28,7 @@
 
 - **渐进式工作流**：Agent 逐步探索，`search_apis`（意图未指明产品时，实体图谱跨产品检索）→ `list_products → get_product → list_apis → get_api → (get_api_examples) → execute_api`，从 17000+ API 收窄到一次具体调用。每一步都把 LLM 上下文控制在有界范围；完整工作流指引已内置于 server instructions。
 - **元数据驱动、零 SDK**：API 元数据从华为云 API Explorer 实时拉取并缓存在内存。请求在本地签名（自实现 SDK-HMAC-SHA256）后直连华为云。
-- **默认安全**：每次 `execute_api` 必须通过 safety policy（allowlist/denylist）；未配置 policy 时全部拒绝。规则热更新；授予仅经被拒工具的确认流（off 模式 `grant=<档位>` / `confirm=true`、auto/required elicitation 提议），持久规则由操作员编辑 policy 文件。
+- **默认安全**：每次 `execute_api` 必须通过 safety policy（allowlist/denylist）。未配置 `--policy` 时自动启用随包缺省姿态（只读接口放行、写接口拒绝，文件可编辑热生效）；未配置且缺省文件缺失才全部拒绝。规则热更新；授予仅经被拒工具的确认流（off 模式 `grant=<档位>` / `confirm=true`、auto/required elicitation 提议），持久规则由操作员编辑 policy 文件。
 
 ## 快速开始
 
@@ -86,7 +86,7 @@ sk = your-secret-access-key
 
 ### 步骤 2：创建只读 safety policy
 
-除非 policy 文件显式允许，网关会拒绝每一次 `execute_api`。未配置 policy 时全部拒绝。
+除非 policy 规则显式允许，网关会拒绝每一次 `execute_api`。本步骤可跳过：不配置 `--policy` 时 server 自动启用随包缺省姿态文件（`configs/safety-policy.json`——只读接口放行、写接口拒绝，可编辑且热重载生效）；只有缺省文件也缺失时才全部拒绝。想自定义放行面时再创建自己的 policy 文件并显式传入：
 
 在你的主目录创建一个 policy 文件（例如 `hwc-policy.json`），内容如下：
 
@@ -190,7 +190,7 @@ Agent 走渐进式工作流：`list_apis(ECS)` 找到 API、`get_api` 读参数�
 
 ### 还没有账号？Mock 模式
 
-同一流程无需凭证即可体验：跳过步骤 1，并在步骤 3 的 server 命令中加 `--mock`（`uvx huaweicloud-open-mcp --mock --policy <policy路径>`，如 `/home/you/hwc-policy.json` 或 `C:\Users\you\hwc-policy.json`）。
+同一流程无需凭证即可体验：跳过步骤 1，并在步骤 3 的 server 命令中加 `--mock`（`uvx huaweicloud-open-mcp --mock`——`--policy` 可省略，缺省姿态即可只读体验；自定义放行面时传 `--policy <policy路径>`，如 `/home/you/hwc-policy.json` 或 `C:\Users\you\hwc-policy.json`）。
 
 **输出**：步骤 4 完全一致，产品目录仍是真实元数据；步骤 5 返回与真实响应同构的模拟数据（mock 端点，不涉及华为云账号）。
 
@@ -292,7 +292,7 @@ policy 文件是 JSON 数组（或纯文本）规则列表，自上而下评估�
 ```
 
 - 规则形如 `product:apiPattern=allow|deny`，fnmatch 风格通配，product/API 大小写不敏感，`#` 开头为注释。
-- 未配置 `--policy` 时，全部执行被拒绝。
+- 未配置 `--policy` 时启用随包缺省姿态（只读放行、写拒绝）；未配置且缺省文件缺失时，全部执行被拒绝。
 - `manage_policy` 仅保留 `action=list`（读）：add/remove 已从工具面收敛，防止 agent 未经用户确认自授——授予走被拒工具的确认流（off 模式 `grant=<档位>` / `confirm=true`、auto/required elicitation 提议），持久/批量/自定义规则由操作员直接编辑 policy 文件（热生效）。
 - `manage_policy` service 层的授予档位（内部接缝与文件格式参考）：
   - `once`：一次性，用后即焚
@@ -401,7 +401,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--mock` | off | `execute_api` 指向 API Explorer mock 端点（无需凭证） |
 | `--mock-base <url>` | — | mock 端点基础地址覆盖（env `HUAWEICLOUD_MCP_MOCK_BASE`） |
 | `--mock-passthrough` | off | mock 模式转发 execute 业务参数到端点（env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`） |
-| `--policy <file>` | — | safety policy 文件；缺失 → 全部执行被拒 |
+| `--policy <file>` | —（未配置时用随包缺省姿态 `configs/safety-policy.json`） | safety policy 文件；显式指定时恒优先、文件缺失启动快速失败；未配置时路由随包缺省姿态（只读放行/写拒绝）；两者皆缺才全部执行被拒 |
 | `--region <id>` | `cn-north-4` | 默认 region |
 | `--hints <file\|off>` | `configs/help-docs-hints.json`（缺失静默跳过） | 可选自定义提示注入配置（部署侧指引注入 instructions 与发现结果）；`off` 显式禁用；支持裸文件名按 `configs/` 解析 |
 | `--deprecated-index <file>` | — | 可选废弃接口索引；启用 list_apis 的 annotate/hide 治理；支持裸文件名按 `configs/` 解析 |
