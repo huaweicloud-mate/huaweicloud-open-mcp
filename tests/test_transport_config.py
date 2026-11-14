@@ -134,3 +134,41 @@ def test_resolution_is_pure_and_repeatable():
     a, b = resolve_deployment(args, {ENV_TRANSPORT: "stdio"}), resolve_deployment(args, {ENV_TRANSPORT: "stdio"})
     assert json.dumps(a.transport) == json.dumps(b.transport)
     assert a.http_port == b.http_port == 9911
+
+
+# ---------- policy 空串披露（F4 边缘：空串折叠为未配置 + 披露位） ----------
+
+def test_policy_empty_string_flag_disclosed(_bare_env=None):
+    import argparse
+    dep = resolve_deployment(argparse.Namespace(policy=""), {})
+    assert dep.policy_file is None
+    assert dep.policy_explicitly_empty is True
+
+
+def test_policy_empty_string_env_disclosed():
+    import argparse
+    dep = resolve_deployment(argparse.Namespace(policy=None),
+                             {"HUAWEICLOUD_MCP_POLICY_FILE": ""})
+    assert dep.policy_file is None
+    assert dep.policy_explicitly_empty is True
+
+
+def test_policy_whitespace_string_disclosed():
+    import argparse
+    dep = resolve_deployment(argparse.Namespace(policy="  "), {})
+    assert dep.policy_file is None
+    assert dep.policy_explicitly_empty is True
+
+
+def test_policy_unset_not_disclosed():
+    import argparse
+    dep = resolve_deployment(argparse.Namespace(policy=None), {})
+    assert dep.policy_file is None
+    assert dep.policy_explicitly_empty is False
+
+
+def test_policy_real_path_not_disclosed():
+    import argparse
+    dep = resolve_deployment(argparse.Namespace(policy="/tmp/p.json"), {})
+    assert dep.policy_file == "/tmp/p.json"
+    assert dep.policy_explicitly_empty is False

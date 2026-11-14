@@ -141,6 +141,7 @@ def test_simulate_grant_default_posture_zero_gain_for_all_denied():
     """缺省姿态（随包文件）下 readonly 档对任意被拒接口零增益：
     文件全局动词行是 readonly 档的超集（F2 根因的回归钉）。"""
     import json as _json
+
     from common.paths import project_root
     entries = _json.loads((project_root() / "configs" / "safety-policy.json")
                           .read_text(encoding="utf-8"))

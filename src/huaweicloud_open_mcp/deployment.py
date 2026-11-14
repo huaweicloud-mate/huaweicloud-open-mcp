@@ -27,6 +27,7 @@ from common.deployment import (
     reject_removed_modes,
     resolve_deployment,
 )
+from common.paths import default_policy_path
 from common.sessions import SessionScopeMiddleware, current_session_key
 from safety.policy_store import PolicyStore
 
@@ -40,6 +41,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger("huaweicloud_open_mcp.deployment")
 
 HEALTHZ_PATH = "/healthz"
+
+_DEFAULT_POLICY_PERMANENT_REFUSAL = (
+    "缺省姿态文件随包分发，升级或重装会整文件替换，permanent 规则写入后将"
+    "静默丢失——持久规则请用 --policy 显式指定自有可写策略文件"
+    "（本拒绝由装配层注入，session/once/temporary 档不受影响）")
 
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
@@ -128,11 +134,33 @@ def build_app(modes: "Sequence[str] | str", args: argparse.Namespace, *,
     is_http = dep.transport == "http"
     # 会话键控装配（ADR-0003）：session_fn 注入与 middleware 注册在 build_app
     # 同一处配对——ambient 机制的知识单点；stdio 下 session_fn 恒 None =
-    # 历史单桶语义（逐字节回归由结构保证）。strict_sessions 仅 HTTP 档置位
-    # （I2 fail-closed：无会话身份的 session/temporary/once 写入结构化拒绝）。
-    shared_store = (PolicyStore(dep.policy_file, session_fn=current_session_key,
-                                strict_sessions=is_http)
-                    if dep.policy_file else None)
+    # 历史单桶语义。strict_sessions 仅 HTTP 档置位（I2 fail-closed）。
+    # policy 路由（修订方案 D4'，构造单点）：显式 --policy 恒优先；未配置时
+    # 路由随包缺省姿态文件（写缺省拒绝 + 确认授予流开箱可用）；两者皆缺
+    # 保持今日红线（store=None 全拒、NOT_CONFIGURED）。缺省路由的 store
+    # 拒绝 permanent 档——随包文件会被升级整文件替换，写入将静默丢失（F9）。
+    # explicit 分支保持今日急切构造（含纯 data 模式，F8 撤回：坏 policy 文件
+    # 的启动校验不因本次变更削弱）；缺省路由仅 openapi 模式消费（data 模式
+    # 无 policy 语义，维持今日行为）。
+    shared_store: PolicyStore | None = None
+    policy_source = "none"
+    if dep.policy_file:
+        shared_store = PolicyStore(dep.policy_file, session_fn=current_session_key,
+                                   strict_sessions=is_http)
+        policy_source = "explicit"
+    elif "openapi" in modes:
+        default_policy = default_policy_path()
+        if default_policy:
+            shared_store = PolicyStore(
+                default_policy, session_fn=current_session_key,
+                strict_sessions=is_http, permanent_refusal_reason=_DEFAULT_POLICY_PERMANENT_REFUSAL)
+            policy_source = "default"
+    if dep.policy_explicitly_empty:
+        logger.warning("--policy 显式传空串（或 HUAWEICLOUD_MCP_POLICY_FILE 为空）"
+                       "——按未配置处理%s；空串不是禁用语义（policy 无 off 档），"
+                       "如需持久策略请显式传入 --policy 路径",
+                       "，启用随包缺省姿态文件" if policy_source == "default"
+                       else "，且缺省姿态文件缺失（execute_api 将全部拒绝）")
     shared_sink = sink_from_path(dep.audit_file)
 
     svc: ToolService | None = openapi_service
@@ -142,6 +170,7 @@ def build_app(modes: "Sequence[str] | str", args: argparse.Namespace, *,
         # 部署感知披露：data 工具已注册时 spill note 指引 query_data
         cfg = build_openapi_config(args, dep, data_enabled="data" in modes,
                                    policy_store=shared_store,
+                                   policy_source=policy_source,
                                    audit_sink=shared_sink)
         svc = ToolService(cfg)
 
@@ -190,12 +219,19 @@ def build_app(modes: "Sequence[str] | str", args: argparse.Namespace, *,
 
 
 def _log_openapi_start(svc: "ToolService") -> None:
-    """server start 日志（单模式/混装共用；policy 缺失警告随行）。"""
+    """server start 日志（单模式/混装共用；policy 三态披露随行）。"""
     cfg = svc.config
+    policy_note = ("MISSING" if cfg.policy_store is None
+                   else "default" if cfg.policy_source == "default"
+                   else "configured")
     logger.info("server start: mode=openapi region=%s mock=%s policy=%s credentials=%s spill=%s",
-                cfg.region, cfg.mock,
-                "configured" if cfg.policy_store else "MISSING",
+                cfg.region, cfg.mock, policy_note,
                 "configured" if cfg.credentials else "none",
                 "off" if cfg.spill is None else str(cfg.spill.dir))
     if cfg.policy_store is None:
-        logger.warning("未配置 safety policy，execute_api 将拒绝所有执行（--policy 指定策略文件）")
+        logger.warning("未配置 --policy 且缺省姿态文件缺失，execute_api 将拒绝所有"
+                       "执行（--policy 指定策略文件，或在 configs/ 提供缺省姿态文件）")
+    elif cfg.policy_source == "default":
+        logger.info("policy=缺省姿态文件 %s（未配置 --policy 时启用；可编辑、热重载"
+                    "生效；升级或重装会整文件替换，已禁用 permanent 档授予——持久"
+                    "规则请 --policy 显式指定）", cfg.policy_store.path)

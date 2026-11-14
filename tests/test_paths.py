@@ -100,3 +100,42 @@ def test_resolve_arg_missing_raises_with_all_candidates(tmp_path, monkeypatch):
     assert "missing.json" in msg
     assert str(tmp_path / "repo" / "configs" / "missing.json") in msg
     assert "huaweicloud_open_mcp" in msg
+
+
+# ---------- default_policy_path（缺省姿态路由 helper，修订方案 D4'） ----------
+
+def test_default_policy_path_repo_root_wins(tmp_path, monkeypatch):
+    """仓库根 configs/ 提供缺省文件时优先返回（dev 真值源）。"""
+    local = tmp_path / "configs" / "safety-policy.json"
+    local.parent.mkdir(parents=True)
+    local.write_text('["*=deny"]', encoding="utf-8")
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path)
+    assert paths.default_policy_path() == str(local)
+
+
+def test_default_policy_path_package_resource_fallback(tmp_path, monkeypatch):
+    """仓库根缺失时回退包内 configs 资源（wheel 安装态；importlib 腿密封
+    ——F10：sealed_configs 只重定向 project_root，本测试钉住回退腿行为）。"""
+    pkg = tmp_path / "site-packages" / "huaweicloud_open_mcp" / "configs"
+    pkg.mkdir(parents=True)
+    (pkg / "safety-policy.json").write_text('["*=deny"]', encoding="utf-8")
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(paths, "files",
+                        lambda _name: tmp_path / "site-packages" / "huaweicloud_open_mcp")
+    assert paths.default_policy_path() == str(pkg / "safety-policy.json")
+
+
+def test_default_policy_path_missing_returns_none(tmp_path, monkeypatch):
+    """两处皆缺返回 None（调用方保持「未配置即全拒」红线）。"""
+    pkg = tmp_path / "site-packages" / "huaweicloud_open_mcp" / "configs"
+    pkg.mkdir(parents=True)                     # 包目录存在但文件缺失
+    monkeypatch.setattr(paths, "project_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(paths, "files", lambda _name: tmp_path / "site-packages")
+    assert paths.default_policy_path() is None
+
+
+def test_default_policy_path_real_repo_resolves_shipped_file():
+    """真仓库集成腿：随包缺省文件在提交仓库内可达（缺此文件即缺省姿态
+    整体失效——gate 测试之外的装配层回归钉）。"""
+    p = paths.default_policy_path()
+    assert p is not None and p.endswith("configs/safety-policy.json")

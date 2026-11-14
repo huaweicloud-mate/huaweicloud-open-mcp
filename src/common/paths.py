@@ -45,3 +45,19 @@ def resolve_config_arg(value: str) -> Path:
     tried = [explicit, resolved] if local == resolved else [explicit, local, resolved]
     tried_text = "、".join(str(p) for p in tried)
     raise FileNotFoundError(f"配置文件不存在: {value}（已尝试: {tried_text}）")
+
+
+DEFAULT_POLICY_NAME = "safety-policy.json"
+
+
+def default_policy_path() -> str | None:
+    """随包缺省姿态文件的可达路径（--policy 未配置时的路由目标）。
+
+    config_path 解析（仓库根 configs/ 优先 = 开发态真值源；包内 configs
+    资源回退 = wheel 安装态）+ is_file 门控；两处皆缺返回 None（调用方
+    保持今日「未配置即全拒」红线）。缺省文件为部署可编辑的真文件
+    （热重载、授予通道全功能），但其随包分发的宿命是升级整文件替换——
+    持久授权由装配层经 permanent_refusal_reason 指向 --policy。
+    """
+    path = config_path(DEFAULT_POLICY_NAME)
+    return str(path) if path.is_file() else None

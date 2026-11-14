@@ -95,18 +95,21 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 ## 执行安全
 
 - `execute_api` 执行前强制过 safety policy（allowlist/denylist 白名单）；
-- 未配置 policy 时所有执行被拒绝；
+- 缺省姿态（未配置 --policy 时启用随包缺省策略文件）：只读接口放行、写接口拒绝；
+  未配置 --policy 且缺省策略文件缺失时，所有执行被拒绝；
 - 拒绝结果形如 {"ok": false, "reason": ...}，不要绕过，应改用被允许的接口；
 - 被拒接口确属任务必需时：先经对话/交互式问询（如 question 工具）向用户
   确认所选档位；确认后重传本工具并传 grant=<档位>（仅 --elicitation off
   模式生效，auto/required 下被忽略——服务端在同次调用内按所选档位授予
   并直接执行）：api_session=最小规则（会话内，本次会话内持续放行该 API，
   重启即失；单 API 重复使用首选）/ readonly=产品级只读规则集（会话内，
-  List/Show/Get/Query 四条通配；浏览/多步任务首选）/ product=产品级规则
+  List/Show/Get/Query/Search 等只读动词前缀锚定规则；浏览/多步任务
+  首选；结果附注会说明该档是否改变本接口的拒绝结果）/ product=产品级规则
   （会话内，覆盖该产品全部 API，重启即失）/ api=最小规则（一次性，用后
   即焚；仅明确单次使用时选择）；confirm=true 等价 grant="api"（历史兼容），
-  持久/批量/自定义规则由操作员编辑 policy 文件（`--policy` 指定，热生效、
-  无需重启）；
+  持久/批量/自定义规则由操作员编辑 policy 文件（`--policy` 指定或随包
+  缺省姿态文件，热生效、无需重启；缺省文件随包分发，升级会被整文件替换，
+  持久规则请 `--policy` 显式指定）；
   部署开启 elicitation（--elicitation auto/required）时直接重试被拒工具：服务端
   经 MCP elicitation 弹出同样的五选一提议（口径与 grant 档位同构），用户确认后
   自动重放一次并直接返回
@@ -118,7 +121,8 @@ INSTRUCTIONS_OPENAPI = """# 华为云 Open MCP 使用指引（OpenAPI 直连模�
 - manage_policy 仅保留 action=list（读）——add/remove 已从工具面收敛，防止
   agent 未经用户确认自授规则；授予路径：off 模式经被拒工具传 grant=<档位>
   或 confirm=true，auto/required 经被拒工具的 elicitation 提议，持久/批量/
-  自定义规则由操作员直接编辑 policy 文件（`--policy` 指定，热生效、无需重启）；
+  自定义规则由操作员直接编辑 policy 文件（`--policy` 指定或随包缺省姿态
+  文件，热生效、无需重启）；
 - 规则四档 scope：`once` 一次性（仅放行下一次执行，用后即焚，重启即失）/
   `session` 会话内（缺省，本次 code agent 会话，重启即失、无需回收）/
   `temporary` 临时（内存 + ttl_seconds 自动过期，缺省 3600s）/ `permanent` 永久
@@ -236,13 +240,18 @@ def parse_auth_demote_policy(demote: str | None = None,
 def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None, *,
                          data_enabled: bool = False,
                          policy_store: PolicyStore | None = None,
+                         policy_source: str = "explicit",
                          audit_sink: AuditSink | None = None) -> ServiceConfig:
     """openapi 模式 ServiceConfig 构建（internal seam；external seam 是
     huaweicloud_open_mcp.deployment.build_app）。
 
     dep 缺省时按 args+os.environ 自解析（测试直调原口）；共享旋钮
     （mock/policy/audit）由 Deployment 归一供给，store/sink 可由装配方
-    构造注入（混装共享单例，消灭事后覆写）。
+    构造注入（混装共享单例，消灭事后覆写）。store 不在本层自建（修订方案
+    D4' 构造单点：缺省姿态路由与 kwargs 配对只活在 build_app——本层的
+    dep.policy_file 仅用于快照 rules 的历史行为经注入 store 满足）。
+    policy_source 为启动日志三态披露信号（explicit/default/none），不参与
+    策略语义。
     """
     dep = dep or resolve_deployment(args)
     env = dep.env
@@ -268,8 +277,6 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
         off=Hints.empty(), default_name=DEFAULT_HINTS_FILE)
     entity_index_file = (getattr(args, "entity_index", None)
                          or env.get(ENV_ENTITY_INDEX))
-    if policy_store is None:
-        policy_store = PolicyStore(dep.policy_file) if dep.policy_file else None
     spill_raw = getattr(args, "spill_dir", None)
     if spill_raw is None:
         spill_raw = env.get(ENV_SPILL_DIR)
@@ -296,6 +303,7 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
         region=region or "cn-north-4",
         mock=dep.mock,
         policy_store=policy_store,
+        policy_source=policy_source,
         policy_rules=policy_store.rules() if policy_store else None,
         credentials=creds,
         mock_base=dep.mock_base or apie_mock.MOCK_BASE,
@@ -417,7 +425,9 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
                           params: dict | None = None, confirm: bool = False,
                           grant: GrantArg | None = None,
                           ctx: Context | None = None) -> ExecuteResult:
-        """第四步：执行华为云 API。执行前强制过 safety policy（未配置 policy 时全部拒绝）。
+        """第四步：执行华为云 API。执行前强制过 safety policy（缺省只读姿态：
+        未配置 --policy 时只读接口放行、写接口拒绝；未配置且缺省策略文件缺失
+        时全部拒绝）。
 
         params 约定：路径参数/query 参数直接平铺，请求体放 params["body"]；
         grant/confirm 为网关确认参数（不进 params 容器，平铺在工具入参顶层）。
@@ -519,9 +529,10 @@ def register_openapi_tools(server: MCPServer, svc: ToolService, *,
         off 模式经被拒工具（execute_api）传 grant=<档位>（api/api_session/
         product/readonly）或 confirm=true（等价 grant=api）；auto/required
         经被拒工具的 elicitation 提议；持久/批量/自定义规则由操作员直接
-        编辑 policy 文件（--policy 指定，热生效、无需重启）。
+        编辑 policy 文件（--policy 指定或随包缺省姿态文件，热生效、无需重启）。
         action=list 返回当前全部规则（结构化 rules 含 scope/expires_in +
-        文件全文）；未配置 policy 文件时本工具拒绝执行（不创建文件）。
+        文件全文）；未配置 --policy 且缺省策略文件缺失时本工具拒绝执行
+        （不创建文件）。
         """
         result = manage_policy_list_only(
             svc.manage_policy, action, line=line,

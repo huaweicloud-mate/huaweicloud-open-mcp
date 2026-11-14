@@ -123,6 +123,7 @@ class Deployment:
     mock_base: str | None = None
     mock_passthrough: bool = False
     policy_file: str | None = None
+    policy_explicitly_empty: bool = False
     audit_file: str | None = None
     transport: str = "stdio"          # 归一后 ∈ {"stdio", "http"}
     http_host: str = DEFAULT_HTTP_HOST
@@ -151,6 +152,18 @@ def resolve_deployment(args: argparse.Namespace,
                  or env_map.get(ENV_HTTP_PATH) or DEFAULT_HTTP_PATH)
     if not http_path.startswith("/"):
         raise ValueError(f"--http-path 非法: {http_path!r}（须以 / 开头，如 /mcp）")
+    # policy 空串档（F4 边缘）：显式传空串/纯空白时折叠为未配置（沿用既有
+    # `or` 优先级与 is_off idiom 的 strip 归一；纯空白今日会让 PolicyStore
+    # 启动即崩）。披露位 = 显式输入存在却解析为无文件——装配层对「空串=
+    # 禁用」的既有惯例（--hints/--spill-dir）发出 WARNING 并说明缺省路由。
+    policy_flag_raw = getattr(args, "policy", None)
+    policy_env_raw = env_map.get(ENV_POLICY_FILE)
+    policy_effective = policy_flag_raw or policy_env_raw
+    policy_resolved = ((str(policy_effective).strip() or None)
+                       if policy_effective is not None else None)
+    policy_explicitly_empty = (
+        policy_resolved is None
+        and (policy_flag_raw is not None or policy_env_raw is not None))
     return Deployment(
         mock=(mock if mock is not None
               else _env_flag(env_map.get(ENV_MOCK, ""))),
@@ -158,8 +171,8 @@ def resolve_deployment(args: argparse.Namespace,
                    or env_map.get(ENV_MOCK_BASE) or None),
         mock_passthrough=(mock_passthrough if mock_passthrough is not None
                           else _env_flag(env_map.get(ENV_MOCK_PASSTHROUGH, ""))),
-        policy_file=(getattr(args, "policy", None)
-                     or env_map.get(ENV_POLICY_FILE) or None),
+        policy_file=policy_resolved,
+        policy_explicitly_empty=policy_explicitly_empty,
         audit_file=(getattr(args, "audit_file", None)
                     or env_map.get(ENV_AUDIT_FILE) or None),
         transport=transport,

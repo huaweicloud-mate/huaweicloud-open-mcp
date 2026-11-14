@@ -84,6 +84,11 @@ class ServiceConfig:
     mock: bool = False
     policy_rules: Sequence[safety_policy.PolicyRule] | None = None
     policy_store: PolicyStore | None = None
+    # policy 来源披露（F5 修复：三态日志判别信号）——"explicit"（显式 --policy，
+    # 缺省值=直接注入 store 的既有测试形态按显式处理）/"default"（未配置
+    # --policy 时路由随包缺省姿态文件）/"none"（两者皆缺）。仅驱动启动日志
+    # 与 instructions 措辞，不参与策略语义。
+    policy_source: str = "explicit"
     credentials: Credentials | None = None
     mock_base: str = apie_mock.MOCK_BASE
     mock_passthrough: bool = False

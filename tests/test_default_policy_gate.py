@@ -21,7 +21,6 @@
 import json
 
 from common.paths import project_root
-from safety import policy
 from safety.policy import READONLY_VERB_PREFIXES, evaluate, match_first, parse_policy
 
 WRITE_METHODS = {"put", "delete", "patch"}
