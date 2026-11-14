@@ -926,3 +926,43 @@ def test_manage_policy_list_only_batch_add_refused():
     assert out["ok"] is False
     assert "list" in out["reason"]
     assert calls == []
+
+
+# ---------- readonly 零增益标注（修订方案 D7'：offer.readonly_gain 渲染） ----------
+
+def _gain_offer(gain: bool) -> DenialOffer:
+    return DenialOffer(subject="ECS:DeleteServers",
+                       rule="ECS:DeleteServers=allow",
+                       reason="safety policy 拒绝执行 ECS:DeleteServers",
+                       coarse_rule="ECS:*=allow",
+                       readonly_rules=READONLY_RULES,
+                       readonly_gain=gain)
+
+
+def test_denial_message_notes_zero_gain_readonly():
+    msg = denial_message(_gain_offer(False))
+    assert "该档不改变本接口的拒绝结果" in msg
+    assert "readonly" in msg and "VPC:List*=allow" in msg   # 选项与规则集仍在场
+
+
+def test_denial_message_silent_when_readonly_has_gain():
+    assert "该档不改变本接口的拒绝结果" not in denial_message(_gain_offer(True))
+
+
+def test_fallback_hint_notes_zero_gain_both_branches():
+    for assertion in (True, False):
+        hint = fallback_hint(_gain_offer(False), assertion_available=assertion)
+        assert "该档不改变本接口的拒绝结果" in hint
+
+
+def test_fallback_hint_silent_when_readonly_has_gain():
+    for assertion in (True, False):
+        hint = fallback_hint(_gain_offer(True), assertion_available=assertion)
+        assert "该档不改变本接口的拒绝结果" not in hint
+
+
+def test_denial_offer_readonly_gain_defaults_true():
+    """加性缺省：既有直接构造 offer 的调用方（测试/旧路径）默认有增益。"""
+    offer = DenialOffer(subject="X:Y", rule="X:Y=allow", reason="r",
+                        coarse_rule="X:*=allow", readonly_rules=["X:List*=allow"])
+    assert offer.readonly_gain is True

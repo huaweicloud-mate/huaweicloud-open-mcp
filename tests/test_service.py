@@ -1326,3 +1326,55 @@ def test_execute_obs_lane_untouched_by_fill():
                           params={"bucket_name": "bkt", "object_key": "k.bin"})
     assert out["ok"] is True
     assert "applied_defaults" not in out
+
+
+# ---------- policy_denial_offer.readonly_gain（修订方案 D7'：零增益标注注入） ----------
+
+def test_policy_denial_offer_readonly_gain_false_for_plain_write(tmp_path):
+    """普通写不匹配任何只读动词 → 零增益（缺省姿态/严限文件同形判据）。"""
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    offer = svc.policy_denial_offer("ECS", "DeleteServers")
+    assert offer is not None and offer.readonly_gain is False
+
+
+def test_policy_denial_offer_readonly_gain_true_when_tier_unlocks(tmp_path):
+    """被拒只读（List 系）能被 readonly 档解锁 → 有增益（严限文件场景）。"""
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["ECS:*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    offer = svc.policy_denial_offer("ECS", "ListServersDetails")
+    assert offer is not None and offer.readonly_gain is True
+
+
+def test_policy_denial_offer_readonly_gain_true_for_check_shape(tmp_path):
+    """check 形态写（点名例外）：readonly 档可穿透拒绝层解锁 → 有增益
+    ——已披露取舍（确认后可越过点名拒绝层）。"""
+    from safety.policy_store import PolicyStore
+
+    p = _policy_file(tmp_path, ["RDS:CheckInstanceForUpgrade=deny", "*=deny"])
+    svc = ToolService(config=ServiceConfig(mock=True, policy_store=PolicyStore(str(p))))
+    offer = svc.policy_denial_offer("RDS", "CheckInstanceForUpgrade")
+    assert offer is not None and offer.readonly_gain is True
+
+
+def test_policy_denial_offer_readonly_gain_false_on_default_posture():
+    """缺省姿态（随包文件）：readonly 档是全局动词超集 → 对一切被拒接口
+    零增益（F2 确认循环陷阱的注入面回归钉）。"""
+    from common.paths import project_root
+    from safety.policy_store import PolicyStore
+
+    svc = ToolService(config=ServiceConfig(
+        mock=True,
+        policy_store=PolicyStore(str(project_root() / "configs" / "safety-policy.json"))))
+    for prod, api in (("ECS", "DeleteServers"), ("ECS", "CreateServers"),
+                      ("HSS", "AddLoginWhiteList")):
+        offer = svc.policy_denial_offer(prod, api)
+        assert offer is not None, f"{prod}:{api} 应被缺省姿态拒绝"
+        assert offer.readonly_gain is False, f"{prod}:{api} 应零增益"
+    # 点名例外仍有增益（穿透语义对齐）
+    offer = svc.policy_denial_offer("RDS", "CheckInstanceForUpgrade")
+    assert offer is not None and offer.readonly_gain is True

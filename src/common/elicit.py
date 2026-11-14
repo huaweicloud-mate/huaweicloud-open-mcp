@@ -155,6 +155,12 @@ class DenialOffer:
     reason: str
     coarse_rule: str
     readonly_rules: Sequence[str]
+    # readonly 档对当前接口的边际增益（service.policy_denial_offer 经
+    # safety.policy.simulate_grant 计算后注入；缺省 True = 有增益，兼容
+    # 既有直接构造 offer 的测试）。零增益时 denial_message / fallback_hint
+    # 的 readonly 选项附「该档不改变本接口的拒绝结果」标注——防确认循环
+    # 空转（缺省姿态下该档是全局动词超集，对一切被拒接口零增益）。
+    readonly_gain: bool = True
 
     def __post_init__(self) -> None:
         if isinstance(self.readonly_rules, (str, bytes, bytearray)):
@@ -167,7 +173,7 @@ class DenialOffer:
             raise ValueError(
                 "DenialOffer.readonly_rules 不可为空、含非字符串或空白条目"
                 "（offer 必须携带产品级只读规则集；policy_denial_offer 经 "
-                "readonly_grant_rules 恒构造四条——空集或空白条目会使 "
+                "readonly_grant_rules 恒构造规则集——空集或空白条目会使 "
                 "denial_message/fallback_hint 的规则渲染落入空 join）")
         object.__setattr__(self, "readonly_rules", rules)
 
@@ -213,6 +219,10 @@ GrantOutcome: TypeAlias = GrantRefused | GrantAccepted
 # import safety（common 公共底座边界），此前缀是两模块间的文档化字符串契约。
 _POLICY_DENIAL_PREFIX = "safety policy 拒绝"
 
+# readonly 档零增益标注（修订方案 D7'）：offer.readonly_gain=False 时
+# denial_message / fallback_hint 的 readonly 选项附注——缺省姿态下该档是
+# 全局动词超集，对一切被拒接口零增益，确认后重试仍拒（防确认循环空转）。
+_READONLY_NO_GAIN_NOTE = "；该档不改变本接口的拒绝结果"
 
 ElicitFn: TypeAlias = Callable[[str, type[BaseModel]], Awaitable[ElicitOutcome | None]]
 GrantFn: TypeAlias = Callable[[str, str | None], dict[str, Any]]
@@ -240,7 +250,9 @@ def denial_message(offer: DenialOffer) -> str:
     """
     readonly = (f"- readonly：授予产品级只读规则集 "
                 f"（{'/'.join(offer.readonly_rules)}，"
-                "会话内生效，重启即失；浏览/多步任务首选）\n")
+                "会话内生效，重启即失；浏览/多步任务首选"
+                + ("" if offer.readonly_gain else _READONLY_NO_GAIN_NOTE)
+                + "）\n")
     return (f"{offer.reason}\n\n"
             f"是否授予规则放行 {offer.subject}？\n"
             f"- api_session：授予最小规则 '{offer.rule}'"
@@ -273,9 +285,10 @@ def fallback_hint(offer: DenialOffer, *,
     （软兜底）：经对话/交互式问询（如 question 工具）向用户确认所选档位。
     不提及协议级 elicitation。
     """
+    _no_gain = "" if offer.readonly_gain else _READONLY_NO_GAIN_NOTE
     if not assertion_available:
         readonly = (f"/readonly=产品级只读规则集 "
-                    f"'{'/'.join(offer.readonly_rules)}'")
+                    f"'{'/'.join(offer.readonly_rules)}'{_no_gain}")
         base = ("；本部署当前无法经协议问询确认（客户端不支持 elicitation），"
                 "confirm/grant 参数在此部署被忽略（重传不会改变结果）——请操作员"
                 f"编辑 policy 文件授予规则{_OPERATOR_FILE_NOTE}，可参考：")
@@ -283,7 +296,8 @@ def fallback_hint(offer: DenialOffer, *,
                 f"{readonly}"
                 f"/product=产品级规则 '{offer.coarse_rule}'")
     readonly = (f"/readonly=产品级只读规则集 "
-                f"'{'/'.join(offer.readonly_rules)}'（浏览/多步任务首选）")
+                f"'{'/'.join(offer.readonly_rules)}'（浏览/多步任务首选"
+                + _no_gain + "）")
     return ("；如确需执行，请先经对话/交互式问询（如 question 工具）向用户确认"
             "所选档位，确认后重传本工具并传 grant=<档位>（服务端在同次调用内"
             "授予所选规则并直接执行）；持久/批量档位请操作员直接编辑 policy "

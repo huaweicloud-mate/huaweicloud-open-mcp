@@ -126,7 +126,8 @@ def readonly_grant_rules(product: str) -> list[str]:
     return [f"{product}:{verb}*=allow" for verb in READONLY_VERB_PREFIXES]
 
 
-def simulate_grant(rules: Sequence[PolicyRule], candidate_lines: Sequence[str],
+def simulate_grant(rules: Sequence[PolicyRule] | None,
+                   candidate_lines: Sequence[str],
                    product: str, api: str) -> bool:
     """纯函数：在 rules 前叠加 candidate_lines 后，product:api 是否放行。
 
@@ -134,13 +135,15 @@ def simulate_grant(rules: Sequence[PolicyRule], candidate_lines: Sequence[str],
     文件规则，first-match）——候选 allow 可穿透文件 deny（对 readonly 档
     这是已披露的已知取舍：确认后可越过点名拒绝层）。用于 offer 构造期
     判定 readonly 档对当前接口的边际增益（零增益时向用户标注，防确认
-    循环空转）。候选行解析失败按零增益处理（fail-closed）。
+    循环空转）。候选行解析失败按零增益处理（fail-closed）。rules=None
+    （快照未配置）按空规则集叠加——policy_denial_offer 在无 store 时不
+    构造 offer，此形态仅为类型完备。
     """
     try:
         candidates = parse_policy(candidate_lines)
     except ValueError:
         return False
-    return evaluate(candidates + list(rules), product, api)
+    return evaluate(candidates + list(rules or ()), product, api)
 
 
 def load_policy_file(path: str) -> list[PolicyRule]:

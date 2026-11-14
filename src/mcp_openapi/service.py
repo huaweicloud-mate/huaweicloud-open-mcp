@@ -242,7 +242,11 @@ class ToolService:
         return DenialOffer(subject=f"{product}:{api}",
                            rule=safety_policy.grant_rule(product, api), reason=err,
                            coarse_rule=safety_policy.grant_rule(product, "*"),
-                           readonly_rules=safety_policy.readonly_grant_rules(product))
+                           readonly_rules=safety_policy.readonly_grant_rules(product),
+                           readonly_gain=safety_policy.simulate_grant(
+                               self._effective_policy_rules(),
+                               safety_policy.readonly_grant_rules(product),
+                               product, api))
 
     @_audited
     @_guarded
