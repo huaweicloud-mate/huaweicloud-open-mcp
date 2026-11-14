@@ -51,15 +51,13 @@ DECLINE = ElicitOutcome(action="decline")
 CANCEL = ElicitOutcome(action="cancel")
 UNSUPPORTED = None
 
-READONLY_RULES = ["VPC:*List*=allow", "VPC:*Show*=allow",
-                  "VPC:*Get*=allow", "VPC:*Query*=allow"]
+READONLY_RULES = policy.readonly_grant_rules("VPC")
 
 OFFER = DenialOffer(subject="ECS:ListServers",
                     rule="ECS:ListServers=allow",
                     reason="safety policy 拒绝执行 ECS:ListServers",
                     coarse_rule="ECS:*=allow",
-                    readonly_rules=["ECS:*List*=allow", "ECS:*Show*=allow",
-                                    "ECS:*Get*=allow", "ECS:*Query*=allow"])
+                    readonly_rules=policy.readonly_grant_rules("ECS"))
 DENIAL = {"ok": False, "reason": "safety policy 拒绝执行 ECS:ListServers"}
 
 COARSE_OFFER = DenialOffer(subject="VPC:CreateVpc",
@@ -487,10 +485,13 @@ def test_readonly_grant_rules_text_and_parse_roundtrip():
         parsed = policy.parse_policy([line, "*=deny"])
         assert parsed[0].product == "VPC"
         assert parsed[0].allow is True
-    # 产品名插值正确
+    # 独立字面量锚（不派生自被测函数）：锚定形态 + 与 READONLY_VERB_PREFIXES 同源
     assert policy.readonly_grant_rules("OBS") == [
-        "OBS:*List*=allow", "OBS:*Show*=allow",
-        "OBS:*Get*=allow", "OBS:*Query*=allow"]
+        "OBS:List*=allow", "OBS:Show*=allow", "OBS:Get*=allow",
+        "OBS:Query*=allow", "OBS:Search*=allow", "OBS:Read*=allow",
+        "OBS:Describe*=allow", "OBS:Count*=allow", "OBS:Check*=allow",
+        "OBS:BatchShow*=allow", "OBS:BatchList*=allow", "OBS:BatchGet*=allow"]
+    assert [r.split(":")[1][:-7] for r in rules] == list(policy.READONLY_VERB_PREFIXES)
 
 
 def test_offer_grant_readonly_choice_grants_four_session_rules():
@@ -569,7 +570,7 @@ def test_fallback_hint_readonly_lists_five_options():
     assert "product=产品级规则" in hint
     assert "readonly=产品级只读" in hint
     assert "api=最小规则" in hint
-    assert "*List*" in hint and "*Query*" in hint
+    assert "VPC:List*=allow" in hint and "VPC:Query*=allow" in hint
     assert "grant=" in hint
 
 
@@ -678,7 +679,7 @@ def test_offer_grant_and_retry_partial_readonly_receipt_on_success():
     （wire 可选字段加性；本次已按已授予子集放行）。"""
 
     def grant_fn(line: str, scope: str | None = None) -> dict:
-        if line in ("VPC:*Show*=allow", "VPC:*Query*=allow"):
+        if line in ("VPC:Show*=allow", "VPC:Query*=allow"):
             return {"ok": False, "action": "add", "reason": "boom"}
         return {"ok": True, "action": "add"}
 
@@ -689,7 +690,7 @@ def test_offer_grant_and_retry_partial_readonly_receipt_on_success():
 
     out = run(offer_grant_and_retry(consent, READONLY_OFFER, dict(DENIAL_VPC), retry))
     assert out["ok"] is True and out["body"] == {"mock": True}
-    assert "VPC:*Show*=allow" in out["reason"] and "VPC:*Query*=allow" in out["reason"]
+    assert "VPC:Show*=allow" in out["reason"] and "VPC:Query*=allow" in out["reason"]
     assert "boom" not in out["reason"]                    # 回执不携带 grant 内部失败原因
     assert "policy 文件" in out["reason"]                 # 补授指引（操作员）
 
@@ -698,7 +699,7 @@ def test_offer_grant_and_retry_partial_readonly_denied_appends_failed_subset():
     """readonly 部分授予 + 重试仍被 policy 拒绝：上下文同时披露已授予与失败子集。"""
 
     def grant_fn(line: str, scope: str | None = None) -> dict:
-        if line in ("VPC:*Show*=allow", "VPC:*Query*=allow"):
+        if line in ("VPC:Show*=allow", "VPC:Query*=allow"):
             return {"ok": False, "action": "add", "reason": "boom"}
         return {"ok": True, "action": "add"}
 
@@ -709,8 +710,8 @@ def test_offer_grant_and_retry_partial_readonly_denied_appends_failed_subset():
 
     out = run(offer_grant_and_retry(consent, READONLY_OFFER, dict(DENIAL_VPC), retry))
     assert out["reason"].startswith("safety policy 拒绝执行 VPC:CreateVpc")
-    assert "VPC:*List*=allow" in out["reason"]            # 已授予上下文
-    assert "VPC:*Show*=allow" in out["reason"]            # 失败子集回执
+    assert "VPC:List*=allow" in out["reason"]            # 已授予上下文
+    assert "VPC:Show*=allow" in out["reason"]            # 失败子集回执
     assert "再次调用将重新进入确认授予流程" in out["reason"]
 
 

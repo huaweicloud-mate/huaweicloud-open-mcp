@@ -101,3 +101,51 @@ def test_match_first_case_insensitive():
     hit = policy.match_first(rules, "ECS", "ListServers")
     assert hit is rules[0]
     assert hit.allow is True
+
+
+# ---------- simulate_grant：readonly 档边际增益判定（修订方案 D7'） ----------
+
+def _rules(lines):
+    return policy.parse_policy(lines)
+
+
+def test_simulate_grant_true_when_candidate_unlocks():
+    """候选规则叠加后放行 → 有增益（overlay 前置穿透语义）。"""
+    rules = _rules(["ECS:DeleteServers=deny", "*=deny"])
+    assert policy.simulate_grant(
+        rules, ["ECS:List*=allow", "ECS:Show*=allow"], "ECS", "ListServers") is True
+
+
+def test_simulate_grant_true_when_candidate_pierces_deny():
+    """候选 allow 前置可穿透文件 deny——对 readonly 档是已披露取舍
+    （确认后可越过点名拒绝层，如 RDS:CheckInstanceForUpgrade）。"""
+    rules = _rules(["RDS:CheckInstanceForUpgrade=deny", "*=deny"])
+    assert policy.simulate_grant(
+        rules, ["RDS:Check*=allow"], "RDS", "CheckInstanceForUpgrade") is True
+
+
+def test_simulate_grant_false_when_no_candidate_matches():
+    """普通写不匹配任何只读动词 → 零增益（确认循环陷阱的机械判据）。"""
+    rules = _rules(["*=deny"])
+    assert policy.simulate_grant(
+        rules, policy.readonly_grant_rules("ECS"), "ECS", "DeleteServers") is False
+
+
+def test_simulate_grant_fail_closed_on_bad_lines():
+    """候选行解析失败按零增益处理（fail-closed）。"""
+    rules = _rules(["*=deny"])
+    assert policy.simulate_grant(rules, ["不是规则"], "ECS", "ListServers") is False
+
+
+def test_simulate_grant_default_posture_zero_gain_for_all_denied():
+    """缺省姿态（随包文件）下 readonly 档对任意被拒接口零增益：
+    文件全局动词行是 readonly 档的超集（F2 根因的回归钉）。"""
+    import json as _json
+    from common.paths import project_root
+    entries = _json.loads((project_root() / "configs" / "safety-policy.json")
+                          .read_text(encoding="utf-8"))
+    rules = policy.parse_policy(entries)
+    assert policy.simulate_grant(
+        rules, policy.readonly_grant_rules("ECS"), "ECS", "DeleteServers") is False
+    assert policy.simulate_grant(
+        rules, policy.readonly_grant_rules("ECS"), "ECS", "CreateServers") is False

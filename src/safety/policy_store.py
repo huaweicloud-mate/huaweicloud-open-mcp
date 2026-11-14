@@ -224,13 +224,18 @@ class PolicyStore:
     def __init__(self, path: str | None, *, stat_fn: StatFn | None = None,
                  time_fn: TimeFn | None = None,
                  session_fn: SessionFn | None = None,
-                 strict_sessions: bool = False):
+                 strict_sessions: bool = False,
+                 permanent_refusal_reason: str | None = None):
         self.path = path
         self._lock = threading.RLock()   # 序列化读改写与热重载，杜绝并发丢失更新
         self._stat_fn: StatFn = stat_fn or os.stat
         self._time_fn: TimeFn = time_fn or time.monotonic
         self._session_fn: SessionFn = session_fn or (lambda: None)
         self._strict = strict_sessions
+        # permanent 档结构性守门（缺省姿态路由注入）：随包缺省文件会被
+        # 升级/重装整文件替换，permanent 规则写入将静默丢失——拒绝并把
+        # 指引指向 --policy 显式文件。session/temporary/once/热重载不受影响。
+        self._permanent_refusal = permanent_refusal_reason
         self._entries: list[str] | None = None
         self._is_json = False
         self._rules: tuple[safety_policy.PolicyRule, ...] = ()
@@ -391,6 +396,9 @@ class PolicyStore:
         if ttl_seconds is not None and ttl_seconds <= 0:
             return MutationResult(
                 ok=False, scope=scope, reason="ttl_seconds 必须为正整数（秒）")
+        if scope == "permanent" and self._permanent_refusal is not None:
+            return MutationResult(ok=False, scope=scope,
+                                  reason=self._permanent_refusal)
         if self.path is None or self._entries is None:
             return MutationResult(ok=False, scope=scope, reason=NOT_CONFIGURED_REASON)
         try:
@@ -496,6 +504,9 @@ class PolicyStore:
         if not lines:
             return BatchMutationResult(results=(), scope=scope,
                                        reason="批量为空（至少提供一条规则文本）")
+        if scope == "permanent" and self._permanent_refusal is not None:
+            return BatchMutationResult(results=(), scope=scope,
+                                       reason=self._permanent_refusal)
         if self.path is None or self._entries is None:
             return BatchMutationResult(results=(), scope=scope,
                                        reason=NOT_CONFIGURED_REASON)

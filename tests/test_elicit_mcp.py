@@ -554,9 +554,10 @@ def test_openapi_required_mode_accept_redispatches(tmp_path, monkeypatch):
     assert "ECS:ListServersDetails=allow" not in policy_lines(p)   # once 不落盘
 
 
-def test_openapi_execute_denied_readonly_choice_grants_four_session_rules(
+def test_openapi_execute_denied_readonly_choice_grants_readonly_session_rules(
         tmp_path, monkeypatch):
-    """choice=readonly：授予产品级只读规则集（List/Show/Get/Query 四条 session 规则）。
+    """choice=readonly：授予产品级只读规则集（READONLY_VERB_PREFIXES 单源
+    派生的 session 规则）。
 
     确认后重放（List 系命中只读集）直接执行；同产品 List 系直接放行不再问询；
     Delete 系不匹配只读集仍拒（新一次提议，经 decline 收场）；授予不落盘
@@ -581,11 +582,10 @@ def test_openapi_execute_denied_readonly_choice_grants_four_session_rules(
 
     first, second, listed, deleted = run(_run())
     assert first["ok"] is True                             # List 命中只读集，重放直接执行
-    assert "readonly" in seen[0] and "*List*" in seen[0]   # 弹窗并列只读选项
-    lines = policy_lines(p)
-    assert not any("*List*" in ln for ln in lines)          # session 档不落盘
+    assert "readonly" in seen[0] and "ECS:List*=allow" in seen[0]   # 弹窗并列只读选项
+    assert policy_lines(p) == ["*=deny"]                    # session 档不落盘（文件保持原样）
     assert second["ok"] is True                             # 会话内持续放行（不焚毁）
-    assert listed["ok"] is True                             # *List* 放行同产品其它只读
+    assert listed["ok"] is True                             # List* 放行同产品其它只读
     assert deleted["ok"] is False                           # Delete 不匹配只读集 → 新一次提议（decline 收场）
     assert "safety policy 拒绝执行" in deleted["reason"]
     assert len(seen) == 2                                   # 授予一次 + Delete 拒绝提议一次（decline）
@@ -608,7 +608,7 @@ def test_openapi_readonly_mispick_retry_denied_appends_context(tmp_path, monkeyp
     out = run(_run())
     assert out["ok"] is False
     assert out["reason"].startswith("safety policy 拒绝执行 ECS:DeleteServers")
-    assert "ECS:*List*=allow" in out["reason"]           # 已授予规则上下文
+    assert "ECS:List*=allow" in out["reason"]            # 已授予规则上下文
     assert "再次调用将重新进入确认授予流程" in out["reason"]
     assert len(seen) == 1                                 # 不二次弹窗
 
@@ -901,7 +901,7 @@ def test_openapi_off_grant_product_covers_other_apis(tmp_path, monkeypatch):
 
 def test_openapi_off_grant_readonly_write_still_denied_with_context(
         tmp_path, monkeypatch):
-    """off + grant=readonly：四条只读规则 session 档授予；只读 API 放行，
+    """off + grant=readonly：只读规则集 session 档授予；只读 API 放行，
     写接口（DeleteServers）仍拒且 reason 附已授予规则上下文。"""
     app, p = make_openapi(tmp_path, "off")
     monkeypatch.setattr("common.http.fetch_json", lambda *a, **k: None)
@@ -924,7 +924,7 @@ def test_openapi_off_grant_readonly_write_still_denied_with_context(
     assert listing["ok"] is True                       # 只读规则集放行
     assert write["ok"] is False                        # 写接口不在只读集（重试仍拒）
     assert "safety policy 拒绝执行" in write["reason"]
-    assert "ECS:*List*=allow" in write["reason"]       # 已授予规则上下文
+    assert "ECS:List*=allow" in write["reason"]        # 已授予规则上下文
     assert "再次调用将重新进入确认授予流程" in write["reason"]
     assert seen == []
 

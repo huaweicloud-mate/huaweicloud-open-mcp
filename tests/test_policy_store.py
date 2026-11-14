@@ -1094,3 +1094,46 @@ def test_manage_policy_ops_single_line_envelope_unchanged(tmp_path):
     assert set(out.keys()) == {"ok", "action", "scope", "policy"}
     out = manage_policy_ops(store, "grant", line="ECS:*=allow")
     assert set(out.keys()) == {"ok", "reason"}
+
+
+# ---------- permanent 档结构性守门（缺省姿态路由，修订方案 D6'） ----------
+
+PERMANENT_REFUSAL = ("缺省姿态文件随包分发，permanent 规则写入会随升级静默丢失"
+                     "——持久规则请用 --policy 显式指定自有可写文件")
+
+
+def _refusal_store(tmp_path, refusal=PERMANENT_REFUSAL):
+    p = tmp_path / "policy.json"
+    p.write_text('["*=deny"]', encoding="utf-8")
+    return PolicyStore(str(p), stat_fn=make_stat_fn(),
+                       permanent_refusal_reason=refusal), p
+
+
+def test_permanent_refusal_blocks_add_and_batch(tmp_path):
+    store, p = _refusal_store(tmp_path)
+    out = store.add_rule("ECS:DeleteServers=allow", scope="permanent")
+    assert out.ok is False and out.reason == PERMANENT_REFUSAL
+    batch = store.add_rules(["ECS:List*=allow", "ECS:Show*=allow"],
+                            scope="permanent")
+    assert batch.ok is False and batch.reason == PERMANENT_REFUSAL
+    assert batch.results == ()
+    assert semantic_lines(p) == ["*=deny"]      # 文件未被改动（磁盘独立真值）
+
+
+def test_permanent_refusal_spares_other_scopes(tmp_path):
+    store, _p = _refusal_store(tmp_path)
+    assert store.add_rule("ECS:ListServers=allow", scope="session").ok is True
+    once = store.add_rule("ECS:DeleteServers=allow", scope="once")
+    assert once.ok is True
+    assert store.authorize("ECS", "DeleteServers") is None    # once 放行并焚毁
+    assert store.authorize("ECS", "DeleteServers") is not None
+
+
+def test_permanent_refusal_default_none_keeps_today(tmp_path):
+    """未注入拒绝理由的 store（显式 --policy 路由）permanent 档照常可用。"""
+    p = tmp_path / "policy.json"
+    p.write_text('["*=deny"]', encoding="utf-8")
+    store = make_store(p)
+    out = store.add_rule("ECS:DeleteServers=allow", scope="permanent")
+    assert out.ok is True
+    assert "ECS:DeleteServers=allow" in read_disk(p)

@@ -21,6 +21,17 @@ class PolicyRule:
     once: bool = field(default=False)
 
 
+READONLY_VERB_PREFIXES: tuple[str, ...] = (
+    "List", "Show", "Get", "Query", "Search", "Read",
+    "Describe", "Count", "Check", "BatchShow", "BatchList", "BatchGet",
+)
+"""只读动词前缀表（单源）：缺省姿态文件的全局动词行与 elicitation readonly
+授予档共用。锚定语义（`:Verb*` 仅匹配名字以前缀开头）是 2026-11 对抗审查
+实测后的刻意选择——子串形态 `*List*` 会放行 248 个含子串的真写接口
+（DeleteBlackWhiteIpList/DeleteListener/UpdateCoreGatewayTarget 等）。
+正确性由 tests/test_default_policy_gate.py 按真实接口语料机械守护。"""
+
+
 def parse_policy(lines: Sequence[str]) -> list[PolicyRule]:
     """把规则行列表解析为 PolicyRule 列表，保持行序。
 
@@ -106,11 +117,30 @@ def grant_rule(product: str, api: str) -> str:
 def readonly_grant_rules(product: str) -> list[str]:
     """构造产品级只读规则集（拒绝后 readonly 提议授予用，S-B）。
 
-    覆盖绝大多数只读 op 的命名动词：List/Show/Get/Query 四组通配，
-    session 档整组授予；极少数非命名只读 API 仍需单独最小授予。
+    从 READONLY_VERB_PREFIXES 单源派生，前缀锚定（`:List*` 仅匹配以 List
+    开头的接口名）。覆盖绝大多数只读 op 的命名动词：List/Show/Get/Query/
+    Search/Read/Describe/Count/Check 与 Batch 组合形态，session 档整组
+    授予；动词在名中段的读接口（KeystoneList* 等）与极少数非命名只读
+    API 仍需单独最小授予。
     """
-    return [f"{product}:{verb}=allow"
-            for verb in ("*List*", "*Show*", "*Get*", "*Query*")]
+    return [f"{product}:{verb}*=allow" for verb in READONLY_VERB_PREFIXES]
+
+
+def simulate_grant(rules: Sequence[PolicyRule], candidate_lines: Sequence[str],
+                   product: str, api: str) -> bool:
+    """纯函数：在 rules 前叠加 candidate_lines 后，product:api 是否放行。
+
+    叠加位置对齐 PolicyStore 会话档 overlay 语义（overlay 前置 ++
+    文件规则，first-match）——候选 allow 可穿透文件 deny（对 readonly 档
+    这是已披露的已知取舍：确认后可越过点名拒绝层）。用于 offer 构造期
+    判定 readonly 档对当前接口的边际增益（零增益时向用户标注，防确认
+    循环空转）。候选行解析失败按零增益处理（fail-closed）。
+    """
+    try:
+        candidates = parse_policy(candidate_lines)
+    except ValueError:
+        return False
+    return evaluate(candidates + list(rules), product, api)
 
 
 def load_policy_file(path: str) -> list[PolicyRule]:
