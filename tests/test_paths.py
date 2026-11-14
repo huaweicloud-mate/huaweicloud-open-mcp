@@ -138,4 +138,5 @@ def test_default_policy_path_real_repo_resolves_shipped_file():
     """真仓库集成腿：随包缺省文件在提交仓库内可达（缺此文件即缺省姿态
     整体失效——gate 测试之外的装配层回归钉）。"""
     p = paths.default_policy_path()
-    assert p is not None and p.endswith("configs/safety-policy.json")
+    assert p is not None
+    assert Path(p).parts[-2:] == ("configs", "safety-policy.json")
