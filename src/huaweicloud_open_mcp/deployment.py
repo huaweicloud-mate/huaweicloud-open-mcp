@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from mcp.server.mcpserver import MCPServer
 
+from common import __version__
 from common.audit import sink_from_path
 from common.deployment import (
     MODES,
@@ -188,7 +189,7 @@ def build_app(modes: "Sequence[str] | str", args: argparse.Namespace, *,
         # 传输会话边界说明只随 HTTP 档追加（stdio 文本逐字节不变，I7）
         instructions = (instructions.rstrip("\n") + "\n\n"
                         + HTTP_TRANSPORT_NOTE + "\n")
-    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
+    server = MCPServer(name="huaweicloud-open-mcp", version=__version__,
                        instructions=instructions,
                        log_level=log_level)  # type: ignore[arg-type]
 

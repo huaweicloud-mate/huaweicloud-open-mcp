@@ -50,7 +50,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/huaweicloud_open_mcp/__init__.py"
+path = "src/common/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/common", "src/safety", "src/apie", "src/mcp_openapi", "src/mcp_data", "src/huaweicloud_open_mcp"]

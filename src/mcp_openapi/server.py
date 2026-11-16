@@ -326,8 +326,10 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
 def build_openapi_app(service: ToolService | None = None, *,
                       log_level: str = "INFO",
                       elicit_mode: str = "off") -> MCPServer:
+    from common import __version__
+
     svc = service or ToolService()
-    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
+    server = MCPServer(name="huaweicloud-open-mcp", version=__version__,
                        instructions=build_instructions(svc.config.hints),
                        log_level=log_level)  # type: ignore[arg-type]
     register_openapi_tools(server, svc, consent_mode=elicit_mode)

@@ -24,9 +24,9 @@ for arg in "${@:2}"; do
   esac
 done
 
-version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/huaweicloud_open_mcp/__init__.py)
+version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/common/__init__.py)
 if [[ -z "$version" ]]; then
-  echo "错误：无法从 src/huaweicloud_open_mcp/__init__.py 解析版本号" >&2
+  echo "错误：无法从 src/common/__init__.py 解析版本号" >&2
   exit 1
 fi
 

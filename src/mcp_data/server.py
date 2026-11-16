@@ -96,8 +96,10 @@ def register_data_tools(server: MCPServer, ds: DataService) -> None:
 
 def build_data_app(config: DataConfig | None = None, *,
                    log_level: str = "INFO") -> MCPServer:
+    from common import __version__
+
     ds = DataService(config)
-    server = MCPServer(name="huaweicloud-open-mcp", version="0.1.0",
+    server = MCPServer(name="huaweicloud-open-mcp", version=__version__,
                        instructions=INSTRUCTIONS_DATA,
                        log_level=log_level)  # type: ignore[arg-type]
     register_data_tools(server, ds)
