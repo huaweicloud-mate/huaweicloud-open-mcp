@@ -131,16 +131,18 @@ graph LR
 
 ```mermaid
 flowchart LR
-    A["logger: mcp_openapi.* / apie.* / mcp_data.* / common.*"] --> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
-    A --> C["StreamHandler(stderr)<br/>WARNING+ 兜底"]
+    A["logger: mcp_openapi.* / apie.* / mcp_data.* / common.*"] --> C["StreamHandler(stderr)<br/>唯一通道（无文件时）<br/>级别跟随 --log-level"]
+    A -. "显式 --log-file 或管道 write_default_file" .-> B["RotatingFileHandler<br/>logs/{program}.log<br/>10MB×5 轮转"]
+    A -. "文件在时" .-> E["StreamHandler(stderr)<br/>WARNING+ 兜底"]
     D["stdout（JSON-RPC 通道）"] -. "禁止日志" .-> A
 
     style B fill:#e8f5e9
     style C fill:#fff3e0
+    style E fill:#fff3e0
     style D fill:#ffebee
 ```
 
-- **配置**：`logconf.configure_logging(program, level, log_file)`；`--log-level`/`--log-file` 参数与环境变量 `HUAWEICLOUD_MCP_LOG_LEVEL/FILE`；默认 INFO
+- **配置**：`logconf.configure_logging(program, level, log_file, write_default_file)`；`--log-level`/`--log-file` 参数与环境变量 `HUAWEICLOUD_MCP_LOG_LEVEL/FILE`；默认 INFO。**缺省不落盘**：MCP server 未配置 `--log-file` 时无文件通道，stderr 是唯一通道（级别跟随 `--log-level`）；显式给出文件后 stderr 退为 WARNING+ 兜底。构建期管道（api-refresh/api-docs/graph/helpdocs/helphints）传 `write_default_file=True`，保持 `logs/{program}.log`；off 哨兵（空串/`off`）显式禁用文件
 - **审计（INFO）**：`execute {product}:{api} region=.. mode=real|mock policy=allow|deny|unconfigured`；HTTP 请求 `GET https://host/path -> 200 (123ms)`；server 启动摘要（region/mock/policy/凭证状态）
 - **运行（WARNING）**：429 退避重试、policy 拒绝、抓取失败、Swagger 校验 INVALID
 - **脱敏红线**：`Authorization`/`X-Security-Token`/AK/SK 永不入日志；请求 body 仅 DEBUG 且截断 500 字符；测试用 caplog 断言红线
@@ -172,7 +174,7 @@ S1–S5 细节见 [mcp-openapi.md](mcp-openapi.md)。纪律：red→green 垂直
 - [x] mock 模式全链路（`--mock` / `--mock-base`）
 - [x] 类型系统：TypedDict 结果信封 + mypy 0 错误
 - [x] 263→当前：全套 pytest 见 CI（单测+集成默认档 + e2e marker，`.env` 加载）
-- [x] 日志体系：文件为主轮转 + stderr 兜底，execute 审计，脱敏红线
+- [x] 日志体系：stderr 恒在（缺省唯一通道，级别跟随 `--log-level`）+ 显式 `--log-file` 才启用轮转文件（管道缺省保留），execute 审计，脱敏红线
 - [x] LLM Agent 级工作流 benchmark（S6）：自然语言用例驱动 opencode，评估精度/耗时/token，stub/real 双后端 + 基线回归（`benchmarks/`）
 
 ## 6. 二期路线

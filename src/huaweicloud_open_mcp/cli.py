@@ -168,15 +168,18 @@ def main() -> None:
                              "off 或空串显式禁用；"
                              "环境变量 HUAWEICLOUD_MCP_METADATA_CORRECTIONS")
     parser.add_argument("--region", default=None, help="默认 region（openapi 模式，默认 cn-north-4）")
-    parser.add_argument("--log-level", default=None, help="日志级别（默认 INFO）")
-    parser.add_argument("--log-file", default=None, help="日志文件路径（默认 logs/huaweicloud-open-mcp.log）")
+    parser.add_argument("--log-level", default=None,
+                        help="日志级别（默认 INFO；未配置日志文件时也决定 stderr 可见级别）")
+    parser.add_argument("--log-file", default=None,
+                        help="日志文件路径（缺省不落盘——诊断信息经 stderr 交给客户端；"
+                             "off 或空串显式禁用；环境变量 HUAWEICLOUD_MCP_LOG_FILE）")
     args = parser.parse_args()
 
     level_name = (args.log_level or os.environ.get(ENV_LOG_LEVEL) or "INFO").upper()
     if level_name not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
         level_name = "INFO"
-    # 日志先于模式解析：让位/无效告警与 discover fail-fast 落主日志文件
-    # （文件为主约定——先发后配会只剩 stderr lastResort）
+    # 日志先于模式解析：让位/无效告警与 discover fail-fast 须可见
+    # （文件缺失时 stderr 承载全量，先发后配会只剩 lastResort）
     configure_logging(program="huaweicloud-open-mcp", level=level_name,
                       log_file=args.log_file)
 

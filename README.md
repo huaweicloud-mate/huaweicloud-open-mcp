@@ -411,7 +411,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--auth-demote-pass <list>` | — | Auth-demote exemption list: comma-separated `PRODUCT:API` (exact) or `PRODUCT`/`PRODUCT:*` (product-wide); exempted APIs keep their original metadata; affects metadata normalization only, not the validation layer (env `HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS`) |
 | `--metadata-corrections <path>` | bundled `configs/metadata-corrections.json` | Metadata corrections: doc-verified factual fixes for stale upstream metadata (first cases: `RDS:StartupInstance` x-constraint, `FunctionGraph:CreateEvent` malformed `name.pattern`), exact `PRODUCT:API` keys with `drop` (line-level) / `replace` (whole-field) patches on envelope/op fields, plus doc-level JSON Pointer patches (v1 whitelist `/definitions/`) applied copy-on-write before `get_api` formatting and `execute_api` validation — cached docs are never mutated; bare filenames resolve like `--hints` (env `HUAWEICLOUD_MCP_METADATA_CORRECTIONS`) |
 | `--audit-file <file>` | disabled | Audit trail (NDJSON): one `{ts, tool, input, ok}` line per tool call |
-| `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | Logging (rotating file; stderr mirrors WARNING+) |
+| `--log-level` / `--log-file` | `INFO` / no file | Logging: nothing goes to disk by default — diagnostics reach the MCP client over stderr at `--log-level`; pass `--log-file` to enable a rotating file (10MB×5), which then pins stderr to WARNING+; `off`/empty string disables the file (env `HUAWEICLOUD_MCP_LOG_LEVEL`/`HUAWEICLOUD_MCP_LOG_FILE`) |
 
 ### Environment variables
 
@@ -527,7 +527,7 @@ If the HuaweiCloud devkit manages your credentials, it maintains `~/.config/huaw
 | `"count": 0` but you have servers | Resources live in another region | Ask again with an explicit `region`, e.g. `cn-east-3` |
 | Mock calls hang or time out | No network route to the API Explorer endpoint | Check proxy/firewall access to `apiexplorer.cn-north-4.myhuaweicloud.com` |
 
-For deeper diagnosis, add `--log-level DEBUG --log-file <log>` to the registration command, for example `/tmp/hwc-mcp.log` on macOS/Linux or `%TEMP%\hwc-mcp.log` on Windows, and inspect the log file.
+For deeper diagnosis: the server writes nothing to disk by default; diagnostics stream to stderr, which most MCP clients surface as the server log. To keep a trail or review history, add `--log-file <log>` to the registration command (e.g. `/tmp/hwc-mcp.log` on macOS/Linux, `%TEMP%\hwc-mcp.log` on Windows) together with `--log-level DEBUG`; note that enabling the file pins stderr to WARNING+ only.
 
 ## Documentation
 

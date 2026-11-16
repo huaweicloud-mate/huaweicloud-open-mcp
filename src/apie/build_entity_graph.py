@@ -303,7 +303,8 @@ def main() -> int:
     p.add_argument("--log-file", default=None)
     args = p.parse_args()
     configure_logging(program="api-refresh-graph",
-                      level=args.log_level, log_file=args.log_file)
+                      level=args.log_level, log_file=args.log_file,
+                      write_default_file=True)
     root = Path(project_root())
     if args.llm:
         refresh_knowledge_file(root, batch_products=args.batch_products,

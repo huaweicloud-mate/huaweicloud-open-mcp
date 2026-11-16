@@ -189,7 +189,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    configure_logging(program="api-docs", level=args.log_level, log_file=args.log_file)
+    configure_logging(program="api-docs", level=args.log_level,
+                      log_file=args.log_file, write_default_file=True)
     rc = args.func(args)
     return rc if rc is not None else 0
 

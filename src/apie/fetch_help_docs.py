@@ -282,7 +282,8 @@ def main() -> int:
     p.add_argument("--log-file", default=None)
     args = p.parse_args()
     configure_logging(program="api-refresh-helpdocs",
-                      level=args.log_level, log_file=args.log_file)
+                      level=args.log_level, log_file=args.log_file,
+                      write_default_file=True)
     raw_dir = Path(project_root()) / "raw"
     summary = crawl_docs(fetch_html(SITEMAP_URL), fetch_html, out_raw=raw_dir,
                          docsets=args.docset, limit=args.limit, rate=args.rate,

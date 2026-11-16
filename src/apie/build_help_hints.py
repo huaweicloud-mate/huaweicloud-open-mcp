@@ -161,7 +161,8 @@ def main() -> int:
     p.add_argument("--log-file", default=None)
     args = p.parse_args()
     configure_logging(program="api-refresh-helphints",
-                      level=args.log_level, log_file=args.log_file)
+                      level=args.log_level, log_file=args.log_file,
+                      write_default_file=True)
     root = Path(project_root())
     overrides = None
     if args.overrides:

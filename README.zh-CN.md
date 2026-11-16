@@ -412,7 +412,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--auth-demote-pass <list>` | — | 认证头归一豁免名单：逗号分隔 `PRODUCT:API`（精确）或 `PRODUCT`/`PRODUCT:*`（产品级），名单内 API 元数据保持原样；仅影响元数据归一，不影响校验层（env `HUAWEICLOUD_MCP_AUTH_DEMOTE_PASS`） |
 | `--metadata-corrections <path>` | 随包 `configs/metadata-corrections.json` | 元数据纠偏：上游元数据与官方帮助文档不一致的 doc-verified 事实修正（首例：`RDS:StartupInstance` x-constraint、`FunctionGraph:CreateEvent` 畸形 `name.pattern`），逐 API 精确键 `drop`（删行）/`replace`（整字段替换）patch 作用于信封/op 字段，另支持 doc 级 JSON Pointer patch（v1 前缀白名单 `/definitions/`）在 `get_api` 格式化前与 `execute_api` 校验前 copy-on-write 落位——缓存 doc 恒不改写；裸文件名解析同 `--hints`（env `HUAWEICLOUD_MCP_METADATA_CORRECTIONS`） |
 | `--audit-file <file>` | disabled | 审计落盘（NDJSON）：每次工具调用一行 `{ts, tool, input, ok}` |
-| `--log-level` / `--log-file` | `INFO` / `logs/huaweicloud-open-mcp.log` | 日志（轮转文件；stderr 同步 WARNING+） |
+| `--log-level` / `--log-file` | `INFO` / 不落盘 | 日志：缺省不写文件——诊断信息经 stderr 交给 MCP 客户端，级别随 `--log-level`；显式给 `--log-file` 才启用轮转文件（10MB×5），此时 stderr 退为 WARNING+ 兜底；`off`/空串禁用文件（env `HUAWEICLOUD_MCP_LOG_LEVEL`/`HUAWEICLOUD_MCP_LOG_FILE`） |
 
 ### 环境变量
 
@@ -528,7 +528,7 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 | 明明有服务器却返回 `"count": 0` | 资源在另一个 region | 带 `region` 再问，如 `cn-east-3` |
 | Mock 调用挂起或超时 | 到 API Explorer 端点无网络路由 | 检查 `apiexplorer.cn-north-4.myhuaweicloud.com` 的代理/防火墙 |
 
-更深入的诊断：注册命令中加 `--log-level DEBUG --log-file <日志文件>`（如 macOS/Linux 的 `/tmp/hwc-mcp.log`、Windows 的 `%TEMP%\hwc-mcp.log`）后查看日志文件。
+更深入的诊断：server 缺省不落盘，诊断信息走 stderr（多数 MCP 客户端会把它呈现为 server 日志）。需要留痕或复查历史时，在注册命令中加 `--log-file <日志文件>`（如 macOS/Linux 的 `/tmp/hwc-mcp.log`、Windows 的 `%TEMP%\hwc-mcp.log`），配合 `--log-level DEBUG` 拿全量；注意一旦启用文件，stderr 就只剩 WARNING+。
 
 ## 文档
 

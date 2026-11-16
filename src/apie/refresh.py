@@ -295,8 +295,9 @@ def main() -> int:
     args = parser.parse_args()
 
     level = getattr(args, "log_level", None) or None
-    log_file = getattr(args, "log_file", None) or None
-    configure_logging(program="api-refresh", level=level, log_file=log_file)
+    log_file = getattr(args, "log_file", None)   # 空串保真为 off 哨兵，不折叠为 None
+    configure_logging(program="api-refresh", level=level, log_file=log_file,
+                      write_default_file=True)
 
     if args.command == "status":
         cmd_status(args)
