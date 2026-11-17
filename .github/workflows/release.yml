@@ -75,5 +75,7 @@ jobs:
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # uv build 会往 dist/ 写 1 字节 .gitignore（防误提交），action-gh-release
+          # 的 dist/* glob 会匹配 dotfiles——按项目产物前缀锚定，防混入 release 资产。
+          files: dist/huaweicloud_open_mcp-*
           generate_release_notes: true
