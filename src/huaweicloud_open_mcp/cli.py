@@ -167,6 +167,14 @@ def main() -> None:
                              "configs/metadata-corrections.json，缺失静默跳过；"
                              "off 或空串显式禁用；"
                              "环境变量 HUAWEICLOUD_MCP_METADATA_CORRECTIONS")
+    parser.add_argument("--credentials", default=None,
+                        help="内联凭证 JSON payload（如 "
+                             "'{\"ak\":..,\"sk\":..,\"securityToken\":..,\"region\":..}'，"
+                             "键集与 credentials.json 对齐：ak/sk/securityToken/region/"
+                             "configuredBySession）；显式 payload 置顶凭证链，压过"
+                             "环境变量/vault/profile；非法 payload 启动即失败；"
+                             "命令行内联 SK 对同机 ps 可见，多用户机器建议改用"
+                             "环境变量形态")
     parser.add_argument("--region", default=None, help="默认 region（openapi 模式，默认 cn-north-4）")
     parser.add_argument("--log-level", default=None,
                         help="日志级别（默认 INFO；未配置日志文件时也决定 stderr 可见级别）")

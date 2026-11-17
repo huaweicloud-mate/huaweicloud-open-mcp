@@ -402,6 +402,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--mock-base <url>` | — | mock 端点基础地址覆盖（env `HUAWEICLOUD_MCP_MOCK_BASE`） |
 | `--mock-passthrough` | off | mock 模式转发 execute 业务参数到端点（env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`） |
 | `--policy <file>` | —（未配置时用随包缺省姿态 `configs/safety-policy.json`） | safety policy 文件；显式指定时恒优先、文件缺失启动快速失败；未配置时路由随包缺省姿态（只读放行/写拒绝）；两者皆缺才全部执行被拒 |
+| `--credentials <json>` | — | 内联凭证 JSON payload（如 `{"ak":..,"sk":..,"securityToken":..,"region":..}`，键集与 `credentials.json` 对齐）；压过环境变量/vault/profile；非法 payload 启动即失败、不静默回落；命令行内联 SK 对同机 `ps` 可见，多用户机器建议改用环境变量形态 |
 | `--region <id>` | `cn-north-4` | 默认 region |
 | `--hints <file\|off>` | `configs/help-docs-hints.json`（缺失静默跳过） | 可选自定义提示注入配置（部署侧指引注入 instructions 与发现结果）；`off` 显式禁用；支持裸文件名按 `configs/` 解析 |
 | `--deprecated-index <file>` | — | 可选废弃接口索引；启用 list_apis 的 annotate/hide 治理；支持裸文件名按 `configs/` 解析 |
@@ -443,7 +444,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 ## 凭证
 
-网关按顺序从三个来源加载 AK/SK：先环境变量，后 devkit JSON vault `~/.config/huaweicloud/credentials.json`（Windows 上即 `%USERPROFILE%\.config\huaweicloud\credentials.json`），再 `~/.huaweicloud/credentials`（Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`）；以第一个 AK/SK 齐全的来源为准。
+网关按顺序从四个来源加载 AK/SK：先 `--credentials` 内联 JSON payload（显式置顶，压过一切，非法即启动失败），后环境变量，再 devkit JSON vault `~/.config/huaweicloud/credentials.json`（Windows 上即 `%USERPROFILE%\.config\huaweicloud\credentials.json`），最后 `~/.huaweicloud/credentials`（Windows 上即 `%USERPROFILE%\.huaweicloud\credentials`）；以第一个 AK/SK 齐全的来源为准。
 
 ### 方式 A：Profile 文件（快速开始主路径）
 
@@ -508,6 +509,21 @@ codex mcp add huaweicloud --env HUAWEICLOUD_SDK_AK=your-access-key-id --env HUAW
 - `configuredBySession` 仅在凭证由 devkit 会话配置时出现；网关容忍其缺席，仅作来源标记、不驱动行为。
 - `region` 作为服务端默认 region 回落档：`--region` 与 `HUAWEICLOUD_MCP_REGION` 优先于它；两者都未配置时，网关使用 vault 的 region 而非 `cn-north-4`。
 - 该文件内容由 devkit 管理；请通过 devkit 管理凭证，不要手工编辑。
+
+### 方式 D：内联 `--credentials` payload（单行命令）
+
+同一份 JSON 直接内联在 server 命令行上，一行注册、无需文件：
+
+```bash
+uvx huaweicloud-open-mcp --credentials '{"ak":"your-access-key-id","sk":"your-secret-access-key","securityToken":"","region":"cn-north-4"}'
+```
+
+- 键集与 `credentials.json` 完全一致（`ak`/`sk`/`securityToken`/`region`/`configuredBySession`）；`ak`/`sk` 必填，`securityToken` 空串即「无临时 token」。
+- 置顶凭证链：旗标在场时环境变量、vault、profile 全部让位。
+- 非法 payload（JSON 语法错误、根非对象、缺 `ak`/`sk`）启动即失败，错误消息不回显 payload 原文——SK 在里面，报错保持无秘密。
+- payload 里的 `region` 参与 region 回落链（`--region` 与 `HUAWEICLOUD_MCP_REGION` 仍优先）。
+- `--mock` 模式下 payload 被忽略（mock 恒不持有凭证）。
+- SK 对同机其它用户经进程列表（`ps`）可见；多用户机器建议改用环境变量形态。
 
 ### 行为要点
 

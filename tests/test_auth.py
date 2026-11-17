@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from common.auth import credentials
 
 
@@ -165,6 +167,78 @@ def _write_vault_home(monkeypatch, tmp_path, payload) -> None:
     (vault / "credentials.json").write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+
+
+# ---------- --credentials 内联 payload（方言与 JSON vault 单源共享） ----------
+
+
+def test_parse_credentials_payload_full():
+    cred = credentials.parse_credentials_payload(
+        json.dumps({"ak": "IAK", "sk": "ISK", "securityToken": "ITOK",
+                    "region": "cn-south-1", "configuredBySession": True}))
+    assert cred.ak == "IAK"
+    assert cred.sk == "ISK"
+    assert cred.security_token == "ITOK"
+    assert cred.region == "cn-south-1"
+    assert cred.configured_by_session is True
+
+
+def test_parse_credentials_payload_minimal():
+    cred = credentials.parse_credentials_payload(
+        json.dumps({"ak": "IAK", "sk": "ISK"}))
+    assert cred.security_token is None
+    assert cred.region is None
+    assert cred.configured_by_session is False
+
+
+def test_parse_credentials_payload_empty_security_token():
+    cred = credentials.parse_credentials_payload(
+        json.dumps({"ak": "IAK", "sk": "ISK", "securityToken": ""}))
+    assert cred.security_token is None
+
+
+def test_parse_credentials_payload_malformed_json():
+    with pytest.raises(ValueError):
+        credentials.parse_credentials_payload("{not json")
+
+
+def test_parse_credentials_payload_non_dict_root():
+    with pytest.raises(ValueError):
+        credentials.parse_credentials_payload("[1, 2]")
+
+
+def test_parse_credentials_payload_missing_ak():
+    with pytest.raises(ValueError):
+        credentials.parse_credentials_payload(json.dumps({"sk": "ISK"}))
+
+
+def test_parse_credentials_payload_empty_sk():
+    with pytest.raises(ValueError):
+        credentials.parse_credentials_payload(json.dumps({"ak": "IAK", "sk": ""}))
+
+
+def test_parse_credentials_payload_unknown_keys_tolerated():
+    cred = credentials.parse_credentials_payload(
+        json.dumps({"ak": "IAK", "sk": "ISK", "extra": "ignored"}))
+    assert cred.ak == "IAK"
+
+
+def test_parse_credentials_payload_snake_case_not_translated():
+    # snake_case 键不是本方言：security_token ≠ securityToken，不得翻译——
+    # 被当未知键容忍忽略，token 不流入
+    cred = credentials.parse_credentials_payload(
+        json.dumps({"ak": "IAK", "sk": "ISK", "security_token": "T"}))
+    assert cred.security_token is None
+
+
+def test_parse_credentials_payload_error_does_not_echo_secret():
+    # 错误消息不得回显 payload 原文（SK 在里面）
+    secret = "SK-LEAK-ME"
+    with pytest.raises(ValueError) as exc_info:
+        credentials.parse_credentials_payload(
+            json.dumps({"ak": "IAK", "sk": secret, "securityToken": ""})[:-5])
+    assert secret not in str(exc_info.value)
+    assert "IAK" not in str(exc_info.value)
 
 
 def test_get_credentials_env_beats_vault(monkeypatch, tmp_path):

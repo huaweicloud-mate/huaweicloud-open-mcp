@@ -401,6 +401,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 | `--mock-base <url>` | — | Mock endpoint base URL override (env `HUAWEICLOUD_MCP_MOCK_BASE`) |
 | `--mock-passthrough` | off | Mock mode: forward execute business params to the mock endpoint (env `HUAWEICLOUD_MCP_MOCK_PASSTHROUGH`) |
 | `--policy <file>` | — (falls back to the shipped default posture `configs/safety-policy.json`) | Safety policy file; when set it always wins and a missing file fails fast at startup; when unset the shipped read-only default posture is routed; when both are absent every execution is denied |
+| `--credentials <json>` | — | Inline credentials JSON payload (e.g. `{"ak":..,"sk":..,"securityToken":..,"region":..}` — same keys as `credentials.json`); wins over env/vault/profile; a malformed payload fails startup instead of falling back; the SK is visible to same-host `ps`, prefer env vars on multi-user machines |
 | `--region <id>` | `cn-north-4` | Default region |
 | `--hints <file\|off>` | `configs/help-docs-hints.json` (silent skip if absent) | Optional custom-hints file (deploy-side guidance injected into instructions and discovery results); `off` disables; bare filename resolves against `configs/` |
 | `--deprecated-index <file>` | — | Optional deprecated-API index; enables `list_apis` annotate/hide governance; bare filename resolves against `configs/` |
@@ -442,7 +443,7 @@ uv run huaweicloud-open-mcp --deprecated-index ... --deprecated-mode hide       
 
 ## Credentials
 
-The gateway loads AK/SK from three sources, checked in order: environment variables first, then the devkit JSON vault `~/.config/huaweicloud/credentials.json` (on Windows: `%USERPROFILE%\.config\huaweicloud\credentials.json`), then `~/.huaweicloud/credentials` (on Windows: `%USERPROFILE%\.huaweicloud\credentials`). The first source with a usable AK/SK wins.
+The gateway loads AK/SK from four sources, checked in order: the `--credentials` inline JSON payload first (explicit, wins over everything, fails fast on malformed input), then environment variables, then the devkit JSON vault `~/.config/huaweicloud/credentials.json` (on Windows: `%USERPROFILE%\.config\huaweicloud\credentials.json`), then `~/.huaweicloud/credentials` (on Windows: `%USERPROFILE%\.huaweicloud\credentials`). The first source with a usable AK/SK wins.
 
 ### Option A: Profile file (quick-start main path)
 
@@ -507,6 +508,21 @@ If the HuaweiCloud devkit manages your credentials, it maintains `~/.config/huaw
 - `configuredBySession` appears only when the credentials were configured by a devkit session; the gateway accepts its absence and treats it as provenance only.
 - A `region` value becomes the default-region fallback: `--region` and `HUAWEICLOUD_MCP_REGION` win over it; without either, the gateway serves the vault's region instead of `cn-north-4`.
 - The devkit owns this file's content; manage credentials through the devkit rather than editing it by hand.
+
+### Option D: Inline `--credentials` payload (single command line)
+
+Pass the same JSON inline on the server command line — one registration line, no files:
+
+```bash
+uvx huaweicloud-open-mcp --credentials '{"ak":"your-access-key-id","sk":"your-secret-access-key","securityToken":"","region":"cn-north-4"}'
+```
+
+- The keys mirror `credentials.json` exactly (`ak`/`sk`/`securityToken`/`region`/`configuredBySession`); `ak`/`sk` are required, an empty `securityToken` means "no temporary token".
+- It wins over every other source: environment variables, vault and profile are ignored while the flag is present.
+- A malformed payload (bad JSON, non-object root, missing `ak`/`sk`) fails startup with an error that never echoes the payload back — the error messages stay secret-free because the SK is inside.
+- A `region` in the payload joins the region fallback chain (`--region` and `HUAWEICLOUD_MCP_REGION` still win).
+- In `--mock` mode the payload is ignored (mock never holds credentials).
+- The SK is visible in the process list to other local users (`ps`). On a multi-user machine, prefer the environment-variable form.
 
 ### Behavior notes
 

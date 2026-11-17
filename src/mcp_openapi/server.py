@@ -255,7 +255,17 @@ def build_openapi_config(args: argparse.Namespace, dep: Deployment | None = None
     """
     dep = dep or resolve_deployment(args)
     env = dep.env
-    creds = None if dep.mock else cred_mod.get_credentials()
+    # 凭证解析优先级：显式 --credentials payload（fail-fast）→ mock 短路恒 None
+    # → 既有 provider 链（env AK/SK → vault → profile）。mock 下 payload 不解析
+    # （无消费方）；payload 携带的 region 经 creds.region 自动参与下方回落链。
+    if dep.mock:
+        creds = None
+    else:
+        raw_credentials = getattr(args, "credentials", None)
+        if raw_credentials is not None:
+            creds = cred_mod.parse_credentials_payload(raw_credentials)
+        else:
+            creds = cred_mod.get_credentials()
     region = (getattr(args, "region", None)
               or env.get(ENV_REGION)
               or (creds.region if creds else None))
