@@ -211,3 +211,38 @@ def test_sign_obs_url_put_with_content_type():
     assert url == (
         "https://bucket.obs.example.com/upload.bin?"
         "AccessKeyId=AccessKey&Expires=1532779451&Signature=IJjth67l56ui0skXKWNveY7Gbks%3D")
+
+
+# ---------- 日志脱敏红线（X-Security-Token 永不入日志） ----------
+
+
+def test_sign_logs_never_contain_security_token(caplog):
+    """签名 DEBUG 日志的 StringToSign 含 x-obs-security-token 值——脱敏后
+    保留结构供签名排障（:*** / =***），token 值零出现（AGENTS.md 脱敏红线）。
+
+    覆盖两条签名路径：Header 方式（token 进 CanonicalizedHeaders）与
+    URL 预签发（token 进 CanonicalizedResource query）。签名本身不受影响，
+    既有 openssl 金标用例即回归红线。"""
+    import logging
+    with caplog.at_level(logging.DEBUG, logger="mcp_openapi.signer.obs"):
+        obs.sign_obs("PUT", ak=AK, sk=SK, bucket="b", object_key="k.txt",
+                     headers={"x-obs-security-token": "TOK-LEAK-123"})
+        obs.sign_obs_url("PUT", ak=AK, sk=SK, host="obs.example.com",
+                         bucket="b", object_key="k.txt",
+                         query={"x-obs-security-token": "TOK-LEAK-123"},
+                         expires=1794891520)
+    text = caplog.text
+    assert "TOK-LEAK-123" not in text
+    assert "x-obs-security-token:***" in text
+    assert "x-obs-security-token=***" in text
+
+
+def test_sign_logs_without_token_unchanged(caplog):
+    # 无 token 时脱敏为恒等映射：sts 原样可见（签名排障价值保留）
+    import logging
+    with caplog.at_level(logging.DEBUG, logger="mcp_openapi.signer.obs"):
+        obs.sign_obs("GET", ak=AK, sk=SK, bucket="b", object_key="k.txt",
+                     headers={"Date": "Sat, 12 Oct 2015 08:12:38 GMT"})
+    assert "sign_obs sts=" in caplog.text
+    assert "/b/k.txt" in caplog.text
+    assert "***" not in caplog.text

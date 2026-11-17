@@ -14,6 +14,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -22,6 +23,17 @@ logger = logging.getLogger("mcp_openapi.signer.obs")
 
 OBS_PREFIX = "x-obs-"
 RFC1123_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
+
+_TOKEN_IN_STS_RE = re.compile(r"(x-obs-security-token[:=])[^&\n]*", re.IGNORECASE)
+
+
+def _redact_sts_for_log(sts: str) -> str:
+    """日志脱敏红线：X-Security-Token 永不入日志。StringToSign 携带 token 值的
+    两种形态——Header 方式 `x-obs-security-token:值`（CanonicalizedHeaders）与
+    URL 预签发 `x-obs-security-token=值`（CanonicalizedResource query）——
+    值掩蔽为 ***，结构保留供签名排障；无 token 时恒等。签名本身用原始 sts，
+    脱敏只发生在日志口径。"""
+    return _TOKEN_IN_STS_RE.sub(r"\1***", sts)
 
 # 官方 SDK allowedResourceParameterNames（小写），仅这些 query 键参与 CanonicalizedResource。
 SUB_RESOURCES = frozenset({
@@ -154,7 +166,7 @@ def sign_obs(method: str, *, ak: str, sk: str, bucket: str, object_key: str = ""
     sts = obs_string_to_sign(method, bucket=bucket, object_key=object_key,
                              query=query, headers=headers,
                              virtual_hosted=virtual_hosted)
-    logger.debug("sign_obs sts=%r", sts)
+    logger.debug("sign_obs sts=%r", _redact_sts_for_log(sts))
     out = {"Authorization": f"OBS {ak}:{obs_signature(sts, sk)}"}
     date_value = _header(headers, "date")
     if date_value:
@@ -213,7 +225,7 @@ def sign_obs_url(method: str, *, ak: str, sk: str, host: str, bucket: str,
     sts = url_string_to_sign(method, bucket=bucket, object_key=object_key,
                              query=query, headers=merged_headers, expires=expires,
                              virtual_hosted=virtual_hosted)
-    logger.debug("sign_obs_url sts=%r", sts)
+    logger.debug("sign_obs_url sts=%r", _redact_sts_for_log(sts))
     signature = quote(obs_signature(sts, sk), safe="")
 
     base = build_presign_base(host, bucket, object_key, virtual_hosted)
