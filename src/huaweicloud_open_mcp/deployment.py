@@ -22,6 +22,7 @@ from mcp.server.mcpserver import MCPServer
 
 from common import __version__
 from common.audit import sink_from_path
+from common.auth import credentials as cred_mod
 from common.deployment import (
     MODES,
     normalize_modes,
@@ -133,6 +134,12 @@ def build_app(modes: "Sequence[str] | str", args: argparse.Namespace, *,
         raise ValueError("modes 为空（至少一个有效模式：openapi/data）")
     dep = resolve_deployment(args, env)
     is_http = dep.transport == "http"
+    # --credentials 校验先行（fail-fast 与运行模式无关）：文档契约只豁免
+    # mock、不豁免模式——纯 data 模式无凭证消费方，但显式非法 payload 必须在
+    # 启动期报错，不得静默吞掉。openapi 消费点（build_openapi_config）随后
+    # 再解析一次取值（纯函数，启动期一次性成本，双解析无害）。
+    if not dep.mock and getattr(args, "credentials", None) is not None:
+        cred_mod.parse_credentials_payload(args.credentials)
     # 会话键控装配（ADR-0003）：session_fn 注入与 middleware 注册在 build_app
     # 同一处配对——ambient 机制的知识单点；stdio 下 session_fn 恒 None =
     # 历史单桶语义。strict_sessions 仅 HTTP 档置位（I2 fail-closed）。

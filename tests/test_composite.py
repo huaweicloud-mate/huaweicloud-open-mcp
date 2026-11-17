@@ -247,3 +247,25 @@ def test_build_app_normalizes_and_rejects_unknown_modes():
         build_app([], make_args())
     with pytest.raises(ValueError, match="modes 为空"):
         build_app("  ", make_args())
+
+
+def test_build_app_credentials_fail_fast_any_mode():
+    """--credentials 非法 payload 的 fail-fast 与运行模式无关——文档契约
+    只豁免 mock 不豁免模式，纯 data 模式不得静默吞掉打错的 payload
+    （解析消费点在 build_openapi_config，校验点在 build_app 装配入口）。"""
+    with pytest.raises(ValueError, match="--credentials"):
+        build_app(["data"], make_args(mock=False, credentials="{bad"))
+    with pytest.raises(ValueError, match="--credentials"):
+        build_app(["openapi"], make_args(mock=False, credentials="{bad"))
+
+
+def test_build_app_data_mode_valid_payload_boots():
+    app = build_app(["data"], make_args(mock=False,
+                                        credentials='{"ak":"A","sk":"S"}'))
+    assert sorted(app._tool_manager._tools) == ["query_data", "transform_data"]
+
+
+def test_build_app_mock_ignores_malformed_credentials_any_mode():
+    # mock 短路先于解析（既有拍板）：非法 payload 同样被忽略
+    app = build_app(["data"], make_args(mock=True, credentials="{bad"))
+    assert sorted(app._tool_manager._tools) == ["query_data", "transform_data"]
