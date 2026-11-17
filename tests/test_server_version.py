@@ -71,4 +71,8 @@ def test_release_workflow_version_source_present():
 
 
 def test_version_is_pep440_clean():
-    assert __version__ == "0.2.0a12"
+    from packaging.version import Version
+
+    v = Version(__version__)  # 非法 PEP 440 字符串在此抛 InvalidVersion
+    assert str(v) == __version__  # 规范形自反：无前导零等形态变体
+    assert v.local is None  # 无本地版本段（PyPI 发布形态）
