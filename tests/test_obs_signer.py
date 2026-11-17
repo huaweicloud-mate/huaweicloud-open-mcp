@@ -237,6 +237,27 @@ def test_sign_logs_never_contain_security_token(caplog):
     assert "x-obs-security-token=***" in text
 
 
+def test_sign_logs_redact_ampersand_in_token(caplog):
+    """脱敏按形态分边界：Header 形态值终结符是 \\n（& 是合法值字符），
+    URL 形态终结符是 &（query 分隔符）——单一 [^&\\n]* 会在 token 值含 &
+    时提前截断，尾部泄漏入日志（第二轮对抗检视双对手独立命中的边界缺口）。
+
+    真实 IAM token 为 base64url 字符集不含 &，但网关对 token 字符串零校验，
+    env/payload/profile 三入口任意字符串可达——红线实现须对值域完备。"""
+    import logging
+    with caplog.at_level(logging.DEBUG, logger="mcp_openapi.signer.obs"):
+        obs.sign_obs("GET", ak=AK, sk=SK, bucket="b", object_key="k.txt",
+                     headers={"x-obs-security-token": "TOK1&TOK2-LEAK"})
+    assert "TOK2-LEAK" not in caplog.text
+    assert "TOK1&TOK2-LEAK" not in caplog.text
+    assert "x-obs-security-token:***" in caplog.text
+    # URL 形态：token 值不经编码原样拼接，值内 & 与参数分隔符在日志口径
+    # 无法区分——同样掩蔽到行尾，对值域完备
+    url_form = obs._redact_sts_for_log(
+        "GET\n\n\n123\n/b?x-obs-security-token=a&b&acl")
+    assert url_form == "GET\n\n\n123\n/b?x-obs-security-token=***"
+
+
 def test_sign_logs_without_token_unchanged(caplog):
     # 无 token 时脱敏为恒等映射：sts 原样可见（签名排障价值保留）
     import logging

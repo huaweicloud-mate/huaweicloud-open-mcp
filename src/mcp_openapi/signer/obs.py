@@ -24,15 +24,21 @@ logger = logging.getLogger("mcp_openapi.signer.obs")
 OBS_PREFIX = "x-obs-"
 RFC1123_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
 
-_TOKEN_IN_STS_RE = re.compile(r"(x-obs-security-token[:=])[^&\n]*", re.IGNORECASE)
+_TOKEN_IN_STS_RE = re.compile(r"(x-obs-security-token[:=])[^\n]*", re.IGNORECASE)
 
 
 def _redact_sts_for_log(sts: str) -> str:
     """日志脱敏红线：X-Security-Token 永不入日志。StringToSign 携带 token 值的
-    两种形态——Header 方式 `x-obs-security-token:值`（CanonicalizedHeaders）与
-    URL 预签发 `x-obs-security-token=值`（CanonicalizedResource query）——
-    值掩蔽为 ***，结构保留供签名排障；无 token 时恒等。签名本身用原始 sts，
-    脱敏只发生在日志口径。"""
+    两种形态掩蔽为 ***、结构保留供签名排障：
+
+    - Header 方式 `x-obs-security-token:值`（CanonicalizedHeaders）；
+    - URL 预签发 `x-obs-security-token=值`（CanonicalizedResource query）。
+
+    两种形态都掩蔽到行尾：Header 形态值终结符是 \\n；URL 形态的 token 值
+    不经编码原样拼接，值内 & 与后续参数分隔符在日志口径无法区分（token 是
+    网关不校验的任意字符串）——掩蔽不足比掩蔽过度危险，行尾语义对值域完备。
+    token 行之后的 CanonicalizedResource 路径部分不受影响。无 token 时恒等。
+    签名本身用原始 sts，脱敏只发生在日志口径。"""
     return _TOKEN_IN_STS_RE.sub(r"\1***", sts)
 
 # 官方 SDK allowedResourceParameterNames（小写），仅这些 query 键参与 CanonicalizedResource。
